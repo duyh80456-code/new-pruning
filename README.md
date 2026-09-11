@@ -70,6 +70,12 @@ one-seed/20-epoch real-CIFAR protocol, renders the required diagnostics, and
 creates a downloadable ZIP under `/kaggle/working`. See
 [docs/KAGGLE_SMOKE_TEST.md](docs/KAGGLE_SMOKE_TEST.md).
 
+After the one-seed smoke test is valid, use
+`kaggle_three_seed_oracle.ipynb` with
+`configs/kaggle_three_seed_oracle.yaml` to test signal stability over seeds
+`0,1,2` and directly compare 15-epoch oracle gaps at cliff candidate `0.40`
+against stable-region control `0.80`.
+
 To recompute one seed's analysis without retraining:
 
 ```bash

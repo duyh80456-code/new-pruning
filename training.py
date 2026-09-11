@@ -116,7 +116,9 @@ def train_shared_model(model, loader, config: dict, device: torch.device, output
     return frame
 
 
-def fine_tune_oracle(model, width: float, loader, config: dict, device: torch.device) -> None:
+def fine_tune_oracle(
+    model, width: float, loader, config: dict, device: torch.device
+) -> pd.DataFrame:
     model.set_width(width)
     model.train()
     optimizer = torch.optim.SGD(
@@ -125,11 +127,42 @@ def fine_tune_oracle(model, width: float, loader, config: dict, device: torch.de
         momentum=float(config["training"]["momentum"]),
         weight_decay=float(config["training"]["weight_decay"]),
     )
-    for _ in range(int(config["oracle"]["epochs"])):
-        for images, labels, _ in loader:
+    oracle_epochs = int(config["oracle"]["epochs"])
+    records: list[dict] = []
+    for epoch in range(oracle_epochs):
+        loss_sum = 0.0
+        count = 0
+        correct = 0
+        for batch_idx, (images, labels, _) in enumerate(loader):
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad(set_to_none=True)
             model.set_width(width)
-            loss = F.cross_entropy(model(images), labels)
+            logits = model(images)
+            loss = F.cross_entropy(logits, labels)
+            if not bool(torch.isfinite(loss)):
+                raise FloatingPointError(
+                    f"Non-finite oracle loss at width={width:g}, epoch={epoch}, batch={batch_idx}"
+                )
             loss.backward()
             optimizer.step()
+            n = labels.numel()
+            loss_sum += float(loss.detach()) * n
+            correct += int((logits.argmax(1) == labels).sum())
+            count += n
+        epoch_loss = loss_sum / count
+        epoch_accuracy = correct / count
+        records.append(
+            {
+                "epoch": epoch,
+                "width": width,
+                "loss": epoch_loss,
+                "accuracy": epoch_accuracy,
+                "learning_rate": optimizer.param_groups[0]["lr"],
+            }
+        )
+        print(
+            f"oracle width={width:.2f} epoch {epoch + 1}/{oracle_epochs} | "
+            f"loss={epoch_loss:.4f}, acc={epoch_accuracy:.4f}",
+            flush=True,
+        )
+    return pd.DataFrame(records)

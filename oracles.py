@@ -30,7 +30,11 @@ def run_oracles(
         if width in set(float(x) for x in config["compression"]["train_widths"]):
             raise ValueError(f"Oracle width {width} is a training anchor")
         model = copy.deepcopy(shared_model).to(device)
-        fine_tune_oracle(model, width, train_loader, config, device)
+        training_history = fine_tune_oracle(model, width, train_loader, config, device)
+        training_history.to_csv(
+            seed_dir / "results" / f"oracle_training_budget_{budget_tag(width)}.csv",
+            index=False,
+        )
         calibrate_batch_norm(
             model,
             train_loader,
