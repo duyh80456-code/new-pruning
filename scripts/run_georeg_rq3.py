@@ -343,7 +343,17 @@ def select_lambda(config: dict, root: Path, directions: torch.Tensor) -> tuple[d
     rows = []
     multipliers = [float(value) for value in config["georeg"]["sanity_multipliers"]]
     baseline_dir = root / "development" / "sanity" / _branch_tag(0.0)
-    baseline_summary = json.loads((baseline_dir / "sanity_summary.json").read_text())
+    baseline_summary_path = baseline_dir / "sanity_summary.json"
+    if not baseline_summary_path.is_file():
+        failure_path = baseline_dir / "worker_failure.txt"
+        detail = failure_path.read_text().strip() if failure_path.is_file() else "no worker failure record"
+        raise RuntimeError(
+            "The mandatory lambda=0 sanity control failed before producing its summary. "
+            f"Worker detail: {detail}"
+        )
+    baseline_summary = json.loads(baseline_summary_path.read_text())
+    if not baseline_summary.get("stable", False):
+        raise RuntimeError("The mandatory lambda=0 sanity control was numerically unstable")
     baseline_bank, baseline_ids = load_anchor_feature_bank(
         baseline_dir / "anchor_evaluation"
     )

@@ -137,9 +137,16 @@ def save_training_checkpoint(path, model, optimizer, scheduler, loader, epoch, c
 
 
 def load_training_checkpoint(path, model, optimizer, scheduler, loader, device):
-    payload = torch.load(path, map_location=device, weights_only=False)
+    # Keep RNG and DataLoader-generator ByteTensors on CPU. Loading the entire
+    # payload with map_location="cuda" also moves those states and makes
+    # torch.set_rng_state fail before a resumed branch can start.
+    payload = torch.load(path, map_location="cpu", weights_only=False)
     model.load_state_dict(payload["model"])
     optimizer.load_state_dict(payload["optimizer"])
+    for state in optimizer.state.values():
+        for key, value in state.items():
+            if torch.is_tensor(value):
+                state[key] = value.to(device)
     scheduler.load_state_dict(payload["scheduler"])
     _restore_rng(payload["rng"], loader)
     return int(payload["epoch"])
