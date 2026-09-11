@@ -74,7 +74,9 @@ After the one-seed smoke test is valid, use
 `kaggle_three_seed_oracle.ipynb` with
 `configs/kaggle_three_seed_oracle.yaml` to test signal stability over seeds
 `0,1,2` and directly compare 15-epoch oracle gaps at cliff candidate `0.40`
-against stable-region control `0.80`.
+against stable-region control `0.80`. On a Kaggle 2xT4 session the notebook
+dynamically schedules independent seeds over both GPUs; it falls back to the
+sequential runner when only one GPU is available.
 
 To recompute one seed's analysis without retraining:
 
