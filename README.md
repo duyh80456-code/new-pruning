@@ -95,6 +95,12 @@ The next intervention/mechanism stage has two independent Kaggle notebooks:
 Both resolve the uploaded baseline recursively below
 `/kaggle/input/datasets/dyhngg/checkpoint-new-prune`.
 
+Use `kaggle_geoweighting_and_cfm.ipynb` to run both stages in one Kaggle
+session. Its two lanes are `GPU 0: A1 seed 0 -> seed 2` and
+`GPU 1: A1 seed 1 -> cached CFM`, which overlaps CFM with the final A1 seed.
+It preserves separate outputs and GO/NO-GO decisions and exports one combined
+ZIP.
+
 To recompute one seed's analysis without retraining:
 
 ```bash

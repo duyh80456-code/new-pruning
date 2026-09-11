@@ -26,6 +26,20 @@ def _json_safe(value):
 
 
 def finalize_geoweighting(root_output: Path, config: dict) -> Path:
+    # The multi-GPU launcher runs one seed in each temporary worker directory.
+    # Recreate the frozen prior at the final root so the deliverable is complete
+    # regardless of whether execution was sequential or scheduled across GPUs.
+    baseline_root = find_confirmatory_root(config["baseline_artifacts"]["input_root"])
+    weighting = config["geometry_weighting"]
+    prior, _ = compute_anchor_geometry_prior(
+        baseline_root,
+        [float(width) for width in config["compression"]["train_widths"]],
+        alpha=float(weighting["alpha"]),
+        beta=float(weighting["beta"]),
+        epsilon=float(weighting["epsilon"]),
+    )
+    prior["baseline_root"] = str(baseline_root)
+    prior.to_csv(root_output / "frozen_anchor_geometry_prior.csv", index=False)
     central_frames, summaries = [], []
     for seed_value in config["experiment"]["seeds"]:
         seed_dir = root_output / f"seed_{int(seed_value)}"

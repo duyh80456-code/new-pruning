@@ -8,6 +8,7 @@ from cfm_mechanism import (
     fixed_sample_split,
     train_mechanism_models,
 )
+from scripts.run_combined_interventions import compare_cfm, compare_geoweighting
 
 
 def test_baseline_resolver_and_geometry_prior(tmp_path):
@@ -74,3 +75,59 @@ def test_cfm_mechanism_smoke_produces_all_comparators():
     }
     assert np.isfinite(result[["sliced_wasserstein", "paired_mse", "paired_cosine"]]).all().all()
 
+
+def test_combined_comparisons_write_independent_decisions(tmp_path):
+    baseline_root = tmp_path / "baseline"
+    a1_root = tmp_path / "a1"
+    cfm_root = tmp_path / "cfm"
+    baseline_root.mkdir(); a1_root.mkdir(); cfm_root.mkdir()
+    budgets = np.round(np.arange(0.25, 1.001, 0.05), 2)
+
+    def dense_frame(accuracy_shift, geometry_scale):
+        rows = []
+        for seed in range(3):
+            for index, budget in enumerate(budgets):
+                rows.append(
+                    {
+                        "seed": seed,
+                        "budget": budget,
+                        "accuracy": 0.50 + 0.1 * budget + accuracy_shift,
+                        "flops": 1_000_000 * (1 + index),
+                        "local_wasserstein_sensitivity": (
+                            geometry_scale * (1.0 - budget) if index < len(budgets) - 1 else np.nan
+                        ),
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    dense_frame(0.0, 1.0).to_csv(
+        baseline_root / "central_analysis_all_seeds.csv", index=False
+    )
+    dense_frame(0.01, 0.8).to_csv(a1_root / "central_analysis_all_seeds.csv", index=False)
+    _, _, _, a1_comparison, a1_checks = compare_geoweighting(baseline_root, a1_root)
+    assert len(a1_comparison) == 3 and a1_checks["go"]
+    assert (a1_root / "a1_decision.json").is_file()
+
+    records = []
+    distances = {
+        "shared_nearest": 0.40,
+        "linear_interpolation": 0.30,
+        "conditional_mlp": 0.25,
+        "cfm": 0.20,
+    }
+    for seed in range(3):
+        for holdout in (0.4, 0.6):
+            for method, distance in distances.items():
+                records.append(
+                    {
+                        "seed": seed,
+                        "holdout_width": holdout,
+                        "method": method,
+                        "sliced_wasserstein": distance,
+                        "paired_mse": distance,
+                        "paired_cosine": 1.0 - distance,
+                    }
+                )
+    cfm_comparison, _, cfm_checks = compare_cfm(pd.DataFrame(records), cfm_root)
+    assert len(cfm_comparison) == 6 and cfm_checks["go"] and cfm_checks["beats_mlp_all"]
+    assert (cfm_root / "cfm_decision.json").is_file()
