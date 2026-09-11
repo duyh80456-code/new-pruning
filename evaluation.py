@@ -108,15 +108,17 @@ def evaluate_grid(
     device: torch.device,
     seed: int,
     output_dir: Path,
+    calibration_loader=None,
 ) -> pd.DataFrame:
     widths = [float(w) for w in config["compression"]["eval_widths"]]
     anchors = set(float(w) for w in config["compression"]["train_widths"])
     records = []
     reference_ids = None
+    calibration_loader = train_loader if calibration_loader is None else calibration_loader
     for width in widths:
         calibrate_batch_norm(
             model,
-            train_loader,
+            calibration_loader,
             width,
             device,
             int(config["evaluation"]["bn_calibration_batches"]),

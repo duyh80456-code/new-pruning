@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import dataclass
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import datasets, transforms
@@ -19,22 +21,36 @@ class IndexedDataset(Dataset):
         return image, label, index
 
 
+@dataclass(frozen=True)
+class ConfirmatoryLoaders:
+    train: DataLoader
+    validation: DataLoader
+    test: DataLoader
+    calibration: DataLoader
+    geometry: DataLoader
+
+
+def _cifar100_transforms():
+    mean, std = (0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)
+    augmented = transforms.Compose(
+        [
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean, std),
+        ]
+    )
+    deterministic = transforms.Compose(
+        [transforms.ToTensor(), transforms.Normalize(mean, std)]
+    )
+    return augmented, deterministic
+
+
 def _datasets(config: dict, seed: int) -> tuple[Dataset, Dataset]:
     data_cfg = config["dataset"]
     name = data_cfg["name"].lower()
     if name == "cifar100":
-        mean, std = (0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)
-        train_transform = transforms.Compose(
-            [
-                transforms.RandomCrop(32, padding=4),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize(mean, std),
-            ]
-        )
-        val_transform = transforms.Compose(
-            [transforms.ToTensor(), transforms.Normalize(mean, std)]
-        )
+        train_transform, val_transform = _cifar100_transforms()
         root = Path(data_cfg["root"])
         train_set = datasets.CIFAR100(
             root=root, train=True, transform=train_transform, download=data_cfg.get("download", False)
@@ -96,3 +112,100 @@ def build_loaders(config: dict, seed: int) -> tuple[DataLoader, DataLoader, Data
         pin_memory=torch.cuda.is_available(),
     )
     return train_loader, val_loader, feature_loader
+
+
+def _stratified_cifar_split(targets: list[int], validation_size: int, seed: int):
+    targets_array = np.asarray(targets)
+    classes = np.unique(targets_array)
+    if validation_size % len(classes):
+        raise ValueError("validation_size must be divisible by the number of classes")
+    per_class = validation_size // len(classes)
+    rng = np.random.default_rng(seed)
+    validation_indices = []
+    train_indices = []
+    for class_id in classes:
+        indices = np.flatnonzero(targets_array == class_id)
+        rng.shuffle(indices)
+        validation_indices.extend(indices[:per_class].tolist())
+        train_indices.extend(indices[per_class:].tolist())
+    rng.shuffle(train_indices)
+    rng.shuffle(validation_indices)
+    return train_indices, validation_indices
+
+
+def build_confirmatory_loaders(config: dict, training_seed: int) -> ConfirmatoryLoaders:
+    """Build leakage-safe CIFAR loaders for checkpoint selection and final testing."""
+    data_cfg = config["dataset"]
+    if data_cfg["name"].lower() != "cifar100" or data_cfg.get("fake_data", False):
+        raise ValueError("Confirmatory loaders require real CIFAR-100")
+    augmented, deterministic = _cifar100_transforms()
+    root = Path(data_cfg["root"])
+    download = data_cfg.get("download", False)
+    raw_train = datasets.CIFAR100(root=root, train=True, transform=None, download=download)
+    train_augmented = IndexedDataset(
+        datasets.CIFAR100(root=root, train=True, transform=augmented, download=False)
+    )
+    train_deterministic = IndexedDataset(
+        datasets.CIFAR100(root=root, train=True, transform=deterministic, download=False)
+    )
+    test = IndexedDataset(
+        datasets.CIFAR100(root=root, train=False, transform=deterministic, download=download)
+    )
+    split_seed = int(data_cfg["split_seed"])
+    validation_size = int(data_cfg["validation_size"])
+    train_indices, validation_indices = _stratified_cifar_split(
+        raw_train.targets, validation_size, split_seed
+    )
+    calibration_size = int(data_cfg["bn_calibration_size"])
+    geometry_size = int(data_cfg["feature_subset_size"])
+    if calibration_size > len(train_indices) or geometry_size > len(validation_indices):
+        raise ValueError("Calibration/geometry subset exceeds its source split")
+    # These slices are fixed by split_seed and therefore identical across model seeds.
+    calibration_indices = train_indices[:calibration_size]
+    geometry_indices = validation_indices[:geometry_size]
+    workers = int(data_cfg.get("num_workers", 0))
+    pin_memory = torch.cuda.is_available()
+    train_loader = DataLoader(
+        Subset(train_augmented, train_indices),
+        batch_size=int(config["training"]["batch_size"]),
+        shuffle=True,
+        num_workers=workers,
+        pin_memory=pin_memory,
+        generator=torch.Generator().manual_seed(training_seed),
+    )
+    evaluation_batch_size = int(config["evaluation"]["batch_size"])
+    validation_loader = DataLoader(
+        Subset(train_deterministic, validation_indices),
+        batch_size=evaluation_batch_size,
+        shuffle=False,
+        num_workers=workers,
+        pin_memory=pin_memory,
+    )
+    test_loader = DataLoader(
+        test,
+        batch_size=evaluation_batch_size,
+        shuffle=False,
+        num_workers=workers,
+        pin_memory=pin_memory,
+    )
+    calibration_loader = DataLoader(
+        Subset(train_deterministic, calibration_indices),
+        batch_size=int(config["training"]["batch_size"]),
+        shuffle=False,
+        num_workers=workers,
+        pin_memory=pin_memory,
+    )
+    geometry_loader = DataLoader(
+        Subset(train_deterministic, geometry_indices),
+        batch_size=evaluation_batch_size,
+        shuffle=False,
+        num_workers=workers,
+        pin_memory=pin_memory,
+    )
+    return ConfirmatoryLoaders(
+        train=train_loader,
+        validation=validation_loader,
+        test=test_loader,
+        calibration=calibration_loader,
+        geometry=geometry_loader,
+    )

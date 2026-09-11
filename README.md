@@ -78,6 +78,13 @@ against stable-region control `0.80`. On a Kaggle 2xT4 session the notebook
 dynamically schedules independent seeds over both GPUs; it falls back to the
 sequential runner when only one GPU is available.
 
+Use `kaggle_confirmatory_specialization.ipynb` for the subsequent confirmatory
+run. Its config, `configs/kaggle_confirmatory_specialization.yaml`, fixes a
+45k/5k train/validation split, uses a deterministic train-derived BN calibration
+set, selects 30-epoch specialized checkpoints on validation only, evaluates the
+10k test set after selection, and compares leakage-safe leave-one-seed-out
+predictors over widths `0.30,0.40,0.60,0.80`.
+
 To recompute one seed's analysis without retraining:
 
 ```bash

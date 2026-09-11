@@ -49,7 +49,12 @@ def _finalize(root_output: Path, config: dict) -> Path:
     return write_smoke_report(root_output, summaries, combined)
 
 
-def run_multi_gpu(config_path: str | Path, gpu_ids: list[int]) -> Path:
+def run_multi_gpu(
+    config_path: str | Path,
+    gpu_ids: list[int],
+    runner_module: str = "scripts.run_experiment",
+    finalize=None,
+) -> Path:
     """Run one seed per process, dynamically scheduling seeds over visible GPUs."""
     config = load_config(config_path)
     seeds = [int(seed) for seed in config["experiment"]["seeds"]]
@@ -83,7 +88,7 @@ def run_multi_gpu(config_path: str | Path, gpu_ids: list[int]) -> Path:
         print(f"[scheduler] seed {seed} starting on physical GPU {gpu_id}", flush=True)
         try:
             subprocess.run(
-                [sys.executable, "-m", "scripts.run_experiment", "--config", str(worker_config_path)],
+                [sys.executable, "-m", runner_module, "--config", str(worker_config_path)],
                 cwd=project_root,
                 env=env,
                 check=True,
@@ -108,5 +113,5 @@ def run_multi_gpu(config_path: str | Path, gpu_ids: list[int]) -> Path:
             raise FileExistsError(f"Refusing to overwrite existing output: {destination}")
         shutil.move(str(source), str(destination))
 
-    return _finalize(root_output, config)
-
+    finalize = _finalize if finalize is None else finalize
+    return finalize(root_output, config)
