@@ -59,6 +59,15 @@ and evaluates only Sliced Wasserstein plus the Euclidean-mean control. See
 [docs/MODAL_SMOKE_TEST.md](docs/MODAL_SMOKE_TEST.md) for persistence, download,
 failure-check, and GitHub-clone instructions.
 
+## Kaggle GPU smoke test
+
+Use [kaggle_smoke_test.ipynb](kaggle_smoke_test.ipynb) when running on Kaggle.
+Create and attach a Kaggle secret named `github_token`, enable GPU and Internet,
+then run all cells. The notebook clones the repository securely, runs the same
+one-seed/20-epoch real-CIFAR protocol, renders the required diagnostics, and
+creates a downloadable ZIP under `/kaggle/working`. See
+[docs/KAGGLE_SMOKE_TEST.md](docs/KAGGLE_SMOKE_TEST.md).
+
 To recompute one seed's analysis without retraining:
 
 ```bash
