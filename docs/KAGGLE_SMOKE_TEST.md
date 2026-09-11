@@ -31,6 +31,8 @@ into the repository URL or printed, and the helper file is removed after clone.
 - Model: slimmable CIFAR ResNet-18.
 - Seed: 0.
 - Epochs: 20.
+- Width-loss reduction: mean, preventing the effective optimizer step from
+  scaling with the number of anchors.
 - Training widths: 0.25, 0.50, 0.75, 1.00 only.
 - Evaluation widths: 0.25 to 1.00 in increments of 0.05.
 - Geometry: 128 deterministic Sliced Wasserstein projections.

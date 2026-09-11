@@ -68,6 +68,7 @@ def _assert_exact_configuration(config: dict) -> None:
     assert int(config["experiment"]["seeds"][0]) == 0
     assert len(config["experiment"]["seeds"]) == 1
     assert int(config["training"]["epochs"]) == 20
+    assert config["training"].get("width_loss_reduction") == "mean"
     assert config["geometry"]["method"] == "sliced_wasserstein"
     assert config["geometry"].get("control_methods") == ["euclidean_mean"]
     assert int(config["geometry"]["num_projections"]) == 128

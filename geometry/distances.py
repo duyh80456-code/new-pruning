@@ -12,6 +12,8 @@ def _as_numpy(features) -> np.ndarray:
     result = np.asarray(features, dtype=np.float64)
     if result.ndim != 2:
         raise ValueError(f"Expected [samples, dimensions], got {result.shape}")
+    if not np.isfinite(result).all():
+        raise ValueError("Distribution features contain NaN or Inf")
     return result
 
 

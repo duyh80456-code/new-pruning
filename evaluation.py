@@ -25,7 +25,11 @@ def calibrate_batch_norm(model, loader, width: float, device: torch.device, max_
     for batch_idx, (images, _, _) in enumerate(loader):
         if batch_idx >= max_batches:
             break
-        model(images.to(device))
+        logits = model(images.to(device))
+        if not bool(torch.isfinite(logits).all()):
+            raise FloatingPointError(
+                f"Non-finite logits during BN calibration at width={width:g}, batch={batch_idx}"
+            )
     for bank, momentum in banks:
         bank.momentum = momentum
     model.eval()
@@ -38,10 +42,19 @@ def evaluate_width(model, loader, width: float, device: torch.device) -> dict[st
     loss_sum = 0.0
     correct = 0
     count = 0
-    for images, labels, _ in loader:
+    for batch_idx, (images, labels, _) in enumerate(loader):
         images, labels = images.to(device), labels.to(device)
         logits = model(images)
-        loss_sum += float(F.cross_entropy(logits, labels, reduction="sum"))
+        if not bool(torch.isfinite(logits).all()):
+            raise FloatingPointError(
+                f"Non-finite evaluation logits at width={width:g}, batch={batch_idx}"
+            )
+        loss = F.cross_entropy(logits, labels, reduction="sum")
+        if not bool(torch.isfinite(loss)):
+            raise FloatingPointError(
+                f"Non-finite evaluation loss at width={width:g}, batch={batch_idx}"
+            )
+        loss_sum += float(loss)
         correct += int((logits.argmax(1) == labels).sum())
         count += labels.numel()
     return {"accuracy": correct / count, "loss": loss_sum / count}
@@ -59,8 +72,12 @@ def extract_features(
     model.set_width(width)
     model.eval()
     features, labels, sample_ids = [], [], []
-    for images, target, ids in loader:
+    for batch_idx, (images, target, ids) in enumerate(loader):
         z = model.forward_features(images.to(device)).cpu()
+        if not bool(torch.isfinite(z).all()):
+            raise FloatingPointError(
+                f"Non-finite extracted features at width={width:g}, batch={batch_idx}"
+            )
         if normalize == "l2":
             z = F.normalize(z, p=2, dim=1)
         elif normalize != "raw":
@@ -75,6 +92,8 @@ def extract_features(
         "budget": float(width),
         "normalization": normalize,
     }
+    if float(payload["features"].std()) <= 1e-8:
+        raise FloatingPointError(f"Degenerate near-constant features at width={width:g}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(payload, output_path)
     return payload

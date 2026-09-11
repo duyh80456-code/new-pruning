@@ -12,6 +12,8 @@ optimization.
 
 - `training.py` iterates only over `compression.train_widths`, which the config
   loader validates as exactly `[0.25, 0.50, 0.75, 1.00]`.
+- The per-width objectives are averaged (`width_loss_reduction: mean`) so adding
+  anchors does not silently multiply the optimizer's effective step size.
 - Every evaluation width owns a BN-statistics bank. Unseen banks are populated only
   by explicit post-training calibration (no gradient update).
 - Feature subsets are selected once per seed. Every saved feature file contains

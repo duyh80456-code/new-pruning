@@ -22,6 +22,9 @@ def kd_loss(student: Tensor, teacher: Tensor, temperature: float) -> Tensor:
 def train_shared_model(model, loader, config: dict, device: torch.device, output_dir: Path) -> pd.DataFrame:
     cfg = config["training"]
     widths = [float(w) for w in config["compression"]["train_widths"]]
+    width_loss_reduction = cfg.get("width_loss_reduction", "mean")
+    if width_loss_reduction not in {"mean", "sum"}:
+        raise ValueError("training.width_loss_reduction must be 'mean' or 'sum'")
     optimizer = torch.optim.SGD(
         model.parameters(),
         lr=float(cfg["learning_rate"]),
@@ -32,10 +35,11 @@ def train_shared_model(model, loader, config: dict, device: torch.device, output
     ce_fn = nn.CrossEntropyLoss()
     profiles = {w: profile_subnet(model, w) for w in widths}
     records: list[dict] = []
+    output_dir.mkdir(parents=True, exist_ok=True)
     for epoch in range(int(cfg["epochs"])):
         model.train()
         sums = {w: {"loss": 0.0, "ce": 0.0, "kd": 0.0, "correct": 0, "n": 0} for w in widths}
-        for images, labels, _ in loader:
+        for batch_idx, (images, labels, _) in enumerate(loader):
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad(set_to_none=True)
             model.set_width(1.0)
@@ -53,6 +57,23 @@ def train_shared_model(model, loader, config: dict, device: torch.device, output
                 loss = ce + float(cfg["kd_lambda"]) * kd
                 total_loss = total_loss + loss
                 batch_values[width] = (loss, ce, kd, logits)
+            # The configured objective is the expectation over training widths.
+            # Averaging preserves that objective while preventing the effective
+            # step size from growing linearly with the number of anchors.
+            if width_loss_reduction == "mean":
+                total_loss = total_loss / len(widths)
+            if not bool(torch.isfinite(total_loss)):
+                details = {
+                    width: {
+                        "loss": float(loss.detach()),
+                        "ce": float(ce.detach()),
+                        "kd": float(kd.detach()),
+                    }
+                    for width, (loss, ce, kd, _) in batch_values.items()
+                }
+                raise FloatingPointError(
+                    f"Non-finite training loss at epoch={epoch}, batch={batch_idx}: {details}"
+                )
             total_loss.backward()
             optimizer.step()
             for width, (loss, ce, kd, logits) in batch_values.items():
@@ -80,9 +101,16 @@ def train_shared_model(model, loader, config: dict, device: torch.device, output
                     "params": params,
                 }
             )
+        # Persist partial diagnostics each epoch and expose progress in remote logs.
+        pd.DataFrame(records).to_csv(output_dir / "training_metrics.csv", index=False)
+        epoch_rows = records[-len(widths) :]
+        summary = ", ".join(
+            f"w={row['width']:.2f}: loss={row['loss']:.4f}, acc={row['accuracy']:.4f}"
+            for row in epoch_rows
+        )
+        print(f"epoch {epoch + 1}/{int(cfg['epochs'])} | {summary}", flush=True)
         scheduler.step()
     frame = pd.DataFrame(records)
-    output_dir.mkdir(parents=True, exist_ok=True)
     frame.to_csv(output_dir / "training_metrics.csv", index=False)
     torch.save({"model": model.state_dict(), "config": config}, output_dir / "checkpoint.pt")
     return frame

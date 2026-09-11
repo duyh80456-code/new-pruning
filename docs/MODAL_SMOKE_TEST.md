@@ -4,6 +4,7 @@ This workflow runs the existing CE + KD baseline on one Modal T4. It uses one
 seed, 20 epochs, four training anchors, 16 evaluation widths, 2,000 fixed feature
 samples, Sliced Wasserstein, and only the Euclidean-mean control. It does not run
 oracles, CFM, geometry regularization, intermediate-width training, or tuning.
+The four per-width objectives are averaged before backpropagation.
 
 ## Notebook workflow
 
