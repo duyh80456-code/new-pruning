@@ -92,6 +92,13 @@ def _safe_correlation(x: np.ndarray, y: np.ndarray, method: str) -> float:
     return float(pearsonr(x, y).statistic if method == "pearson" else spearmanr(x, y).statistic)
 
 
+def _safe_correlation_pvalue(x: np.ndarray, y: np.ndarray, method: str) -> float:
+    if len(x) < 2 or np.std(x) == 0 or np.std(y) == 0:
+        return float("nan")
+    result = pearsonr(x, y) if method == "pearson" else spearmanr(x, y)
+    return float(result.pvalue)
+
+
 def _bootstrap_correlations(x: np.ndarray, y: np.ndarray, n_boot: int, seed: int) -> dict:
     rng = np.random.default_rng(seed)
     results = {"pearson": [], "spearman": []}
@@ -105,6 +112,7 @@ def _bootstrap_correlations(x: np.ndarray, y: np.ndarray, n_boot: int, seed: int
     for method, values in results.items():
         summary[method] = {
             "estimate": _safe_correlation(x, y, method),
+            "p_value": _safe_correlation_pvalue(x, y, method),
             "ci_low": float(np.percentile(values, 2.5)) if values else float("nan"),
             "ci_high": float(np.percentile(values, 97.5)) if values else float("nan"),
         }
@@ -202,7 +210,13 @@ def analyze_seed(output_dir: Path, config: dict, seed: int) -> tuple[pd.DataFram
                 "pearson_with_accuracy_sensitivity": _safe_correlation(
                     control_sensitivity, local_performance, "pearson"
                 ),
+                "pearson_p_value": _safe_correlation_pvalue(
+                    control_sensitivity, local_performance, "pearson"
+                ),
                 "spearman_with_accuracy_sensitivity": _safe_correlation(
+                    control_sensitivity, local_performance, "spearman"
+                ),
+                "spearman_p_value": _safe_correlation_pvalue(
                     control_sensitivity, local_performance, "spearman"
                 ),
             }

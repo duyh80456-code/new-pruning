@@ -44,6 +44,21 @@ The default scientific config runs three seeds and selected unseen-budget oracle
 at `0.30, 0.40, 0.60, 0.80`. Adjust epochs or batch sizes in a copied config for
 available hardware. CIFAR data downloads only when `dataset.download: true`.
 
+## Modal T4 smoke test
+
+Use [modal_smoke_test.ipynb](modal_smoke_test.ipynb) for the guided notebook or:
+
+```bash
+python -m pip install "modal>=1.0"
+modal setup
+modal run modal_smoke.py --run-name modal-smoke-seed0-001
+```
+
+This real-CIFAR smoke configuration runs one seed for 20 epochs, disables oracles,
+and evaluates only Sliced Wasserstein plus the Euclidean-mean control. See
+[docs/MODAL_SMOKE_TEST.md](docs/MODAL_SMOKE_TEST.md) for persistence, download,
+failure-check, and GitHub-clone instructions.
+
 To recompute one seed's analysis without retraining:
 
 ```bash
