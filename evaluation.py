@@ -61,6 +61,74 @@ def evaluate_width(model, loader, width: float, device: torch.device) -> dict[st
 
 
 @torch.no_grad()
+def evaluate_width_with_predictions(
+    model, loader, width: float, device: torch.device, seed: int
+) -> tuple[dict[str, float], pd.DataFrame]:
+    """Evaluate once while preserving sample-aligned predictions for paired tests."""
+    model.set_width(width)
+    model.eval()
+    loss_sum = correct = count = 0
+    records = []
+    for batch_idx, (images, labels, sample_ids) in enumerate(loader):
+        images, labels = images.to(device), labels.to(device)
+        logits = model(images)
+        if not bool(torch.isfinite(logits).all()):
+            raise FloatingPointError(
+                f"Non-finite evaluation logits at width={width:g}, batch={batch_idx}"
+            )
+        loss = F.cross_entropy(logits, labels, reduction="sum")
+        predictions = logits.argmax(1)
+        loss_sum += float(loss)
+        correct += int((predictions == labels).sum())
+        count += labels.numel()
+        records.append(
+            pd.DataFrame(
+                {
+                    "seed": seed,
+                    "budget": float(width),
+                    "sample_id": torch.as_tensor(sample_ids).cpu().numpy(),
+                    "label": labels.cpu().numpy(),
+                    "prediction": predictions.cpu().numpy(),
+                    "correct": (predictions == labels).cpu().numpy().astype("int8"),
+                }
+            )
+        )
+    return {"accuracy": correct / count, "loss": loss_sum / count}, pd.concat(
+        records, ignore_index=True
+    )
+
+
+def evaluate_prediction_grid(
+    model,
+    loader,
+    calibration_loader,
+    config: dict,
+    device: torch.device,
+    seed: int,
+    output_dir: Path,
+) -> pd.DataFrame:
+    """BN-calibrate and save per-sample predictions without feature extraction."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    frames = []
+    for width in [float(value) for value in config["compression"]["eval_widths"]]:
+        calibrate_batch_norm(
+            model,
+            calibration_loader,
+            width,
+            device,
+            int(config["evaluation"]["bn_calibration_batches"]),
+        )
+        _, predictions = evaluate_width_with_predictions(model, loader, width, device, seed)
+        predictions.to_csv(
+            output_dir / f"predictions_budget_{budget_tag(width)}.csv", index=False
+        )
+        frames.append(predictions)
+    combined = pd.concat(frames, ignore_index=True)
+    combined.to_csv(output_dir / "predictions_all_widths.csv", index=False)
+    return combined
+
+
+@torch.no_grad()
 def extract_features(
     model,
     loader,
@@ -109,6 +177,7 @@ def evaluate_grid(
     seed: int,
     output_dir: Path,
     calibration_loader=None,
+    prediction_output_dir: Path | None = None,
 ) -> pd.DataFrame:
     widths = [float(w) for w in config["compression"]["eval_widths"]]
     anchors = set(float(w) for w in config["compression"]["train_widths"])
@@ -123,7 +192,17 @@ def evaluate_grid(
             device,
             int(config["evaluation"]["bn_calibration_batches"]),
         )
-        metrics = evaluate_width(model, val_loader, width, device)
+        if prediction_output_dir is None:
+            metrics = evaluate_width(model, val_loader, width, device)
+        else:
+            metrics, predictions = evaluate_width_with_predictions(
+                model, val_loader, width, device, seed
+            )
+            prediction_output_dir.mkdir(parents=True, exist_ok=True)
+            predictions.to_csv(
+                prediction_output_dir / f"predictions_budget_{budget_tag(width)}.csv",
+                index=False,
+            )
         macs, params = profile_subnet(model, width)
         payload = extract_features(
             model,
@@ -151,4 +230,12 @@ def evaluate_grid(
     result_dir = output_dir / "results"
     result_dir.mkdir(parents=True, exist_ok=True)
     frame.to_csv(result_dir / "budget_metrics.csv", index=False)
+    if prediction_output_dir is not None:
+        prediction_frames = [
+            pd.read_csv(prediction_output_dir / f"predictions_budget_{budget_tag(width)}.csv")
+            for width in widths
+        ]
+        pd.concat(prediction_frames, ignore_index=True).to_csv(
+            prediction_output_dir / "predictions_all_widths.csv", index=False
+        )
     return frame

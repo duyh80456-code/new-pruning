@@ -1,0 +1,62 @@
+experiment:
+  output_dir: /kaggle/working/new-pruning-outputs/kaggle-georeg-rq3
+  seeds: [0, 1, 2]
+  development_seed: 0
+  confirmatory_seeds: [1, 2]
+  device: cuda
+baseline_artifacts:
+  input_root: /kaggle/input/datasets/dyhngg/checkpoint-new-prune
+dataset:
+  name: cifar100
+  fake_data: false
+  root: /kaggle/working/data/cifar100
+  num_classes: 100
+  validation_size: 5000
+  split_seed: 20260911
+  bn_calibration_size: 6400
+  feature_subset_size: 2000
+  download: true
+  # Required for exact replay of random augmentation across sanity branches.
+  num_workers: 0
+model:
+  backbone: slimmable_resnet18
+  projection_dim: 128
+compression:
+  train_widths: [0.25, 0.50, 0.75, 1.00]
+  eval_widths: [0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00]
+training:
+  epochs: 20
+  width_loss_reduction: mean
+  batch_size: 128
+  learning_rate: 0.1
+  momentum: 0.9
+  weight_decay: 0.0005
+  kd_lambda: 1.0
+  kd_temperature: 2.0
+evaluation:
+  batch_size: 256
+  bn_calibration_batches: 50
+features:
+  normalize: l2
+geometry:
+  method: sliced_wasserstein
+  control_methods: [euclidean_mean]
+  num_projections: 128
+  projection_seed: 0
+  bootstrap_samples: 1000
+  cliff_robust_z: 2.5
+georeg:
+  epsilon: 1.0e-8
+  train_projection_count: 32
+  train_projection_seed: 314159
+  heldout_projection_count: 128
+  heldout_projection_seed: 271828
+  target_gradient_fraction: 0.10
+  gradient_calibration_batches: 32
+  gradient_diagnostic_batches: 8
+  sanity_epoch: 10
+  sanity_multipliers: [0.0, 0.5, 1.0, 2.0]
+  anchor_accuracy_margin: 0.005
+  full_width_accuracy_margin: 0.005
+  bootstrap_replicates: 1000
+  bootstrap_seed: 161803

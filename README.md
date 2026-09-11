@@ -101,6 +101,14 @@ session. Its two lanes are `GPU 0: A1 seed 0 -> seed 2` and
 It preserves separate outputs and GO/NO-GO decisions and exports one combined
 ZIP.
 
+Use `kaggle_georeg_rq3.ipynb` for the locked targeted-intervention test after
+the A1/CFM negative controls. It calibrates curvature-loss strength from
+projection-head gradient norms, clones an exactly replayable seed-0 warm-up
+into four anchor-only sanity branches, freezes lambda before opening any of the
+12 intermediate widths, and treats seeds 1 and 2 as confirmatory. The final
+report includes paired sample-level accuracy bootstrap, same-direction and
+held-out-direction curvature statistics, and dense-grid Wasserstein geometry.
+
 To recompute one seed's analysis without retraining:
 
 ```bash
