@@ -85,6 +85,16 @@ set, selects 30-epoch specialized checkpoints on validation only, evaluates the
 10k test set after selection, and compares leakage-safe leave-one-seed-out
 predictors over widths `0.30,0.40,0.60,0.80`.
 
+The next intervention/mechanism stage has two independent Kaggle notebooks:
+
+- `kaggle_geoweighting_a1.ipynb` trains three new shared models with a frozen
+  median baseline-geometry prior (`alpha=1`, `beta=0.5`) and no specialized runs.
+- `kaggle_cfm_mechanism.ipynb` reuses cached aligned baseline features for
+  held-out-budget CFM tests and does not retrain the ResNet backbone.
+
+Both resolve the uploaded baseline recursively below
+`/kaggle/input/datasets/dyhngg/checkpoint-new-prune`.
+
 To recompute one seed's analysis without retraining:
 
 ```bash

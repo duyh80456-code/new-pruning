@@ -19,9 +19,24 @@ def kd_loss(student: Tensor, teacher: Tensor, temperature: float) -> Tensor:
     ) * (t * t)
 
 
-def train_shared_model(model, loader, config: dict, device: torch.device, output_dir: Path) -> pd.DataFrame:
+def train_shared_model(
+    model,
+    loader,
+    config: dict,
+    device: torch.device,
+    output_dir: Path,
+    anchor_loss_weights: dict[float, float] | None = None,
+) -> pd.DataFrame:
     cfg = config["training"]
     widths = [float(w) for w in config["compression"]["train_widths"]]
+    loss_weights = {
+        width: float(anchor_loss_weights.get(width, 1.0)) if anchor_loss_weights else 1.0
+        for width in widths
+    }
+    if any(weight <= 0 for weight in loss_weights.values()):
+        raise ValueError("All anchor loss weights must be positive")
+    if not abs(sum(loss_weights.values()) / len(widths) - 1.0) < 1e-6:
+        raise ValueError("Anchor loss weights must have mean one")
     width_loss_reduction = cfg.get("width_loss_reduction", "mean")
     if width_loss_reduction not in {"mean", "sum"}:
         raise ValueError("training.width_loss_reduction must be 'mean' or 'sum'")
@@ -45,7 +60,7 @@ def train_shared_model(model, loader, config: dict, device: torch.device, output
             model.set_width(1.0)
             teacher_logits = model(images)
             teacher_ce = ce_fn(teacher_logits, labels)
-            total_loss = teacher_ce
+            total_loss = loss_weights[1.0] * teacher_ce
             batch_values = {1.0: (teacher_ce, teacher_ce, teacher_ce.new_zeros(()), teacher_logits)}
             for width in widths:
                 if width == 1.0:
@@ -55,7 +70,7 @@ def train_shared_model(model, loader, config: dict, device: torch.device, output
                 ce = ce_fn(logits, labels)
                 kd = kd_loss(logits, teacher_logits, float(cfg["kd_temperature"]))
                 loss = ce + float(cfg["kd_lambda"]) * kd
-                total_loss = total_loss + loss
+                total_loss = total_loss + loss_weights[width] * loss
                 batch_values[width] = (loss, ce, kd, logits)
             # The configured objective is the expectation over training widths.
             # Averaging preserves that objective while preventing the effective
@@ -99,6 +114,7 @@ def train_shared_model(model, loader, config: dict, device: torch.device, output
                     "learning_rate": lr,
                     "flops": macs,
                     "params": params,
+                    "objective_weight": loss_weights[width],
                 }
             )
         # Persist partial diagnostics each epoch and expose progress in remote logs.

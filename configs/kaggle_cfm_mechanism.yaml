@@ -1,0 +1,24 @@
+experiment:
+  output_dir: /kaggle/working/new-pruning-outputs/kaggle-cfm-mechanism
+  seeds: [0, 1, 2]
+  device: cuda
+baseline_artifacts:
+  input_root: /kaggle/input/datasets/dyhngg/checkpoint-new-prune
+cfm:
+  tasks:
+    - known: [0.30, 0.60, 0.80]
+      holdout: 0.40
+    - known: [0.30, 0.40, 0.80]
+      holdout: 0.60
+  hidden_dim: 256
+  epochs: 200
+  batch_size: 256
+  learning_rate: 0.001
+  integration_steps: 20
+  training_seed: 314159
+  sample_split_seed: 271828
+  train_fraction: 0.70
+  validation_fraction: 0.15
+geometry:
+  num_projections: 128
+  projection_seed: 0
