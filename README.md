@@ -109,6 +109,16 @@ into four anchor-only sanity branches, freezes lambda before opening any of the
 report includes paired sample-level accuracy bootstrap, same-direction and
 held-out-direction curvature statistics, and dense-grid Wasserstein geometry.
 
+Use `kaggle_s1_width.ipynb` for the horizon-controlled RQ1 experiment. It
+refuses to run unless an attached S0 JSON/YAML artifact records `s0_pass: true`
+and a positive integer `selected_horizon`; there is no silent 20-epoch fallback.
+It schedules three anchor-only CE+KD shared models and twelve independently
+initialized fixed-width references over two GPUs with epoch-level resume. Test
+evaluation starts only after all validation-selected checkpoints exist. The
+same fixed 2,000 validation IDs are then compared without retraining through
+the learned 128-D head, the zero-padded nested 512-D backbone prefix, and one
+frozen 512-to-128 random projection shared by every width and seed.
+
 To recompute one seed's analysis without retraining:
 
 ```bash

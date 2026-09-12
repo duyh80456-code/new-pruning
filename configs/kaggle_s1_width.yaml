@@ -1,0 +1,49 @@
+experiment:
+  output_dir: /kaggle/working/new-pruning-outputs/kaggle-s1-width
+  seeds: [0, 1, 2]
+  device: cuda
+dataset:
+  name: cifar100
+  fake_data: false
+  root: /kaggle/working/data/cifar100
+  num_classes: 100
+  validation_size: 5000
+  split_seed: 20260911
+  bn_calibration_size: 6400
+  feature_subset_size: 2000
+  download: true
+  # Required for exact epoch-level resume of augmentation and shuffle state.
+  num_workers: 0
+model:
+  backbone: slimmable_resnet18
+  projection_dim: 128
+compression:
+  train_widths: [0.25, 0.50, 0.75, 1.00]
+  eval_widths: [0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00]
+training:
+  # Deliberately null: run_s1 must replace this from a passed S0 artifact.
+  epochs: null
+  batch_size: 128
+  learning_rate: 0.1
+  momentum: 0.9
+  weight_decay: 0.0005
+  kd_lambda: 1.0
+  kd_temperature: 2.0
+specialization:
+  widths: [0.30, 0.40, 0.60, 0.80]
+  initialization: scratch
+  epochs: null
+evaluation:
+  batch_size: 256
+  bn_calibration_batches: 50
+representations:
+  views: [learned_projection, backbone_padded, fixed_random_projection]
+  backbone_padding_dim: 512
+  random_projection_dim: 128
+  random_seed: 424242
+geometry:
+  method: sliced_wasserstein
+  num_projections: 128
+  projection_seed: 0
+  bootstrap_samples: 1000
+  cliff_robust_z: 2.5

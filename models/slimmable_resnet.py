@@ -89,14 +89,17 @@ class SlimmableResNet(nn.Module):
             if module is not self and isinstance(module, WidthModule):
                 module.set_width(width)
 
-    def forward_features(self, x: Tensor) -> Tensor:
+    def forward_backbone_features(self, x: Tensor) -> Tensor:
+        """Return the active pooled backbone prefix before the learned projection."""
         x = self.relu(self.bn1(self.conv1(x)))
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
-        x = torch.flatten(self.avgpool(x), 1)
-        return self.projection(x)
+        return torch.flatten(self.avgpool(x), 1)
+
+    def forward_features(self, x: Tensor) -> Tensor:
+        return self.projection(self.forward_backbone_features(x))
 
     def forward(self, x: Tensor) -> Tensor:
         return self.classifier(self.forward_features(x))
