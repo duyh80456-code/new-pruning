@@ -120,6 +120,14 @@ same fixed 2,000 validation IDs are then compared without retraining through
 the learned 128-D head, the zero-padded nested 512-D backbone prefix, and one
 frozen 512-to-128 random projection shared by every width and seed.
 
+`kaggle_s1_extend_to_100.ipynb` consumes the exported epoch-50 S1 notebook
+output and performs an explicitly exploratory weights-only extension to global
+epoch 100. Because the completed specialist jobs no longer contain their final
+optimizer state, this workflow resets SGD and uses a new cosine schedule at
+learning rate 0.01. Its provenance report states that the result is not
+equivalent to a from-scratch `T_max=100` experiment, and it exports direct
+50-versus-100 comparison tables.
+
 To recompute one seed's analysis without retraining:
 
 ```bash

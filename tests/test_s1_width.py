@@ -1,4 +1,5 @@
 import json
+import zipfile
 
 import pytest
 import torch
@@ -7,6 +8,7 @@ import yaml
 from models import slimmable_resnet18
 from s1_width import fixed_random_projection, read_s0_selection
 from scripts.run_s1_width import validate_protocol
+from scripts.run_s1_extension import materialize_source
 
 
 def test_s0_selection_requires_pass_and_positive_horizon(tmp_path):
@@ -58,3 +60,26 @@ def test_s1_config_is_locked_and_has_no_default_horizon():
     assert config["training"]["epochs"] is None
     assert config["dataset"]["num_workers"] == 0
     assert config["specialization"]["initialization"] == "scratch"
+
+
+def test_extension_materializes_complete_exported_zip(tmp_path):
+    source = tmp_path / "source"
+    (source / "protocol").mkdir(parents=True)
+    (source / "resolved_config.yaml").write_text("training:\n  epochs: 50\n")
+    (source / "specialization_table.csv").write_text("seed,width\n")
+    (source / "shared_dense_metrics_all_seeds.csv").write_text("seed,budget\n")
+    (source / "s1_complete.json").write_text("{}")
+    (source / "protocol" / "fixed_random_projection.pt").write_bytes(b"matrix")
+    for seed in (0, 1, 2):
+        path = source / "shared" / f"seed_{seed}" / "checkpoint.pt"
+        path.parent.mkdir(parents=True); path.write_bytes(b"checkpoint")
+        for width in (30, 40, 60, 80):
+            path = source / "specialized" / f"seed_{seed}" / f"width_{width:03d}" / "best_checkpoint.pt"
+            path.parent.mkdir(parents=True); path.write_bytes(b"checkpoint")
+    input_root = tmp_path / "input"; input_root.mkdir()
+    archive = input_root / "kaggle-s1-width-test.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        for path in source.rglob("*"):
+            if path.is_file(): bundle.write(path, path.relative_to(source))
+    materialized = materialize_source(input_root, tmp_path / "materialized")
+    assert (materialized / "shared" / "seed_2" / "checkpoint.pt").is_file()

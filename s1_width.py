@@ -113,7 +113,12 @@ def make_model(config: dict, device: torch.device):
     ).to(device)
 
 
-def train_shared_reference(model, loader, config, device, output_dir: Path) -> Path:
+def train_shared_reference(
+    model, loader, config, device, output_dir: Path,
+    initial_checkpoint: str | Path | None = None,
+    initial_epoch: int = 0,
+    learning_rate_override: float | None = None,
+) -> Path:
     """Anchor-only CE+KD training with epoch-level exact resume."""
     output_dir.mkdir(parents=True, exist_ok=True)
     final_path, last_path = output_dir / "checkpoint.pt", output_dir / "last_checkpoint.pt"
@@ -121,12 +126,24 @@ def train_shared_reference(model, loader, config, device, output_dir: Path) -> P
         return final_path
     cfg = config["training"]
     epochs = int(cfg["epochs"])
+    initial_epoch = int(initial_epoch)
+    if not 0 <= initial_epoch < epochs:
+        raise ValueError("initial_epoch must satisfy 0 <= initial_epoch < target epochs")
+    if initial_checkpoint is not None:
+        source = torch.load(initial_checkpoint, map_location=device, weights_only=False)
+        model.load_state_dict(source["model"])
+    learning_rate = (
+        float(learning_rate_override)
+        if learning_rate_override is not None else float(cfg["learning_rate"])
+    )
     optimizer = torch.optim.SGD(
-        model.parameters(), lr=float(cfg["learning_rate"]),
+        model.parameters(), lr=learning_rate,
         momentum=float(cfg["momentum"]), weight_decay=float(cfg["weight_decay"]),
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-    start_epoch = 1
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(1, epochs - initial_epoch)
+    )
+    start_epoch = initial_epoch + 1
     if last_path.is_file():
         start_epoch = int(_load_state(last_path, model, optimizer, scheduler, loader, device)["epoch"]) + 1
     records_path = output_dir / "training_metrics.csv"
@@ -178,12 +195,21 @@ def train_shared_reference(model, loader, config, device, output_dir: Path) -> P
             for width in ANCHORS
         )
         print(f"shared epoch {epoch}/{epochs} | {status}", flush=True)
-    _save_state(final_path, model, optimizer, scheduler, loader, epochs)
+    _save_state(final_path, model, optimizer, scheduler, loader, epochs, {
+        "initial_epoch": initial_epoch,
+        "training_mode": "from_scratch" if initial_checkpoint is None else "weights_only_extension",
+    })
     last_path.unlink(missing_ok=True)
     return final_path
 
 
-def train_specialized_reference(model, width, loaders, config, device, seed, output_dir: Path) -> Path:
+def train_specialized_reference(
+    model, width, loaders, config, device, seed, output_dir: Path,
+    initial_checkpoint: str | Path | None = None,
+    initial_epoch: int = 0,
+    initial_best: dict | None = None,
+    learning_rate_override: float | None = None,
+) -> Path:
     """Train an independently initialized fixed-width reference and select by validation."""
     output_dir.mkdir(parents=True, exist_ok=True)
     best_path, last_path = output_dir / "best_checkpoint.pt", output_dir / "last_checkpoint.pt"
@@ -192,14 +218,31 @@ def train_specialized_reference(model, width, loaders, config, device, seed, out
         return best_path
     cfg = config["training"]
     epochs = int(cfg["epochs"])
+    initial_epoch = int(initial_epoch)
+    if not 0 <= initial_epoch < epochs:
+        raise ValueError("initial_epoch must satisfy 0 <= initial_epoch < target epochs")
+    if initial_checkpoint is not None:
+        source = torch.load(initial_checkpoint, map_location=device, weights_only=False)
+        model.load_state_dict(source["model"])
+    learning_rate = (
+        float(learning_rate_override)
+        if learning_rate_override is not None else float(cfg["learning_rate"])
+    )
     optimizer = torch.optim.SGD(
-        model.parameters(), lr=float(cfg["learning_rate"]),
+        model.parameters(), lr=learning_rate,
         momentum=float(cfg["momentum"]), weight_decay=float(cfg["weight_decay"]),
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(1, epochs - initial_epoch)
+    )
     history_path = output_dir / "training_metrics.csv"
-    best = {"epoch": -1, "validation_accuracy": -1.0, "validation_loss": float("inf")}
-    start_epoch = 1
+    best = initial_best or {
+        "epoch": -1, "validation_accuracy": -1.0, "validation_loss": float("inf")
+    }
+    start_epoch = initial_epoch + 1
+    if initial_checkpoint is not None and not best_path.is_file():
+        torch.save({"model": model.state_dict(), "seed": seed, "width": float(width),
+                    "best": best, "source_checkpoint": str(initial_checkpoint)}, best_path)
     if last_path.is_file():
         payload = _load_state(last_path, model, optimizer, scheduler, loaders.train, device)
         start_epoch = int(payload["epoch"]) + 1
