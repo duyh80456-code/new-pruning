@@ -112,11 +112,20 @@ def run_s1(config_path: str | Path, s0_selection_path: str | Path, gpu_ids=(0, 1
     selection = read_s0_selection(s0_selection_path)
     config["training"]["epochs"] = selection["selected_horizon"]
     config["specialization"]["epochs"] = selection["selected_horizon"]
+    config["horizon_selection"] = selection
     root = Path(config["experiment"]["output_dir"]); root.mkdir(parents=True, exist_ok=True)
     protocol = root / "protocol"; protocol.mkdir(parents=True, exist_ok=True)
+    selection_record = protocol / "s0_selection.json"
+    if selection_record.is_file():
+        previous = json.loads(selection_record.read_text())
+        if previous["selected_horizon"] != selection["selected_horizon"]:
+            raise RuntimeError(
+                "Refusing to resume one RUN_DIR with a different training horizon: "
+                f"{previous['selected_horizon']} != {selection['selected_horizon']}"
+            )
     resolved = root / "resolved_config.yaml"
     resolved.write_text(yaml.safe_dump(config, sort_keys=False))
-    (protocol / "s0_selection.json").write_text(json.dumps(selection, indent=2) + "\n")
+    selection_record.write_text(json.dumps(selection, indent=2) + "\n")
     matrix_path = protocol / "fixed_random_projection.pt"
     if not matrix_path.is_file():
         torch.save(fixed_random_projection(512, 128, int(config["representations"]["random_seed"])), matrix_path)

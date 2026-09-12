@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import copy
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +24,7 @@ REPRESENTATIONS = ("learned_projection", "backbone_padded", "fixed_random_projec
 
 
 def read_s0_selection(path: str | Path) -> dict:
-    """Read a passed S0 decision without silently falling back to 20 epochs."""
+    """Read an S0-derived or explicitly user-authorized S1 horizon."""
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(f"S0 selection artifact not found: {path}")
@@ -34,12 +35,21 @@ def read_s0_selection(path: str | Path) -> dict:
     else:
         payload = json.loads(path.read_text())
     passed = payload.get("s0_pass", payload.get("passed", payload.get("pass")))
+    user_authorized = payload.get("s1_user_authorized", False) is True
     horizon = payload.get("selected_horizon", payload.get("horizon", payload.get("epochs")))
-    if passed is not True:
-        raise RuntimeError("S1 is locked: the supplied S0 artifact does not record s0_pass=true")
+    if passed is not True and not user_authorized:
+        raise RuntimeError(
+            "S1 is locked: require s0_pass=true or an explicit s1_user_authorized=true horizon"
+        )
     if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon <= 0:
         raise ValueError("S0 artifact must contain a positive integer selected_horizon")
-    return {"s0_pass": True, "selected_horizon": int(horizon), "source": str(path)}
+    return {
+        "s0_pass": passed is True,
+        "s1_user_authorized": user_authorized,
+        "selection_basis": "s0" if passed is True else "user_fixed",
+        "selected_horizon": int(horizon),
+        "source": str(path),
+    }
 
 
 def fixed_random_projection(in_dim: int, out_dim: int, seed: int) -> torch.Tensor:
@@ -76,8 +86,10 @@ def _save_state(path, model, optimizer, scheduler, loader, epoch, extra=None):
         "scheduler": scheduler.state_dict(), "rng": _capture_rng(loader),
         "epoch": int(epoch), **(extra or {}),
     }
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    torch.save(payload, path)
+    path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    torch.save(payload, temporary)
+    temporary.replace(path)
 
 
 def _load_state(path, model, optimizer, scheduler, loader, device) -> dict:
@@ -118,7 +130,11 @@ def train_shared_reference(model, loader, config, device, output_dir: Path) -> P
     if last_path.is_file():
         start_epoch = int(_load_state(last_path, model, optimizer, scheduler, loader, device)["epoch"]) + 1
     records_path = output_dir / "training_metrics.csv"
-    records = pd.read_csv(records_path).to_dict("records") if records_path.is_file() else []
+    if records_path.is_file():
+        prior = pd.read_csv(records_path)
+        records = prior.loc[prior["epoch"] < start_epoch].to_dict("records")
+    else:
+        records = []
     for epoch in range(start_epoch, epochs + 1):
         model.train()
         sums = {width: {"loss": 0.0, "correct": 0, "n": 0} for width in ANCHORS}
@@ -163,6 +179,7 @@ def train_shared_reference(model, loader, config, device, output_dir: Path) -> P
         )
         print(f"shared epoch {epoch}/{epochs} | {status}", flush=True)
     _save_state(final_path, model, optimizer, scheduler, loader, epochs)
+    last_path.unlink(missing_ok=True)
     return final_path
 
 
@@ -181,13 +198,17 @@ def train_specialized_reference(model, width, loaders, config, device, seed, out
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     history_path = output_dir / "training_metrics.csv"
-    history = pd.read_csv(history_path).to_dict("records") if history_path.is_file() else []
     best = {"epoch": -1, "validation_accuracy": -1.0, "validation_loss": float("inf")}
     start_epoch = 1
     if last_path.is_file():
         payload = _load_state(last_path, model, optimizer, scheduler, loaders.train, device)
         start_epoch = int(payload["epoch"]) + 1
         best = payload["best"]
+    if history_path.is_file():
+        prior = pd.read_csv(history_path)
+        history = prior.loc[prior["epoch"] < start_epoch].to_dict("records")
+    else:
+        history = []
     for epoch in range(start_epoch, epochs + 1):
         model.train(); model.set_width(width)
         loss_sum = correct = count = 0
@@ -202,11 +223,14 @@ def train_specialized_reference(model, width, loaders, config, device, seed, out
             loss_sum += float(loss.detach()) * n
             correct += int((logits.argmax(1) == labels).sum())
         lr = optimizer.param_groups[0]["lr"]; scheduler.step()
+        # Validation-time BN recalibration must not alter the model that
+        # continues training at the next epoch. Select the calibrated copy.
+        validation_model = copy.deepcopy(model)
         calibrate_batch_norm(
-            model, loaders.calibration, width, device,
+            validation_model, loaders.calibration, width, device,
             int(config["evaluation"]["bn_calibration_batches"]),
         )
-        validation = evaluate_width(model, loaders.validation, width, device)
+        validation = evaluate_width(validation_model, loaders.validation, width, device)
         improved = (
             validation["accuracy"] > best["validation_accuracy"]
             or (
@@ -217,8 +241,9 @@ def train_specialized_reference(model, width, loaders, config, device, seed, out
         if improved:
             best = {"epoch": epoch, "validation_accuracy": validation["accuracy"],
                     "validation_loss": validation["loss"]}
-            torch.save({"model": model.state_dict(), "seed": seed, "width": float(width),
+            torch.save({"model": validation_model.state_dict(), "seed": seed, "width": float(width),
                         "best": best}, best_path)
+        del validation_model
         history.append({
             "seed": seed, "width": float(width), "epoch": epoch,
             "train_loss": loss_sum / count, "train_accuracy": correct / count,
@@ -234,6 +259,7 @@ def train_specialized_reference(model, width, loaders, config, device, seed, out
             f"best={best['epoch']}", flush=True,
         )
     complete_path.write_text(json.dumps(best, indent=2) + "\n")
+    last_path.unlink(missing_ok=True)
     return best_path
 
 
@@ -399,7 +425,8 @@ def finalize_s1(root: str | Path, config: dict) -> dict:
     pd.DataFrame(robustness).to_csv(root / "representation_pattern_robustness.csv", index=False)
     report = [
         "# S1 Width controlled experiment", "",
-        f"S0-selected horizon: **{config['training']['epochs']} epochs**.", "",
+        f"Training horizon: **{config['training']['epochs']} epochs** "
+        f"(basis: `{config['horizon_selection']['selection_basis']}`).", "",
         "Specialized references were independently initialized, selected on validation, and evaluated on test only after selection.", "",
         "## Specialization gaps", "", specialized.to_markdown(index=False), "",
         "## Representation robustness", "", pd.DataFrame(robustness).to_markdown(index=False), "",

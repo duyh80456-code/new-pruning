@@ -16,8 +16,16 @@ def test_s0_selection_requires_pass_and_positive_horizon(tmp_path):
 
     failed = tmp_path / "failed.json"
     failed.write_text(json.dumps({"s0_pass": False, "selected_horizon": 80}))
-    with pytest.raises(RuntimeError, match="does not record"):
+    with pytest.raises(RuntimeError, match="require s0_pass"):
         read_s0_selection(failed)
+
+    authorized = tmp_path / "authorized.json"
+    authorized.write_text(json.dumps({
+        "s0_pass": False, "s1_user_authorized": True, "selected_horizon": 50
+    }))
+    result = read_s0_selection(authorized)
+    assert result["selected_horizon"] == 50
+    assert result["selection_basis"] == "user_fixed"
 
     missing_horizon = tmp_path / "missing.json"
     missing_horizon.write_text(json.dumps({"s0_pass": True}))
