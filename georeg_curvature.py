@@ -253,9 +253,13 @@ def train_segment(
         scheduler.step()
         pd.DataFrame(records).to_csv(output_dir / "training_metrics.csv", index=False)
         pd.DataFrame(gradients).to_csv(output_dir / "gradient_diagnostics.csv", index=False)
+        accuracy_log = ", ".join(
+            f"w={width:.2f}: acc={sums[width]['correct'] / sums[width]['n']:.4f}"
+            for width in ANCHORS
+        )
         print(
             f"epoch {epoch}/{config['training']['epochs']} | task={task_sum/sample_count:.4f}, "
-            f"geo={geo_sum/sample_count:.4f}, lambda={lambda_geo:.6g}",
+            f"geo={geo_sum/sample_count:.4f}, lambda={lambda_geo:.6g} | {accuracy_log}",
             flush=True,
         )
     checkpoint = output_dir / f"checkpoint_epoch_{end_epoch:02d}.pt"
