@@ -128,6 +128,13 @@ learning rate 0.01. Its provenance report states that the result is not
 equivalent to a from-scratch `T_max=100` experiment, and it exports direct
 50-versus-100 comparison tables.
 
+`kaggle_rq1_posthoc_analysis.ipynb` consumes the completed S1 output from
+`/kaggle/input/notebooks/dyhngg/test-rq1` and performs the locked RQ1 analyses
+without retraining: the 0.40/0.60 matched pair, leakage-safe leave-one-seed-out
+predictors, resource-model residuals, and complete-seed-block bootstrap
+correlations. The learned projection is primary and the backbone/fixed-random
+views are exported as robustness supplements.
+
 To recompute one seed's analysis without retraining:
 
 ```bash
