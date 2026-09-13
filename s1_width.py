@@ -125,6 +125,9 @@ def train_shared_reference(
     if final_path.is_file():
         return final_path
     cfg = config["training"]
+    anchors = tuple(map(float, config["compression"]["train_widths"]))
+    if len(anchors) != 4 or 1.0 not in anchors:
+        raise ValueError("Shared CE+KD training requires exactly four anchors including width 1.0")
     epochs = int(cfg["epochs"])
     initial_epoch = int(initial_epoch)
     if not 0 <= initial_epoch < epochs:
@@ -154,7 +157,7 @@ def train_shared_reference(
         records = []
     for epoch in range(start_epoch, epochs + 1):
         model.train()
-        sums = {width: {"loss": 0.0, "correct": 0, "n": 0} for width in ANCHORS}
+        sums = {width: {"loss": 0.0, "correct": 0, "n": 0} for width in anchors}
         for images, labels, _ in loader:
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad(set_to_none=True)
@@ -163,7 +166,7 @@ def train_shared_reference(
             teacher_ce = F.cross_entropy(teacher, labels)
             values = {1.0: (teacher_ce, teacher)}
             total = teacher_ce
-            for width in ANCHORS[:-1]:
+            for width in (width for width in anchors if width != 1.0):
                 model.set_width(width)
                 logits = model(images)
                 loss = F.cross_entropy(logits, labels) + float(cfg["kd_lambda"]) * kd_loss(
@@ -171,7 +174,7 @@ def train_shared_reference(
                 )
                 total = total + loss
                 values[width] = (loss, logits)
-            total = total / len(ANCHORS)
+            total = total / len(anchors)
             if not torch.isfinite(total):
                 raise FloatingPointError(f"Non-finite shared loss at seed epoch {epoch}")
             total.backward(); optimizer.step()
@@ -181,7 +184,7 @@ def train_shared_reference(
                 sums[width]["correct"] += int((logits.argmax(1) == labels).sum())
                 sums[width]["n"] += n
         lr = optimizer.param_groups[0]["lr"]
-        for width in ANCHORS:
+        for width in anchors:
             item = sums[width]
             records.append({
                 "epoch": epoch, "width": width, "loss": item["loss"] / item["n"],
@@ -192,7 +195,7 @@ def train_shared_reference(
         _save_state(last_path, model, optimizer, scheduler, loader, epoch)
         status = ", ".join(
             f"w={width:.2f}: acc={sums[width]['correct']/sums[width]['n']:.4f}"
-            for width in ANCHORS
+            for width in anchors
         )
         print(f"shared epoch {epoch}/{epochs} | {status}", flush=True)
     _save_state(final_path, model, optimizer, scheduler, loader, epochs, {
@@ -337,6 +340,7 @@ def evaluate_shared_checkpoint(checkpoint_path, loaders, config, device, seed, o
     model = make_model(config, device)
     model.load_state_dict(torch.load(checkpoint_path, map_location=device, weights_only=False)["model"])
     rows = []
+    anchors = set(map(float, config["compression"]["train_widths"]))
     for width in map(float, config["compression"]["eval_widths"]):
         calibrate_batch_norm(model, loaders.calibration, width, device,
                              int(config["evaluation"]["bn_calibration_batches"]))
@@ -344,7 +348,7 @@ def evaluate_shared_checkpoint(checkpoint_path, loaders, config, device, seed, o
         flops, params = profile_subnet(model, width)
         extract_representation_views(model, loaders.geometry, width, device,
                                      random_matrix, output_dir / "representations")
-        rows.append({"seed": seed, "budget": width, "is_train_anchor": width in ANCHORS,
+        rows.append({"seed": seed, "budget": width, "is_train_anchor": width in anchors,
                      **metrics, "flops": flops, "params": params})
     frame = pd.DataFrame(rows)
     frame.to_csv(output_dir / "budget_metrics.csv", index=False)

@@ -135,6 +135,15 @@ predictors, resource-model residuals, and complete-seed-block bootstrap
 correlations. The learned projection is primary and the backbone/fixed-random
 views are exported as robustness supplements.
 
+`kaggle_rq2_geometry_anchor.ipynb` runs the locked RQ2 anchor-placement
+screening. It derives a deterministic four-anchor Geometry-4 policy from only
+seed-0 Uniform-100 validation geometry, reports the actual subnet-FLOPs ratio,
+then trains confirmatory seeds 1 and 2 in parallel with the matched 50+50
+optimizer-reset protocol. Dense test evaluation is sealed until both new
+checkpoints exist. Primary evaluation uses only the common holdout widths and
+exports paired per-image bootstrap tables, dense curves, geometry diagnostics,
+and a resumable archive.
+
 To recompute one seed's analysis without retraining:
 
 ```bash
