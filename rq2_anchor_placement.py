@@ -230,6 +230,224 @@ def select_geometry_anchors(uniform_root: str | Path, output_dir: str | Path) ->
     return artifact
 
 
+def _path_coordinate_from_geometry(edge_frame: pd.DataFrame) -> dict[float, float]:
+    edge_frame = edge_frame.sort_values("budget_start")
+    starts = tuple(edge_frame["budget_start"].round(2))
+    ends = tuple(edge_frame["budget_end"].round(2))
+    if starts != GRID[:-1] or ends != GRID[1:]:
+        raise RuntimeError("Geometry edges do not exactly cover the registered dense grid")
+    edge_lengths = 0.05 * edge_frame["G"].to_numpy(float)
+    return dict(zip(GRID, np.concatenate([[0.0], np.cumsum(edge_lengths)])))
+
+
+def _radius(anchors, coordinate: dict[float, float]) -> tuple[float, float]:
+    distances = [
+        min(abs(coordinate[width] - coordinate[anchor]) for anchor in anchors)
+        for width in GRID
+    ]
+    return float(max(distances)), float(np.mean(distances))
+
+
+def _pareto_mask(first: np.ndarray, second: np.ndarray, tolerance=1e-12) -> np.ndarray:
+    result = np.ones(len(first), dtype=bool)
+    for index in range(len(first)):
+        weakly_better = (first <= first[index] + tolerance) & (second <= second[index] + tolerance)
+        strictly_better = (first < first[index] - tolerance) | (second < second[index] - tolerance)
+        if np.any(weakly_better & strictly_better):
+            result[index] = False
+    return result
+
+
+def select_hybrid_anchors(uniform_root: str | Path, output_dir: str | Path) -> dict:
+    """Freeze Hybrid-v2 using only resource metadata and Uniform validation geometry."""
+    uniform_root, output_dir = Path(uniform_root), Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    geometry_path = uniform_root / "representation_local_geometry_all_seeds.csv"
+    metrics_path = uniform_root / "shared_dense_metrics_all_seeds.csv"
+    geometry = pd.read_csv(geometry_path)
+    learned = geometry.loc[
+        geometry["representation"].eq(PRIMARY_REPRESENTATION)
+        & geometry["seed"].astype(int).isin([0, 1, 2])
+    ].copy()
+    counts = learned.groupby(["budget_start", "budget_end"])["seed"].nunique()
+    if len(counts) != 15 or not (counts == 3).all():
+        raise RuntimeError("Hybrid selection requires all 15 learned-projection edges for seeds 0,1,2")
+    median_edges = learned.groupby(
+        ["budget_start", "budget_end"], as_index=False
+    )["G"].median()
+    geometry_coordinate = _path_coordinate_from_geometry(median_edges)
+    seed_zero_coordinate = _path_coordinate_from_geometry(
+        learned.loc[learned["seed"].astype(int) == 0]
+    )
+    metrics = pd.read_csv(metrics_path)
+    flops = {
+        round(float(width), 2): float(value)
+        for width, value in metrics.groupby("budget")["flops"].first().items()
+    }
+    if set(flops) != set(GRID) or any(value <= 0 for value in flops.values()):
+        raise RuntimeError("A positive FLOPs value is required at every registered width")
+    log_flops = np.asarray([np.log(flops[width]) for width in GRID])
+    span = float(log_flops.max() - log_flops.min())
+    if span <= 0:
+        raise RuntimeError("Degenerate log-FLOPs resource coordinate")
+    resource_coordinate = dict(zip(GRID, (log_flops - log_flops.min()) / span))
+    uniform_R_G, _ = _radius(UNIFORM_ANCHORS, geometry_coordinate)
+    uniform_R_R, _ = _radius(UNIFORM_ANCHORS, resource_coordinate)
+    if uniform_R_G <= 0 or uniform_R_R <= 0:
+        raise RuntimeError("Uniform normalization radii must be positive")
+    rows = []
+    for a1, a2 in itertools.combinations(GRID[1:-1], 2):
+        anchors = (0.25, a1, a2, 1.0)
+        R_G, mean_G = _radius(anchors, geometry_coordinate)
+        R_R, mean_R = _radius(anchors, resource_coordinate)
+        normalized_G = R_G / uniform_R_G
+        normalized_R = R_R / uniform_R_R
+        rows.append({
+            "a1": a1,
+            "a2": a2,
+            "anchors": ",".join(f"{value:.2f}" for value in anchors),
+            "R_G": R_G,
+            "R_R": R_R,
+            "mean_geometry_distance": mean_G,
+            "mean_resource_distance": mean_R,
+            "normalized_R_G": normalized_G,
+            "normalized_R_R": normalized_R,
+            "hybrid_objective": max(normalized_G, normalized_R),
+            "normalized_radius_sum": normalized_G + normalized_R,
+        })
+    candidates = pd.DataFrame(rows)
+    candidates["pareto_optimal"] = _pareto_mask(
+        candidates["R_G"].to_numpy(float), candidates["R_R"].to_numpy(float)
+    )
+    # Rounding defines numerical ties before the documented secondary and
+    # lexicographic rules; no accuracy result participates in selection.
+    candidates["_objective_key"] = candidates["hybrid_objective"].round(12)
+    candidates["_sum_key"] = candidates["normalized_radius_sum"].round(12)
+    candidates = candidates.sort_values(
+        ["_objective_key", "_sum_key", "a1", "a2"], kind="mergesort"
+    ).reset_index(drop=True)
+    hybrid = (0.25, float(candidates.iloc[0]["a1"]), float(candidates.iloc[0]["a2"]), 1.0)
+    candidates["selected"] = (
+        np.isclose(candidates["a1"], hybrid[1]) & np.isclose(candidates["a2"], hybrid[2])
+    )
+    candidates = candidates.drop(columns=["_objective_key", "_sum_key"])
+    candidates.to_csv(output_dir / "hybrid_anchor_candidates.csv", index=False)
+    candidates.loc[candidates["pareto_optimal"]].sort_values(
+        ["R_G", "R_R"]
+    ).to_csv(output_dir / "hybrid_pareto_frontier.csv", index=False)
+    seed_zero_rows = []
+    for a1, a2 in itertools.combinations(GRID[1:-1], 2):
+        anchors = (0.25, a1, a2, 1.0)
+        radius, mean_distance = _radius(anchors, seed_zero_coordinate)
+        seed_zero_rows.append((radius, mean_distance, a1, a2))
+    _, _, pure_a1, pure_a2 = min(seed_zero_rows)
+    pure_geo = (0.25, pure_a1, pure_a2, 1.0)
+    common_holdout = sorted(set(GRID) - set(UNIFORM_ANCHORS) - set(pure_geo) - set(hybrid))
+    coordinate_table = pd.DataFrame({
+        "width": GRID,
+        "median_geometry_coordinate": [geometry_coordinate[width] for width in GRID],
+        "normalized_log_flops": [resource_coordinate[width] for width in GRID],
+        "flops": [flops[width] for width in GRID],
+    })
+    coordinate_table.to_csv(output_dir / "hybrid_coordinates.csv", index=False)
+    compute_rows = []
+    for method, anchors in (
+        ("Uniform-4", UNIFORM_ANCHORS), ("PureGeo-4", pure_geo), ("Hybrid-4", hybrid)
+    ):
+        compute_rows.append({
+            "method": method,
+            "anchors": ",".join(f"{value:.2f}" for value in anchors),
+            "forwards_per_batch": 4,
+            "subnet_flops_per_batch": sum(flops[width] for width in anchors),
+        })
+    compute = pd.DataFrame(compute_rows)
+    uniform_compute = float(compute.loc[compute["method"].eq("Uniform-4"), "subnet_flops_per_batch"].iloc[0])
+    compute["relative_to_uniform"] = compute["subnet_flops_per_batch"] / uniform_compute
+    compute.to_csv(output_dir / "hybrid_training_compute.csv", index=False)
+    selected_row = candidates.loc[candidates["selected"]].iloc[0]
+    artifact = {
+        "selector": "Hybrid-v2 normalized minimax resource-functional coverage",
+        "development_seeds": [0, 1, 2],
+        "confirmatory_seeds": [3, 4, 5],
+        "geometry_source": "edge-wise median of Uniform-100 learned_projection validation geometry",
+        "resource_coordinate": "min-max normalized log FLOPs over the fixed dense grid",
+        "accuracy_or_specialization_gap_used_for_selection": False,
+        "uniform_anchors": list(UNIFORM_ANCHORS),
+        "pure_geo_anchors": list(pure_geo),
+        "hybrid_anchors": list(hybrid),
+        "common_holdout_three_methods": common_holdout,
+        "R_G_uniform": uniform_R_G,
+        "R_R_uniform": uniform_R_R,
+        "selected_R_G": float(selected_row["R_G"]),
+        "selected_R_R": float(selected_row["R_R"]),
+        "selected_normalized_R_G": float(selected_row["normalized_R_G"]),
+        "selected_normalized_R_R": float(selected_row["normalized_R_R"]),
+        "selected_hybrid_objective": float(selected_row["hybrid_objective"]),
+        "tie_break": ["rounded_12dp_normalized_radius_sum", "lexicographic_a1_a2"],
+        "geometry_csv_sha256": _sha256(geometry_path),
+        "dense_metrics_csv_sha256": _sha256(metrics_path),
+    }
+    artifact_path = output_dir / "hybrid_selected_anchors.json"
+    if artifact_path.is_file():
+        previous = json.loads(artifact_path.read_text())
+        immutable = [
+            "hybrid_anchors", "pure_geo_anchors", "common_holdout_three_methods",
+            "geometry_csv_sha256", "dense_metrics_csv_sha256",
+        ]
+        if any(previous.get(key) != artifact.get(key) for key in immutable):
+            raise RuntimeError("Refusing to overwrite a previously frozen Hybrid-v2 selection")
+    artifact_path.write_text(json.dumps(artifact, indent=2) + "\n")
+    gates = {
+        "confirmatory_seeds": [3, 4, 5],
+        "run_all_confirmatory_seeds_regardless_of_seed_3_result": True,
+        "methods_required_per_seed": ["Uniform-4", "PureGeo-4", "Hybrid-4"],
+        "primary_common_holdout": common_holdout,
+        "low_region": [width for width in common_holdout if 0.30 <= width <= 0.45],
+        "high_region": [width for width in common_holdout if 0.80 <= width <= 0.95],
+        "hybrid_mean_H_better_than_uniform_required_seeds": "3/3",
+        "minimum_pooled_mean_H_effect": 0.002,
+        "worst_H_margin": -0.005,
+        "full_width_margin": -0.005,
+        "minimum_low_region_puregeo_gain_retention": 0.60,
+        "high_region_margin_vs_uniform": -0.002,
+        "image_bootstrap_is_conditional_not_seed_level_inference": True,
+    }
+    (output_dir / "hybrid_v2_preregistered_gates.json").write_text(
+        json.dumps(gates, indent=2) + "\n"
+    )
+    fig, ax = plt.subplots(figsize=(8, 6))
+    frontier = candidates.loc[candidates["pareto_optimal"]].sort_values("R_G")
+    ax.scatter(candidates["R_G"], candidates["R_R"], alpha=0.28, label="all 91 sets")
+    ax.plot(frontier["R_G"], frontier["R_R"], marker="o", color="black", label="Pareto frontier")
+    for label, anchors, color in (
+        ("Uniform", UNIFORM_ANCHORS, "steelblue"),
+        ("PureGeo", pure_geo, "crimson"),
+        ("Hybrid", hybrid, "darkgreen"),
+    ):
+        row = candidates.loc[
+            np.isclose(candidates["a1"], anchors[1]) & np.isclose(candidates["a2"], anchors[2])
+        ].iloc[0]
+        ax.scatter(row["R_G"], row["R_R"], s=120, color=color, label=label, zorder=5)
+        ax.annotate(label, (row["R_G"], row["R_R"]), xytext=(5, 5), textcoords="offset points")
+    ax.set(xlabel="Functional radius $R_G$", ylabel="Resource radius $R_R$",
+           title="Hybrid-v2 anchor-set Pareto frontier")
+    ax.grid(alpha=0.25); ax.legend(); fig.tight_layout()
+    fig.savefig(output_dir / "hybrid_anchor_pareto.png", dpi=200); plt.close(fig)
+    report = [
+        "# Hybrid-v2 CPU selection", "",
+        f"Frozen Hybrid anchors: **{list(hybrid)}**", "",
+        f"PureGeo-v1 anchors reconstructed from seed 0: `{list(pure_geo)}`", "",
+        f"Three-method common holdout: `{common_holdout}`", "",
+        "No accuracy, test prediction, or specialization gap was read by the selector.", "",
+        "## Training-compute diagnostic", "", _markdown_table(compute), "",
+        "## Selected candidate", "", _markdown_table(candidates.loc[candidates["selected"]]), "",
+        "Seeds 0,1,2 are development-only. The locked confirmatory seeds are 3,4,5, and all "
+        "three must be run regardless of the seed-3 result.",
+    ]
+    (output_dir / "hybrid_v2_selection_report.md").write_text("\n".join(report) + "\n")
+    return artifact
+
+
 def train_geo_seed(config: dict, root: Path, seed: int) -> Path:
     device = torch.device(config["experiment"]["device"])
     phase_1 = copy.deepcopy(config)

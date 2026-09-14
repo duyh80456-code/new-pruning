@@ -14,6 +14,7 @@ from rq2_anchor_placement import (
     find_uniform_100_root,
     finalize_rq2,
     select_geometry_anchors,
+    select_hybrid_anchors,
     validate_rq2_config,
 )
 from s1_width import train_shared_reference
@@ -79,6 +80,25 @@ def test_find_uniform_root_direct_and_archive(tmp_path):
                 bundle.write(path, path.relative_to(source))
     extracted = find_uniform_100_root(archive_root, tmp_path / "extracted")
     assert (extracted / "shared" / "seed_2" / "checkpoint.pt").is_file()
+
+
+def test_hybrid_selector_enumerates_pareto_and_freezes_new_seeds(tmp_path):
+    source = _uniform_root(tmp_path / "uniform")
+    output = tmp_path / "hybrid"
+    result = select_hybrid_anchors(source, output)
+    candidates = pd.read_csv(output / "hybrid_anchor_candidates.csv")
+    selected = candidates.loc[candidates["selected"]].iloc[0]
+    assert len(candidates) == 91
+    assert int(candidates["selected"].sum()) == 1
+    assert bool(selected["pareto_optimal"])
+    assert selected["hybrid_objective"] <= 1.0 + 1e-12
+    assert result["development_seeds"] == [0, 1, 2]
+    assert result["confirmatory_seeds"] == [3, 4, 5]
+    assert result["accuracy_or_specialization_gap_used_for_selection"] is False
+    gates = json.loads((output / "hybrid_v2_preregistered_gates.json").read_text())
+    assert gates["run_all_confirmatory_seeds_regardless_of_seed_3_result"] is True
+    assert gates["methods_required_per_seed"] == ["Uniform-4", "PureGeo-4", "Hybrid-4"]
+    assert (output / "hybrid_anchor_pareto.png").stat().st_size > 0
 
 
 def test_rq2_config_lock():
