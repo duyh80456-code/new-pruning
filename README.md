@@ -145,10 +145,11 @@ exports paired per-image bootstrap tables, dense curves, geometry diagnostics,
 and a resumable archive.
 
 `kaggle_rq2_hybrid_selector_cpu.ipynb` is the CPU-only RQ2-v2 selection step.
-It reads no accuracy or test artifacts: Uniform-100 validation geometry from
-development seeds 0–2 is aggregated edge-wise by median, all 91 endpoint-locked
-anchor sets are scored in functional and normalized-log-FLOPs coordinates, and
-a deterministic normalized-minimax Hybrid-4 set is frozen together with the
+It consumes `/kaggle/input/notebooks/dyhngg/test-rq2` but reads no accuracy or
+test columns: the frozen seed-0 trajectory and Uniform validation geometry for
+seeds 1–2 are aggregated edge-wise by median. All 91 endpoint-locked anchor
+sets are scored in functional and normalized-log-FLOPs coordinates, and a
+deterministic normalized-minimax Hybrid-4 set is frozen together with the
 Pareto frontier and seed-3/4/5 confirmatory gates.
 
 To recompute one seed's analysis without retraining:

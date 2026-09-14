@@ -12,6 +12,7 @@ from rq2_anchor_placement import (
     GRID,
     UNIFORM_ANCHORS,
     find_uniform_100_root,
+    find_rq2_development_root,
     finalize_rq2,
     select_geometry_anchors,
     select_hybrid_anchors,
@@ -99,6 +100,29 @@ def test_hybrid_selector_enumerates_pareto_and_freezes_new_seeds(tmp_path):
     assert gates["run_all_confirmatory_seeds_regardless_of_seed_3_result"] is True
     assert gates["methods_required_per_seed"] == ["Uniform-4", "PureGeo-4", "Hybrid-4"]
     assert (output / "hybrid_anchor_pareto.png").stat().st_size > 0
+
+
+def test_hybrid_selector_consumes_completed_rq2_without_accuracy_columns(tmp_path):
+    uniform = _uniform_root(tmp_path / "uniform")
+    rq2 = tmp_path / "rq2"
+    select_geometry_anchors(uniform, rq2 / "protocol")
+    geometry = pd.read_csv(uniform / "representation_local_geometry_all_seeds.csv")
+    geometry = geometry.loc[geometry["seed"].isin([1, 2])].copy()
+    geometry["method"] = "uniform"
+    geometry.to_csv(rq2 / "rq2_geometry_all.csv", index=False)
+    dense = pd.read_csv(uniform / "shared_dense_metrics_all_seeds.csv")
+    dense = dense.loc[dense["seed"].isin([1, 2]), ["seed", "budget", "flops"]].copy()
+    dense["method"] = "uniform"
+    dense.to_csv(rq2 / "rq2_dense_metrics_all.csv", index=False)
+    located = find_rq2_development_root(rq2, tmp_path / "unused")
+    assert located == rq2
+    result = select_hybrid_anchors(located, tmp_path / "hybrid_from_rq2")
+    assert result["development_artifact_kind"] == "completed_rq2_puregeo"
+    assert result["accuracy_or_specialization_gap_used_for_selection"] is False
+    assert set(result["source_artifact_sha256"]) == {
+        "rq2_geometry_all.csv", "geometry_trajectory_coordinates.csv",
+        "rq2_dense_metrics_all.csv", "selected_anchors.json",
+    }
 
 
 def test_rq2_config_lock():

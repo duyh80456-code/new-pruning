@@ -91,6 +91,45 @@ def find_uniform_100_root(input_root: str | Path, destination: str | Path) -> Pa
     return candidates[0]
 
 
+def _is_rq2_development_root(root: Path) -> bool:
+    required = [
+        root / "rq2_geometry_all.csv",
+        root / "rq2_dense_metrics_all.csv",
+        root / "protocol" / "selected_anchors.json",
+        root / "protocol" / "geometry_trajectory_coordinates.csv",
+    ]
+    return all(path.is_file() for path in required)
+
+
+def find_rq2_development_root(input_root: str | Path, destination: str | Path) -> Path:
+    """Find a direct RQ2 result or safely unpack its exported run archive."""
+    input_root, destination = Path(input_root), Path(destination)
+    candidates = sorted({path.parent for path in input_root.rglob("rq2_geometry_all.csv")})
+    candidates = [root for root in candidates if _is_rq2_development_root(root)]
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        raise RuntimeError(f"Multiple complete RQ2 development roots found: {candidates}")
+    archives = sorted(input_root.rglob("kaggle-rq2-anchor-*.zip"))
+    if len(archives) != 1:
+        raise FileNotFoundError(
+            f"Expected one complete RQ2 result or archive below {input_root}; archives={archives}"
+        )
+    destination.mkdir(parents=True, exist_ok=True)
+    resolved_destination = destination.resolve()
+    with zipfile.ZipFile(archives[0]) as bundle:
+        for member in bundle.infolist():
+            target = (destination / member.filename).resolve()
+            if resolved_destination not in target.parents and target != resolved_destination:
+                raise RuntimeError(f"Unsafe path in RQ2 archive: {member.filename}")
+        bundle.extractall(destination)
+    candidates = sorted({path.parent for path in destination.rglob("rq2_geometry_all.csv")})
+    candidates = [root for root in candidates if _is_rq2_development_root(root)]
+    if len(candidates) != 1:
+        raise RuntimeError(f"Extracted archive lacks exactly one complete RQ2 root: {candidates}")
+    return candidates[0]
+
+
 def validate_rq2_config(config: dict) -> None:
     if config["dataset"]["name"].lower() != "cifar100":
         raise ValueError("RQ2 requires CIFAR-100")
@@ -258,17 +297,69 @@ def _pareto_mask(first: np.ndarray, second: np.ndarray, tolerance=1e-12) -> np.n
     return result
 
 
-def select_hybrid_anchors(uniform_root: str | Path, output_dir: str | Path) -> dict:
+def select_hybrid_anchors(development_root: str | Path, output_dir: str | Path) -> dict:
     """Freeze Hybrid-v2 using only resource metadata and Uniform validation geometry."""
-    uniform_root, output_dir = Path(uniform_root), Path(output_dir)
+    development_root, output_dir = Path(development_root), Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    geometry_path = uniform_root / "representation_local_geometry_all_seeds.csv"
-    metrics_path = uniform_root / "shared_dense_metrics_all_seeds.csv"
-    geometry = pd.read_csv(geometry_path)
-    learned = geometry.loc[
-        geometry["representation"].eq(PRIMARY_REPRESENTATION)
-        & geometry["seed"].astype(int).isin([0, 1, 2])
-    ].copy()
+    pure_geo_from_artifact = None
+    if _is_rq2_development_root(development_root):
+        geometry_path = development_root / "rq2_geometry_all.csv"
+        coordinate_path = development_root / "protocol" / "geometry_trajectory_coordinates.csv"
+        metrics_path = development_root / "rq2_dense_metrics_all.csv"
+        selection_path = development_root / "protocol" / "selected_anchors.json"
+        geometry = pd.read_csv(
+            geometry_path,
+            usecols=["seed", "representation", "budget_start", "budget_end", "G", "method"],
+        )
+        learned_12 = geometry.loc[
+            geometry["method"].eq("uniform")
+            & geometry["representation"].eq(PRIMARY_REPRESENTATION)
+            & geometry["seed"].astype(int).isin([1, 2]),
+            ["seed", "representation", "budget_start", "budget_end", "G"],
+        ]
+        coordinates = pd.read_csv(
+            coordinate_path, usecols=["width", "incoming_edge_length"]
+        ).sort_values("width")
+        if tuple(coordinates["width"].round(2)) != GRID:
+            raise RuntimeError("RQ2 seed-0 coordinate artifact does not cover the dense grid")
+        incoming = coordinates["incoming_edge_length"].iloc[1:].to_numpy(float)
+        seed_zero = pd.DataFrame({
+            "seed": 0,
+            "representation": PRIMARY_REPRESENTATION,
+            "budget_start": GRID[:-1],
+            "budget_end": GRID[1:],
+            "G": incoming / 0.05,
+        })
+        learned = pd.concat([seed_zero, learned_12], ignore_index=True)
+        metrics = pd.read_csv(metrics_path, usecols=["method", "budget", "flops"])
+        metrics = metrics.loc[metrics["method"].eq("uniform"), ["budget", "flops"]]
+        pure_geo_from_artifact = tuple(
+            map(float, json.loads(selection_path.read_text())["selected_anchors"])
+        )
+        development_kind = "completed_rq2_puregeo"
+        source_hashes = {
+            "rq2_geometry_all.csv": _sha256(geometry_path),
+            "geometry_trajectory_coordinates.csv": _sha256(coordinate_path),
+            "rq2_dense_metrics_all.csv": _sha256(metrics_path),
+            "selected_anchors.json": _sha256(selection_path),
+        }
+    else:
+        geometry_path = development_root / "representation_local_geometry_all_seeds.csv"
+        metrics_path = development_root / "shared_dense_metrics_all_seeds.csv"
+        geometry = pd.read_csv(
+            geometry_path,
+            usecols=["seed", "representation", "budget_start", "budget_end", "G"],
+        )
+        learned = geometry.loc[
+            geometry["representation"].eq(PRIMARY_REPRESENTATION)
+            & geometry["seed"].astype(int).isin([0, 1, 2])
+        ].copy()
+        metrics = pd.read_csv(metrics_path, usecols=["budget", "flops"])
+        development_kind = "uniform_100"
+        source_hashes = {
+            "representation_local_geometry_all_seeds.csv": _sha256(geometry_path),
+            "shared_dense_metrics_all_seeds.csv": _sha256(metrics_path),
+        }
     counts = learned.groupby(["budget_start", "budget_end"])["seed"].nunique()
     if len(counts) != 15 or not (counts == 3).all():
         raise RuntimeError("Hybrid selection requires all 15 learned-projection edges for seeds 0,1,2")
@@ -279,7 +370,6 @@ def select_hybrid_anchors(uniform_root: str | Path, output_dir: str | Path) -> d
     seed_zero_coordinate = _path_coordinate_from_geometry(
         learned.loc[learned["seed"].astype(int) == 0]
     )
-    metrics = pd.read_csv(metrics_path)
     flops = {
         round(float(width), 2): float(value)
         for width, value in metrics.groupby("budget")["flops"].first().items()
@@ -342,6 +432,11 @@ def select_hybrid_anchors(uniform_root: str | Path, output_dir: str | Path) -> d
         seed_zero_rows.append((radius, mean_distance, a1, a2))
     _, _, pure_a1, pure_a2 = min(seed_zero_rows)
     pure_geo = (0.25, pure_a1, pure_a2, 1.0)
+    if pure_geo_from_artifact is not None and pure_geo != pure_geo_from_artifact:
+        raise RuntimeError(
+            f"Reconstructed PureGeo anchors {pure_geo} disagree with frozen RQ2 artifact "
+            f"{pure_geo_from_artifact}"
+        )
     common_holdout = sorted(set(GRID) - set(UNIFORM_ANCHORS) - set(pure_geo) - set(hybrid))
     coordinate_table = pd.DataFrame({
         "width": GRID,
@@ -367,6 +462,7 @@ def select_hybrid_anchors(uniform_root: str | Path, output_dir: str | Path) -> d
     selected_row = candidates.loc[candidates["selected"]].iloc[0]
     artifact = {
         "selector": "Hybrid-v2 normalized minimax resource-functional coverage",
+        "development_artifact_kind": development_kind,
         "development_seeds": [0, 1, 2],
         "confirmatory_seeds": [3, 4, 5],
         "geometry_source": "edge-wise median of Uniform-100 learned_projection validation geometry",
@@ -384,15 +480,14 @@ def select_hybrid_anchors(uniform_root: str | Path, output_dir: str | Path) -> d
         "selected_normalized_R_R": float(selected_row["normalized_R_R"]),
         "selected_hybrid_objective": float(selected_row["hybrid_objective"]),
         "tie_break": ["rounded_12dp_normalized_radius_sum", "lexicographic_a1_a2"],
-        "geometry_csv_sha256": _sha256(geometry_path),
-        "dense_metrics_csv_sha256": _sha256(metrics_path),
+        "source_artifact_sha256": source_hashes,
     }
     artifact_path = output_dir / "hybrid_selected_anchors.json"
     if artifact_path.is_file():
         previous = json.loads(artifact_path.read_text())
         immutable = [
             "hybrid_anchors", "pure_geo_anchors", "common_holdout_three_methods",
-            "geometry_csv_sha256", "dense_metrics_csv_sha256",
+            "source_artifact_sha256",
         ]
         if any(previous.get(key) != artifact.get(key) for key in immutable):
             raise RuntimeError("Refusing to overwrite a previously frozen Hybrid-v2 selection")
