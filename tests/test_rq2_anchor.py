@@ -19,6 +19,7 @@ from rq2_anchor_placement import (
     validate_rq2_config,
 )
 from s1_width import train_shared_reference
+from rq2_v1_diagnostics import run_rq2_v1_diagnostics
 
 
 def _rq2_config():
@@ -209,3 +210,30 @@ def test_finalize_rq2_writes_common_holdout_decision(tmp_path):
     assert decision["mean_delta_accuracy_H"] == pytest.approx(0.1)
     assert (root / "rq2_seed_comparison.csv").is_file()
     assert (root / "rq2_dense_accuracy_curves.png").stat().st_size > 0
+    protocol = root / "protocol"
+    protocol.mkdir()
+    (protocol / "selected_anchors.json").write_text(json.dumps({
+        "uniform_anchors": list(UNIFORM_ANCHORS),
+        "selected_anchors": selection["selected_anchors"],
+    }))
+    pd.DataFrame([
+        {"method": "Uniform-4", "anchors": "0.25,0.50,0.75,1.00",
+         "forwards_per_batch": 4, "subnet_flops_per_batch": 10},
+        {"method": "Geometry-4", "anchors": "0.25,0.40,0.60,1.00",
+         "forwards_per_batch": 4, "subnet_flops_per_batch": 8},
+    ]).to_csv(protocol / "anchor_training_compute.csv", index=False)
+    for seed in (1, 2):
+        training_dir = root / "geo" / f"seed_{seed}"
+        training_dir.mkdir(parents=True)
+        pd.DataFrame([
+            {"epoch": epoch, "width": width, "loss": 2 / epoch,
+             "accuracy": 0.5 + epoch / 1000, "learning_rate": 0.01}
+            for epoch in range(1, 101) for width in (0.25, 0.4, 0.6, 1.0)
+        ]).to_csv(training_dir / "training_metrics_1_100.csv", index=False)
+    diagnostics = tmp_path / "diagnostics"
+    result = run_rq2_v1_diagnostics(root, diagnostics)
+    assert result["availability"]["dense_accuracy_available"] is True
+    assert result["availability"]["geo_validation_accuracy_by_epoch_available"] is False
+    assert len(pd.read_csv(diagnostics / "rq2_v1_accuracy_deltas.csv")) == 32
+    assert len(pd.read_csv(diagnostics / "rq2_v1_geometry_deltas.csv")) == 30
+    assert (diagnostics / "rq2_v1_dense_accuracy_tradeoff.png").stat().st_size > 0

@@ -152,6 +152,13 @@ sets are scored in functional and normalized-log-FLOPs coordinates, and a
 deterministic normalized-minimax Hybrid-4 set is frozen together with the
 Pareto frontier and seed-3/4/5 confirmatory gates.
 
+`kaggle_rq2_v1_diagnostics_cpu.ipynb` diagnoses the completed PureGeo-v1 run
+without checkpoints or retraining. It exports paired dense accuracy and local
+geometry deltas, requested anchor accuracies, support-distance changes around
+the removed 0.75 anchor, Geo training-tail diagnostics, and per-sample/per-class
+correctness transitions. Per-epoch validation accuracy is explicitly marked
+unavailable because the original shared trainer did not record it.
+
 To recompute one seed's analysis without retraining:
 
 ```bash
