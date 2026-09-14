@@ -30,6 +30,15 @@ class ConfirmatoryLoaders:
     geometry: DataLoader
 
 
+@dataclass(frozen=True)
+class InterimValidationLoaders:
+    """Train-derived loaders that never construct or read the CIFAR-100 test split."""
+
+    validation: DataLoader
+    calibration: DataLoader
+    geometry: DataLoader
+
+
 def _cifar100_transforms():
     mean, std = (0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)
     augmented = transforms.Compose(
@@ -208,4 +217,45 @@ def build_confirmatory_loaders(config: dict, training_seed: int) -> Confirmatory
         test=test_loader,
         calibration=calibration_loader,
         geometry=geometry_loader,
+    )
+
+
+def build_interim_validation_loaders(config: dict) -> InterimValidationLoaders:
+    """Build fixed validation diagnostics while keeping the test split sealed."""
+    data_cfg = config["dataset"]
+    if data_cfg["name"].lower() != "cifar100" or data_cfg.get("fake_data", False):
+        raise ValueError("Interim validation loaders require real CIFAR-100")
+    _, deterministic = _cifar100_transforms()
+    root = Path(data_cfg["root"])
+    download = data_cfg.get("download", False)
+    raw_train = datasets.CIFAR100(root=root, train=True, transform=None, download=download)
+    deterministic_train = IndexedDataset(
+        datasets.CIFAR100(root=root, train=True, transform=deterministic, download=False)
+    )
+    train_indices, validation_indices = _stratified_cifar_split(
+        raw_train.targets, int(data_cfg["validation_size"]), int(data_cfg["split_seed"])
+    )
+    calibration_size = int(data_cfg["bn_calibration_size"])
+    geometry_size = int(data_cfg["feature_subset_size"])
+    if calibration_size > len(train_indices) or geometry_size > len(validation_indices):
+        raise ValueError("Calibration/geometry subset exceeds its source split")
+    workers = int(data_cfg.get("num_workers", 0))
+    pin_memory = torch.cuda.is_available()
+    evaluation_batch_size = int(config["evaluation"]["batch_size"])
+    return InterimValidationLoaders(
+        validation=DataLoader(
+            Subset(deterministic_train, validation_indices),
+            batch_size=evaluation_batch_size, shuffle=False,
+            num_workers=workers, pin_memory=pin_memory,
+        ),
+        calibration=DataLoader(
+            Subset(deterministic_train, train_indices[:calibration_size]),
+            batch_size=int(config["training"]["batch_size"]), shuffle=False,
+            num_workers=workers, pin_memory=pin_memory,
+        ),
+        geometry=DataLoader(
+            Subset(deterministic_train, validation_indices[:geometry_size]),
+            batch_size=evaluation_batch_size, shuffle=False,
+            num_workers=workers, pin_memory=pin_memory,
+        ),
     )

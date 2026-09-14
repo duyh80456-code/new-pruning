@@ -11,11 +11,18 @@ import numpy as np
 import pandas as pd
 import torch
 
-from data import build_confirmatory_loaders
+from data import build_confirmatory_loaders, build_interim_validation_loaders
+from evaluation import calibrate_batch_norm, evaluate_width
+from profiling import profile_subnet
 from research_utils import seed_everything
 from rq2_anchor_placement import GRID, UNIFORM_ANCHORS, _sha256, evaluate_checkpoint
 from rq2_finalgeo_selector import EXPECTED_PUREGEO, _canonical_hash
-from s1_width import make_model, train_shared_reference
+from s1_width import (
+    analyze_representation_views,
+    extract_representation_views,
+    make_model,
+    train_shared_reference,
+)
 
 
 METHOD_ANCHORS = {
@@ -211,6 +218,58 @@ def evaluate_method_seed(config: dict, root: str | Path, method: str, seed: int)
     return evaluate_checkpoint(
         method_config(config, method), root, checkpoint, int(seed), method, random_matrix
     )
+
+
+def evaluate_validation_checkpoint(
+    config: dict,
+    checkpoint: str | Path,
+    output_dir: str | Path,
+    method: str,
+    seed: int,
+    random_matrix: torch.Tensor,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Interim dense validation/geometry diagnostic with the test split sealed."""
+    if method not in METHOD_ANCHORS or int(seed) not in CONFIRMATORY_SEEDS:
+        raise ValueError("Interim evaluation is locked to registered methods and seeds 3,4,5")
+    config = method_config(config, method)
+    device = torch.device(config["experiment"]["device"])
+    loaders = build_interim_validation_loaders(config)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    model = make_model(config, device)
+    model.load_state_dict(
+        torch.load(checkpoint, map_location=device, weights_only=False)["model"]
+    )
+    rows = []
+    anchors = set(METHOD_ANCHORS[method])
+    for width in map(float, config["compression"]["eval_widths"]):
+        calibrate_batch_norm(
+            model, loaders.calibration, width, device,
+            int(config["evaluation"]["bn_calibration_batches"]),
+        )
+        metrics = evaluate_width(model, loaders.validation, width, device)
+        flops, params = profile_subnet(model, width)
+        extract_representation_views(
+            model, loaders.geometry, width, device, random_matrix,
+            output_dir / "validation_representations",
+        )
+        rows.append({
+            "seed": int(seed), "method": method, "split": "validation_5k",
+            "budget": width, "is_train_anchor": width in anchors,
+            **metrics, "flops": flops, "params": params,
+        })
+    metrics = pd.DataFrame(rows)
+    metrics.to_csv(output_dir / "validation_budget_metrics.csv", index=False)
+    geometry = analyze_representation_views(
+        output_dir / "validation_representations", config, int(seed), output_dir
+    )
+    geometry.insert(1, "method", method)
+    geometry.insert(2, "split", "fixed_validation_2k")
+    geometry.to_csv(output_dir / "validation_representation_local_geometry.csv", index=False)
+    (output_dir / "TEST_SPLIT_NOT_ACCESSED.txt").write_text(
+        "Interim diagnostic used only the fixed CIFAR-100 train/validation split.\n"
+    )
+    return metrics, geometry
 
 
 def _summary(metrics: pd.DataFrame, geometry: pd.DataFrame, common_holdout: list[float]) -> pd.DataFrame:

@@ -3,6 +3,7 @@ import json
 
 import pandas as pd
 
+from data import build_interim_validation_loaders
 from finalgeo_confirmatory import (
     METHOD_ANCHORS,
     finalize_confirmatory,
@@ -94,6 +95,35 @@ def test_validate_confirmatory_base_config():
         },
     }
     validate_confirmatory_base_config(config)
+
+
+def test_interim_validation_loader_never_constructs_test_split(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeCifar:
+        def __init__(self, root, train, transform, download):
+            calls.append(bool(train))
+            self.targets = list(range(100)) * 2
+
+        def __len__(self):
+            return len(self.targets)
+
+        def __getitem__(self, index):
+            raise AssertionError("Loader construction should not fetch an image")
+
+    monkeypatch.setattr("data.datasets.CIFAR100", FakeCifar)
+    config = {
+        "dataset": {
+            "name": "cifar100", "root": str(tmp_path), "download": False,
+            "split_seed": 7, "validation_size": 100, "bn_calibration_size": 20,
+            "feature_subset_size": 20, "num_workers": 0,
+        },
+        "training": {"batch_size": 8},
+        "evaluation": {"batch_size": 16},
+    }
+    loaders = build_interim_validation_loaders(config)
+    assert calls == [True, True]
+    assert len(loaders.validation.dataset) == 100
 
 
 def test_finalize_applies_frozen_success_gates(tmp_path):
