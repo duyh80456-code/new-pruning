@@ -99,7 +99,10 @@ def run_seed_pilot(
     seed = int(seed)
     if seed in (0, 1, 2) or seed < 0:
         raise ValueError("Pilot seed must be nonnegative and outside development seeds 0,1,2")
-    active_methods = (*METHODS, GEOMETRY_CONTINUOUS_METHOD) if include_geometry_continuous else METHODS
+    active_methods = (
+        ("geometry_dynamic", GEOMETRY_CONTINUOUS_METHOD, "resource_dynamic")
+        if include_geometry_continuous else METHODS
+    )
     base = _load_config(development_root / "resolved_config.yaml")
     base["experiment"]["output_dir"] = str(root)
     base["experiment"]["device"] = "cuda"
