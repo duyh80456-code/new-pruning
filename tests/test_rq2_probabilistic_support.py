@@ -9,6 +9,7 @@ from rq2_probabilistic_support import (
     maximum_entropy_pairs,
     pair_marginals,
     sample_pair,
+    solve_geometry_closed_form,
     solve_marginals,
 )
 
@@ -39,17 +40,20 @@ def test_marginal_solvers_match_slots_compute_and_bounds():
 
 def test_compute_cap_does_not_force_uniform_compute_spending():
     mass, flops, target = _problem()
-    geometry, diagnostics = solve_marginals(
-        mass, flops, target, "geometry", compute_constraint="cap"
-    )
+    geometry, diagnostics = solve_geometry_closed_form(mass, flops, target)
     resource, resource_diagnostics = solve_marginals(
-        mass, flops, target, "resource", compute_constraint="cap"
+        mass, flops, float(flops @ geometry), "resource", compute_constraint="equal"
     )
+    expected = 2.0 * np.sqrt(mass) / np.sqrt(mass).sum()
+    np.testing.assert_allclose(geometry, expected, atol=1e-12)
     np.testing.assert_allclose(geometry.sum(), 2.0, atol=1e-7)
     assert flops @ geometry <= target * (1 + 1e-7)
-    assert flops @ resource <= target * (1 + 1e-7)
+    assert abs(flops @ resource - flops @ geometry) / (flops @ geometry) < 1e-7
     assert diagnostics["compute_constraint"] == "cap"
-    assert resource_diagnostics["compute_constraint"] == "cap"
+    assert diagnostics["analytic_candidate_used"]
+    assert diagnostics["solver_success"]
+    assert resource_diagnostics["compute_constraint"] == "equal"
+    assert resource_diagnostics["solver_success"]
 
 
 def test_maximum_entropy_pairs_reproduce_marginals_and_sample_distinct_widths():
@@ -58,6 +62,7 @@ def test_maximum_entropy_pairs_reproduce_marginals_and_sample_distinct_widths():
     pairs, diagnostics = maximum_entropy_pairs(pi)
     assert abs(pairs["probability"].sum() - 1.0) < 1e-8
     assert np.max(np.abs(pair_marginals(pairs) - pi)) < 1e-6
+    assert diagnostics["solver_success"]
     assert diagnostics["maximum_marginal_absolute_residual"] < 1e-6
     for _ in range(100):
         first, second = sample_pair(pairs, np.random.default_rng(_))

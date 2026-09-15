@@ -11,7 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.optimize import linprog, minimize
+from scipy.optimize import least_squares, linprog, minimize
 from scipy.special import logsumexp, xlogy
 
 from rq2_anchor_placement import GRID
@@ -43,6 +43,81 @@ def functional_mass(geometry_coordinate: dict[float, float]) -> tuple[np.ndarray
     if not np.any(mass > 0):
         raise ValueError("Functional mass is degenerate")
     return edges, mass
+
+
+def solve_geometry_closed_form(
+    mass: np.ndarray,
+    flops: np.ndarray,
+    compute_cap: float,
+    lower: float = NUMERICAL_LOWER_BOUND,
+) -> tuple[np.ndarray, dict]:
+    """Solve sum(a_i / pi_i) with two slots, using the analytic solution when feasible.
+
+    Without an active upper bound or compute cap, Cauchy--Schwarz gives
+    pi_i = 2 sqrt(a_i) / sum_j sqrt(a_j). A numerical constrained solver is
+    used only if that candidate violates an actual constraint.
+    """
+    mass, flops = np.asarray(mass, float), np.asarray(flops, float)
+    if mass.shape != flops.shape or mass.ndim != 1:
+        raise ValueError("mass and flops must be aligned one-dimensional arrays")
+    if np.any(~np.isfinite(mass)) or np.any(mass <= 0):
+        raise ValueError("Closed-form geometry allocation requires strictly positive finite mass")
+    root_mass = np.sqrt(mass)
+    candidate = NUM_INTERIOR_SLOTS * root_mass / root_mass.sum()
+    candidate_compute = float(flops @ candidate)
+    reasons = []
+    if np.any(candidate < lower):
+        reasons.append("numerical_lower_bound")
+    if np.any(candidate > 1.0 + 1e-10):
+        reasons.append("upper_probability_bound")
+    if candidate_compute > compute_cap * (1.0 + 1e-10):
+        reasons.append("uniform_compute_cap")
+
+    if reasons:
+        pi, diagnostics = solve_marginals(
+            mass, flops, compute_cap, "geometry", lower=lower, compute_constraint="cap"
+        )
+        diagnostics.update({
+            "analytic_candidate_used": False,
+            "analytic_fallback_reasons": reasons,
+            "analytic_candidate_expected_interior_flops": candidate_compute,
+        })
+        return pi, diagnostics
+
+    pi = candidate
+    stationarity = mass / np.square(pi)
+    stationarity_residual = float(
+        np.max(np.abs(stationarity - stationarity.mean()))
+        / max(float(np.max(np.abs(stationarity))), np.finfo(float).tiny)
+    )
+    compute_ratio = candidate_compute / float(compute_cap)
+    diagnostics = {
+        "mode": "geometry",
+        "compute_constraint": "cap",
+        "solver": "closed_form/Cauchy-Schwarz",
+        "solver_success": True,
+        "solver_message": "Analytic candidate satisfies probability bounds and compute cap",
+        "iterations": 0,
+        "analytic_candidate_used": True,
+        "analytic_fallback_reasons": [],
+        "objective_definition": "sum_i a_i / pi_i",
+        "objective_value": float(np.sum(mass / pi)),
+        "sum_pi": float(pi.sum()),
+        "sum_constraint_absolute_residual": float(abs(pi.sum() - NUM_INTERIOR_SLOTS)),
+        "expected_interior_flops": candidate_compute,
+        "expected_compute_ratio_vs_uniform_interiors": compute_ratio,
+        "compute_cap_slack_fraction": float(1.0 - compute_ratio),
+        "compute_cap_active": bool(abs(compute_ratio - 1.0) <= 1e-6),
+        "compute_constraint_relative_residual": float(max(0.0, compute_ratio - 1.0)),
+        "minimum_pi": float(pi.min()),
+        "maximum_pi": float(pi.max()),
+        "upper_bound_active_count": int(np.sum(pi >= 1.0 - 1e-7)),
+        "pi_below_0_01_count": int(np.sum(pi < 0.01)),
+        "pi_below_0_05_count": int(np.sum(pi < 0.05)),
+        "KKT_free_variable_count": int(len(pi)),
+        "KKT_max_relative_residual": stationarity_residual,
+    }
+    return pi, diagnostics
 
 
 def _feasible_start(
@@ -135,7 +210,7 @@ def solve_marginals(
         compute_residual <= 1e-7 if compute_constraint == "equal"
         else compute_ratio <= 1.0 + 1e-7
     )
-    if (not result.success and (sum_residual > 1e-7 or not compute_ok)) or not bounds_ok or not compute_ok:
+    if not result.success or sum_residual > 1e-7 or not bounds_ok or not compute_ok:
         raise RuntimeError(
             f"{mode} marginal solve failed: {result.message}; "
             f"sum residual={sum_residual}, compute residual={compute_residual}"
@@ -198,14 +273,14 @@ def maximum_entropy_pairs(pi: np.ndarray) -> tuple[pd.DataFrame, dict]:
         objective = float(log_z - theta @ pi)
         return objective, marginals[:-1] - pi[:-1], q, marginals
 
-    result = minimize(
-        lambda theta: values(theta)[0], np.zeros(len(pi) - 1),
-        jac=lambda theta: values(theta)[1], method="BFGS",
-        options={"gtol": 1e-11, "maxiter": 5000},
+    result = least_squares(
+        lambda theta: values(theta)[1], np.zeros(len(pi) - 1),
+        xtol=1e-13, ftol=1e-13, gtol=1e-13, max_nfev=10000,
     )
     _, _, q, marginals = values(result.x)
     marginal_residual = float(np.max(np.abs(marginals - pi)))
-    if abs(q.sum() - 1.0) > 1e-10 or marginal_residual > 1e-7 or np.any(q < 0):
+    if (not result.success or abs(q.sum() - 1.0) > 1e-10
+            or marginal_residual > 1e-7 or np.any(q < 0)):
         raise RuntimeError(
             f"Maximum-entropy pair solve failed: {result.message}; residual={marginal_residual}"
         )
@@ -219,9 +294,10 @@ def maximum_entropy_pairs(pi: np.ndarray) -> tuple[pd.DataFrame, dict]:
         for index, (probability, (i, j)) in enumerate(zip(q, pairs))
     ])
     diagnostics = {
-        "solver": "maximum-entropy exponential-family dual/BFGS",
+        "solver": "maximum-entropy exponential-family dual/scipy least_squares",
         "solver_success": bool(result.success),
         "solver_message": str(result.message),
+        "function_evaluations": int(result.nfev),
         "pair_count": len(table),
         "sum_q": float(q.sum()),
         "maximum_marginal_absolute_residual": marginal_residual,
@@ -261,13 +337,20 @@ def build_support_policy(
     edges, mass = functional_mass(coordinate)
     F = np.asarray([flops_by_width[width] for width in INTERIOR_WIDTHS], float)
     compute_target = float(flops_by_width[0.50] + flops_by_width[0.75])
-    pi_geometry_equal, geometry_equal_solver = solve_marginals(
-        mass, F, compute_target, "geometry", lower=pi_min, compute_constraint="equal"
+    endpoint_compute = float(flops_by_width[ENDPOINTS[0]] + flops_by_width[ENDPOINTS[1]])
+    pi_geometry, geometry_solver = solve_geometry_closed_form(
+        mass, F, compute_target, lower=pi_min
     )
-    pi_geometry, geometry_solver = solve_marginals(
-        mass, F, compute_target, "geometry", lower=pi_min, compute_constraint="cap"
-    )
+    geometry_compute = float(F @ pi_geometry)
+    # Fair dynamic control: maximize allocation entropy at exactly the compute
+    # naturally selected by geometry, rather than forcing geometry to spend the
+    # Uniform budget or comparing against a differently priced random policy.
     pi_resource, resource_solver = solve_marginals(
+        mass, F, geometry_compute, "resource", lower=pi_min, compute_constraint="equal"
+    )
+    # This is retained only as a diagnostic of what the old Uniform-cap
+    # resource policy would do; it is not the primary comparison.
+    pi_resource_cap, resource_cap_solver = solve_marginals(
         mass, F, compute_target, "resource", lower=pi_min, compute_constraint="cap"
     )
     q_geometry, geometry_pairs = maximum_entropy_pairs(pi_geometry)
@@ -277,30 +360,39 @@ def build_support_policy(
         "width": INTERIOR_WIDTHS,
         "functional_mass_a_i": mass,
         "flops": F.astype(np.int64),
-        "pi_geometry_equal_compute_diagnostic": pi_geometry_equal,
         "pi_geometry": pi_geometry,
-        "pi_resource": pi_resource,
-        "geometry_minus_resource_pi": pi_geometry - pi_resource,
+        "pi_resource_matched_compute": pi_resource,
+        "pi_resource_uniform_cap_diagnostic": pi_resource_cap,
+        "geometry_minus_matched_resource_pi": pi_geometry - pi_resource,
     })
     debug["geometry_expected_batches_between_inclusions"] = 1.0 / debug["pi_geometry"]
-    debug["resource_expected_batches_between_inclusions"] = 1.0 / debug["pi_resource"]
+    debug["resource_matched_expected_batches_between_inclusions"] = (
+        1.0 / debug["pi_resource_matched_compute"]
+    )
     edge_table = pd.DataFrame({
         "budget_start": GRID[:-1], "budget_end": GRID[1:], "edge_length": edges,
         "G": edges / np.diff(np.asarray(GRID, float)),
     })
-    q_geometry.insert(0, "policy", "geometry")
-    q_resource.insert(0, "policy", "resource")
+    q_geometry.insert(0, "policy", "geometry_closed_form")
+    q_resource.insert(0, "policy", "resource_matched_compute")
     debug.to_csv(output_dir / "support_allocation_marginals.csv", index=False)
     edge_table.to_csv(output_dir / "frozen_functional_edges.csv", index=False)
     q_geometry.to_csv(output_dir / "geometry_pair_distribution.csv", index=False)
     q_resource.to_csv(output_dir / "resource_pair_distribution.csv", index=False)
 
     checks = {
+        "geometry_solver_success": bool(geometry_solver["solver_success"]),
+        "resource_matched_solver_success": bool(resource_solver["solver_success"]),
+        "resource_cap_diagnostic_solver_success": bool(resource_cap_solver["solver_success"]),
+        "geometry_pair_solver_success": bool(geometry_pairs["solver_success"]),
+        "resource_pair_solver_success": bool(resource_pairs["solver_success"]),
         "geometry_sum_pi": bool(abs(pi_geometry.sum() - 2.0) < 1e-6),
         "geometry_compute_at_or_below_cap": bool(F @ pi_geometry <= compute_target * (1 + 1e-6)),
         "geometry_bounds": bool(np.all(pi_geometry > 0) and np.all(pi_geometry <= 1 + 1e-8)),
         "resource_sum_pi": bool(abs(pi_resource.sum() - 2.0) < 1e-6),
-        "resource_compute_at_or_below_cap": bool(F @ pi_resource <= compute_target * (1 + 1e-6)),
+        "resource_compute_matches_geometry": bool(
+            abs(F @ pi_resource - geometry_compute) / geometry_compute < 1e-6
+        ),
         "resource_bounds": bool(np.all(pi_resource > 0) and np.all(pi_resource <= 1 + 1e-8)),
         "geometry_sum_q": bool(abs(q_geometry["probability"].sum() - 1.0) < 1e-6),
         "resource_sum_q": bool(abs(q_resource["probability"].sum() - 1.0) < 1e-6),
@@ -319,22 +411,39 @@ def build_support_policy(
         "interior_slots_per_batch": 2,
         "total_subnets_per_batch": 4,
         "uniform_interior_compute_target": compute_target,
+        "fixed_endpoint_compute": endpoint_compute,
+        "geometry_expected_interior_compute": geometry_compute,
+        "geometry_interior_compute_ratio_vs_uniform": geometry_compute / compute_target,
+        "geometry_total_compute_ratio_vs_uniform": (
+            endpoint_compute + geometry_compute
+        ) / (endpoint_compute + compute_target),
+        "resource_matched_expected_interior_compute": float(F @ pi_resource),
+        "resource_matched_total_compute_ratio_vs_uniform": (
+            endpoint_compute + float(F @ pi_resource)
+        ) / (endpoint_compute + compute_target),
         "pi_min": float(pi_min),
         "pi_min_role": ("numerical_only" if pi_min <= NUMERICAL_LOWER_BOUND
                         else "explicit_scientific_coverage_floor"),
-        "compute_rule": "expected interior FLOPs must be at or below Uniform, not equal",
+        "compute_rule": (
+            "geometry uses no more than Uniform interior FLOPs; primary resource-dynamic "
+            "control exactly matches geometry's expected interior FLOPs"
+        ),
         "geometry_source_hashes": source_hashes,
-        "geometry_equal_compute_diagnostic": geometry_equal_solver,
         "geometry_solver": geometry_solver,
         "resource_solver": resource_solver,
+        "resource_uniform_cap_diagnostic_solver": resource_cap_solver,
         "geometry_pair_solver": geometry_pairs,
         "resource_pair_solver": resource_pairs,
         "assertions": checks,
         "starvation_review": {
             "geometry_widths_below_pi_0_01": debug.loc[debug.pi_geometry < 0.01, "width"].tolist(),
             "geometry_widths_below_pi_0_05": debug.loc[debug.pi_geometry < 0.05, "width"].tolist(),
-            "resource_widths_below_pi_0_01": debug.loc[debug.pi_resource < 0.01, "width"].tolist(),
-            "resource_widths_below_pi_0_05": debug.loc[debug.pi_resource < 0.05, "width"].tolist(),
+            "resource_widths_below_pi_0_01": debug.loc[
+                debug.pi_resource_matched_compute < 0.01, "width"
+            ].tolist(),
+            "resource_widths_below_pi_0_05": debug.loc[
+                debug.pi_resource_matched_compute < 0.05, "width"
+            ].tolist(),
         },
         "surrogate_note": "sum a_i/pi_i is an experimental convex surrogate, not an accuracy theorem",
     }
@@ -343,10 +452,11 @@ def build_support_policy(
     )
 
     fig, ax1 = plt.subplots(figsize=(10, 6))
-    ax1.plot(debug.width, debug.pi_geometry_equal_compute_diagnostic,
-             marker=".", linestyle=":", color="grey", label="Geometry, forced equal compute")
-    ax1.plot(debug.width, debug.pi_geometry, marker="o", label="Geometry allocation")
-    ax1.plot(debug.width, debug.pi_resource, marker="o", label="Resource dynamic")
+    ax1.plot(debug.width, debug.pi_geometry, marker="o", label="Geometry allocation (closed form)")
+    ax1.plot(debug.width, debug.pi_resource_matched_compute, marker="o",
+             label="Resource dynamic (matched compute)")
+    ax1.plot(debug.width, debug.pi_resource_uniform_cap_diagnostic,
+             marker=".", linestyle=":", color="grey", label="Resource dynamic (Uniform cap diagnostic)")
     ax1.set(xlabel="Interior width", ylabel="Inclusion probability per batch", ylim=(0, 1.02))
     ax1.grid(alpha=0.25); ax1.legend(loc="upper left")
     ax2 = ax1.twinx()
@@ -361,6 +471,9 @@ def build_support_policy(
         "# Expected-K=4 support-allocation preview", "",
         "No accuracy was read and no model was trained. Training remains unauthorized until the "
         "marginals and pair distributions are reviewed.", "",
+        f"Geometry uses {geometry_compute / compute_target:.3%} of Uniform interior compute and "
+        f"{(endpoint_compute + geometry_compute) / (endpoint_compute + compute_target):.3%} of "
+        "Uniform total per-batch compute. The resource-dynamic control is matched to this cost.", "",
         "```", debug.to_string(index=False), "```", "",
         "The geometry objective is an experimental surrogate, not a theorem about accuracy.",
     ]
