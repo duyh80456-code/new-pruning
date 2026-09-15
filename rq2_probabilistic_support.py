@@ -45,22 +45,31 @@ def functional_mass(geometry_coordinate: dict[float, float]) -> tuple[np.ndarray
     return edges, mass
 
 
-def _feasible_start(F_scaled: np.ndarray, compute_scaled: float, lower: float) -> np.ndarray:
+def _feasible_start(
+    F_scaled: np.ndarray, compute_scaled: float, lower: float, compute_constraint: str
+) -> np.ndarray:
     # Project the uniform marginal vector onto both equality constraints. For
     # this protocol the projection is strictly interior and is a much better
     # numerical start than a vertex returned by a feasibility LP.
     constraints = np.vstack([np.ones(len(F_scaled)), F_scaled])
     target = np.asarray([NUM_INTERIOR_SLOTS, compute_scaled])
     uniform = np.full(len(F_scaled), NUM_INTERIOR_SLOTS / len(F_scaled))
-    projected = uniform - constraints.T @ np.linalg.solve(
-        constraints @ constraints.T, constraints @ uniform - target
-    )
-    if np.all(projected > lower) and np.all(projected < 1.0):
-        return projected
+    if compute_constraint == "cap" and F_scaled @ uniform <= compute_scaled + 1e-12:
+        return uniform
+    if compute_constraint == "equal":
+        projected = uniform - constraints.T @ np.linalg.solve(
+            constraints @ constraints.T, constraints @ uniform - target
+        )
+        if np.all(projected > lower) and np.all(projected < 1.0):
+            return projected
     result = linprog(
         np.zeros(len(F_scaled)),
-        A_eq=np.vstack([np.ones(len(F_scaled)), F_scaled]),
-        b_eq=np.asarray([NUM_INTERIOR_SLOTS, compute_scaled]),
+        A_eq=(np.vstack([np.ones(len(F_scaled)), F_scaled])
+              if compute_constraint == "equal" else np.ones((1, len(F_scaled)))),
+        b_eq=(np.asarray([NUM_INTERIOR_SLOTS, compute_scaled])
+              if compute_constraint == "equal" else np.asarray([NUM_INTERIOR_SLOTS])),
+        A_ub=(None if compute_constraint == "equal" else F_scaled[None, :]),
+        b_ub=(None if compute_constraint == "equal" else np.asarray([compute_scaled])),
         bounds=[(lower, 1.0)] * len(F_scaled),
         method="highs",
     )
@@ -75,6 +84,7 @@ def solve_marginals(
     compute_target: float,
     mode: str,
     lower: float = NUMERICAL_LOWER_BOUND,
+    compute_constraint: str = "equal",
 ) -> tuple[np.ndarray, dict]:
     """Solve geometry or resource-only marginals under identical affine constraints."""
     mass, flops = np.asarray(mass, float), np.asarray(flops, float)
@@ -82,15 +92,25 @@ def solve_marginals(
         raise ValueError("mass and flops must be aligned one-dimensional arrays")
     if mode not in {"geometry", "resource"}:
         raise ValueError("mode must be 'geometry' or 'resource'")
+    if compute_constraint not in {"equal", "cap"}:
+        raise ValueError("compute_constraint must be 'equal' or 'cap'")
     scale = float(compute_target)
     F_scaled = flops / scale
-    x0 = _feasible_start(F_scaled, 1.0, lower)
+    x0 = _feasible_start(F_scaled, 1.0, lower, compute_constraint)
     constraints = [
         {"type": "eq", "fun": lambda x: np.sum(x) - NUM_INTERIOR_SLOTS,
          "jac": lambda x: np.ones_like(x)},
-        {"type": "eq", "fun": lambda x: F_scaled @ x - 1.0,
-         "jac": lambda x: F_scaled},
     ]
+    if compute_constraint == "equal":
+        constraints.append({
+            "type": "eq", "fun": lambda x: F_scaled @ x - 1.0,
+            "jac": lambda x: F_scaled,
+        })
+    else:
+        constraints.append({
+            "type": "ineq", "fun": lambda x: 1.0 - F_scaled @ x,
+            "jac": lambda x: -F_scaled,
+        })
     if mode == "geometry":
         positive_scale = max(float(np.mean(mass[mass > 0])), np.finfo(float).tiny)
         weights = np.maximum(mass / positive_scale, 1e-12)
@@ -109,14 +129,20 @@ def solve_marginals(
     pi = np.asarray(result.x, float)
     sum_residual = float(abs(pi.sum() - NUM_INTERIOR_SLOTS))
     compute_residual = float(abs(flops @ pi - compute_target) / compute_target)
+    compute_ratio = float(flops @ pi / compute_target)
     bounds_ok = bool(np.all(pi > 0) and np.all(pi <= 1.0 + 1e-8))
-    if (not result.success and max(sum_residual, compute_residual) > 1e-7) or not bounds_ok:
+    compute_ok = (
+        compute_residual <= 1e-7 if compute_constraint == "equal"
+        else compute_ratio <= 1.0 + 1e-7
+    )
+    if (not result.success and (sum_residual > 1e-7 or not compute_ok)) or not bounds_ok or not compute_ok:
         raise RuntimeError(
             f"{mode} marginal solve failed: {result.message}; "
             f"sum residual={sum_residual}, compute residual={compute_residual}"
         )
     diagnostics = {
         "mode": mode,
+        "compute_constraint": compute_constraint,
         "solver": "scipy.optimize.minimize/SLSQP",
         "solver_success": bool(result.success),
         "solver_message": str(result.message),
@@ -126,6 +152,9 @@ def solve_marginals(
         "sum_pi": float(pi.sum()),
         "sum_constraint_absolute_residual": sum_residual,
         "expected_interior_flops": float(flops @ pi),
+        "expected_compute_ratio_vs_uniform_interiors": compute_ratio,
+        "compute_cap_slack_fraction": float(1.0 - compute_ratio),
+        "compute_cap_active": bool(abs(compute_ratio - 1.0) <= 1e-6),
         "compute_constraint_relative_residual": compute_residual,
         "minimum_pi": float(pi.min()),
         "maximum_pi": float(pi.max()),
@@ -218,7 +247,11 @@ def sample_pair(pair_table: pd.DataFrame, rng: np.random.Generator) -> tuple[flo
     return float(row["width_i"]), float(row["width_j"])
 
 
-def build_support_policy(development_root: str | Path, output_dir: str | Path) -> dict:
+def build_support_policy(
+    development_root: str | Path,
+    output_dir: str | Path,
+    pi_min: float = NUMERICAL_LOWER_BOUND,
+) -> dict:
     """Build and audit both policies without consulting accuracy or training a model."""
     development_root, output_dir = Path(development_root), Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -228,8 +261,15 @@ def build_support_policy(development_root: str | Path, output_dir: str | Path) -
     edges, mass = functional_mass(coordinate)
     F = np.asarray([flops_by_width[width] for width in INTERIOR_WIDTHS], float)
     compute_target = float(flops_by_width[0.50] + flops_by_width[0.75])
-    pi_geometry, geometry_solver = solve_marginals(mass, F, compute_target, "geometry")
-    pi_resource, resource_solver = solve_marginals(mass, F, compute_target, "resource")
+    pi_geometry_equal, geometry_equal_solver = solve_marginals(
+        mass, F, compute_target, "geometry", lower=pi_min, compute_constraint="equal"
+    )
+    pi_geometry, geometry_solver = solve_marginals(
+        mass, F, compute_target, "geometry", lower=pi_min, compute_constraint="cap"
+    )
+    pi_resource, resource_solver = solve_marginals(
+        mass, F, compute_target, "resource", lower=pi_min, compute_constraint="cap"
+    )
     q_geometry, geometry_pairs = maximum_entropy_pairs(pi_geometry)
     q_resource, resource_pairs = maximum_entropy_pairs(pi_resource)
 
@@ -237,6 +277,7 @@ def build_support_policy(development_root: str | Path, output_dir: str | Path) -
         "width": INTERIOR_WIDTHS,
         "functional_mass_a_i": mass,
         "flops": F.astype(np.int64),
+        "pi_geometry_equal_compute_diagnostic": pi_geometry_equal,
         "pi_geometry": pi_geometry,
         "pi_resource": pi_resource,
         "geometry_minus_resource_pi": pi_geometry - pi_resource,
@@ -256,10 +297,10 @@ def build_support_policy(development_root: str | Path, output_dir: str | Path) -
 
     checks = {
         "geometry_sum_pi": bool(abs(pi_geometry.sum() - 2.0) < 1e-6),
-        "geometry_compute": bool(abs(F @ pi_geometry - compute_target) / compute_target < 1e-6),
+        "geometry_compute_at_or_below_cap": bool(F @ pi_geometry <= compute_target * (1 + 1e-6)),
         "geometry_bounds": bool(np.all(pi_geometry > 0) and np.all(pi_geometry <= 1 + 1e-8)),
         "resource_sum_pi": bool(abs(pi_resource.sum() - 2.0) < 1e-6),
-        "resource_compute": bool(abs(F @ pi_resource - compute_target) / compute_target < 1e-6),
+        "resource_compute_at_or_below_cap": bool(F @ pi_resource <= compute_target * (1 + 1e-6)),
         "resource_bounds": bool(np.all(pi_resource > 0) and np.all(pi_resource <= 1 + 1e-8)),
         "geometry_sum_q": bool(abs(q_geometry["probability"].sum() - 1.0) < 1e-6),
         "resource_sum_q": bool(abs(q_resource["probability"].sum() - 1.0) < 1e-6),
@@ -278,8 +319,12 @@ def build_support_policy(development_root: str | Path, output_dir: str | Path) -
         "interior_slots_per_batch": 2,
         "total_subnets_per_batch": 4,
         "uniform_interior_compute_target": compute_target,
-        "numerical_lower_bound": NUMERICAL_LOWER_BOUND,
+        "pi_min": float(pi_min),
+        "pi_min_role": ("numerical_only" if pi_min <= NUMERICAL_LOWER_BOUND
+                        else "explicit_scientific_coverage_floor"),
+        "compute_rule": "expected interior FLOPs must be at or below Uniform, not equal",
         "geometry_source_hashes": source_hashes,
+        "geometry_equal_compute_diagnostic": geometry_equal_solver,
         "geometry_solver": geometry_solver,
         "resource_solver": resource_solver,
         "geometry_pair_solver": geometry_pairs,
@@ -298,6 +343,8 @@ def build_support_policy(development_root: str | Path, output_dir: str | Path) -
     )
 
     fig, ax1 = plt.subplots(figsize=(10, 6))
+    ax1.plot(debug.width, debug.pi_geometry_equal_compute_diagnostic,
+             marker=".", linestyle=":", color="grey", label="Geometry, forced equal compute")
     ax1.plot(debug.width, debug.pi_geometry, marker="o", label="Geometry allocation")
     ax1.plot(debug.width, debug.pi_resource, marker="o", label="Resource dynamic")
     ax1.set(xlabel="Interior width", ylabel="Inclusion probability per batch", ylim=(0, 1.02))

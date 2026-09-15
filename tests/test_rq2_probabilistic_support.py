@@ -37,6 +37,21 @@ def test_marginal_solvers_match_slots_compute_and_bounds():
     assert geometry[np.argmax(mass)] > geometry[np.argmin(mass)]
 
 
+def test_compute_cap_does_not_force_uniform_compute_spending():
+    mass, flops, target = _problem()
+    geometry, diagnostics = solve_marginals(
+        mass, flops, target, "geometry", compute_constraint="cap"
+    )
+    resource, resource_diagnostics = solve_marginals(
+        mass, flops, target, "resource", compute_constraint="cap"
+    )
+    np.testing.assert_allclose(geometry.sum(), 2.0, atol=1e-7)
+    assert flops @ geometry <= target * (1 + 1e-7)
+    assert flops @ resource <= target * (1 + 1e-7)
+    assert diagnostics["compute_constraint"] == "cap"
+    assert resource_diagnostics["compute_constraint"] == "cap"
+
+
 def test_maximum_entropy_pairs_reproduce_marginals_and_sample_distinct_widths():
     mass, flops, target = _problem()
     pi, _ = solve_marginals(mass, flops, target, "geometry")
