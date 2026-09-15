@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 
 from rq2_anchor_placement import GRID
@@ -46,3 +48,11 @@ def test_maximum_entropy_pairs_reproduce_marginals_and_sample_distinct_widths():
         first, second = sample_pair(pairs, np.random.default_rng(_))
         assert first != second
 
+
+def test_numpy_diagnostic_scalars_are_json_serializable():
+    from rq2_probabilistic_support import _json_default
+
+    payload = {"check": np.bool_(True), "value": np.float64(0.25), "count": np.int64(2)}
+    assert json.loads(json.dumps(payload, default=_json_default)) == {
+        "check": True, "value": 0.25, "count": 2,
+    }

@@ -26,6 +26,13 @@ NUM_INTERIOR_SLOTS = 2.0
 NUMERICAL_LOWER_BOUND = 1e-8
 
 
+def _json_default(value):
+    """Convert NumPy scalar diagnostics without masking unsupported objects."""
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def functional_mass(geometry_coordinate: dict[float, float]) -> tuple[np.ndarray, np.ndarray]:
     """Return frozen edge lengths and centered interior functional masses."""
     coordinate = np.asarray([geometry_coordinate[width] for width in GRID], float)
@@ -248,14 +255,14 @@ def build_support_policy(development_root: str | Path, output_dir: str | Path) -
     q_resource.to_csv(output_dir / "resource_pair_distribution.csv", index=False)
 
     checks = {
-        "geometry_sum_pi": abs(pi_geometry.sum() - 2.0) < 1e-6,
-        "geometry_compute": abs(F @ pi_geometry - compute_target) / compute_target < 1e-6,
+        "geometry_sum_pi": bool(abs(pi_geometry.sum() - 2.0) < 1e-6),
+        "geometry_compute": bool(abs(F @ pi_geometry - compute_target) / compute_target < 1e-6),
         "geometry_bounds": bool(np.all(pi_geometry > 0) and np.all(pi_geometry <= 1 + 1e-8)),
-        "resource_sum_pi": abs(pi_resource.sum() - 2.0) < 1e-6,
-        "resource_compute": abs(F @ pi_resource - compute_target) / compute_target < 1e-6,
+        "resource_sum_pi": bool(abs(pi_resource.sum() - 2.0) < 1e-6),
+        "resource_compute": bool(abs(F @ pi_resource - compute_target) / compute_target < 1e-6),
         "resource_bounds": bool(np.all(pi_resource > 0) and np.all(pi_resource <= 1 + 1e-8)),
-        "geometry_sum_q": abs(q_geometry["probability"].sum() - 1.0) < 1e-6,
-        "resource_sum_q": abs(q_resource["probability"].sum() - 1.0) < 1e-6,
+        "geometry_sum_q": bool(abs(q_geometry["probability"].sum() - 1.0) < 1e-6),
+        "resource_sum_q": bool(abs(q_resource["probability"].sum() - 1.0) < 1e-6),
         "geometry_pair_marginals": bool(np.max(np.abs(pair_marginals(q_geometry) - pi_geometry)) < 1e-6),
         "resource_pair_marginals": bool(np.max(np.abs(pair_marginals(q_resource) - pi_resource)) < 1e-6),
     }
@@ -287,7 +294,7 @@ def build_support_policy(development_root: str | Path, output_dir: str | Path) -
         "surrogate_note": "sum a_i/pi_i is an experimental convex surrogate, not an accuracy theorem",
     }
     (output_dir / "support_allocation_diagnostics.json").write_text(
-        json.dumps(diagnostics, indent=2) + "\n"
+        json.dumps(diagnostics, indent=2, default=_json_default) + "\n"
     )
 
     fig, ax1 = plt.subplots(figsize=(10, 6))
