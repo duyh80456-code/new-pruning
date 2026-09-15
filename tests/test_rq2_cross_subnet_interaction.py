@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 from torch import nn
@@ -9,6 +10,7 @@ from rq2_anchor_placement import GRID
 from rq2_cross_subnet_interaction import (
     find_uniform_seed3_checkpoint,
     interaction_parameters,
+    merge_cross_subnet_interaction_workers,
     policy_expected_benefits,
 )
 from rq2_probabilistic_support import INTERIOR_WIDTHS
@@ -64,3 +66,54 @@ def test_metadata_json_booleans_are_native(tmp_path):
     path = tmp_path / "metadata.json"
     path.write_text(json.dumps(payload))
     assert json.loads(path.read_text()) == payload
+
+
+def test_two_worker_merge_covers_disjoint_batches(tmp_path):
+    worker_dirs = []
+    for worker, offset in enumerate((0, 1)):
+        root = tmp_path / f"worker_{worker}"
+        root.mkdir()
+        worker_dirs.append(root)
+        metadata = {
+            "training_performed": False, "optimizer_steps": 0, "test_used": False,
+            "weights_unchanged": True, "bn_buffers_unchanged_during_probe": True,
+            "checkpoint_sha256": "checkpoint", "geometry_marginals_sha256": "geo",
+            "resource_marginals_sha256": "resource", "global_batch_indices": [offset],
+            "num_fixed_training_batches": 1, "checkpoint_role": "common",
+            "checkpoint": "checkpoint.pt", "loss": {"full_width": "CE"},
+            "gradient_scope": "weights", "gradient_parameter_tensors": 2,
+            "gradient_parameter_scalars": 10,
+        }
+        (root / "metadata.json").write_text(json.dumps(metadata))
+        matrix = pd.DataFrame(np.eye(len(GRID)) * (worker + 1))
+        matrix.columns = [f"{width:.2f}" for width in GRID]
+        matrix.insert(0, "width", GRID)
+        matrix.to_csv(root / "gradient_dot_matrix.csv", index=False)
+        matrix.to_csv(root / "gradient_cosine_matrix.csv", index=False)
+        pd.DataFrame({
+            "batch": offset, "width": GRID, "gradient_norm": worker + 1.0,
+        }).to_csv(root / "gradient_norms_by_batch.csv", index=False)
+        pd.DataFrame({
+            "batch": offset, "width": GRID,
+            "benefit_geometry": worker + np.arange(len(GRID)),
+            "benefit_resource": np.arange(len(GRID)),
+            "delta_benefit": worker,
+        }).to_csv(root / "policy_expected_effect_by_batch.csv", index=False)
+        pd.DataFrame({"order": range(2), "sample_id": [2 * worker, 2 * worker + 1]}).to_csv(
+            root / "fixed_training_subset_ids.csv", index=False
+        )
+    pd.DataFrame({
+        "source_width": [0.4], "target_width": [0.25], "epsilon": [1e-5],
+        "predicted_loss_change": [-1e-4], "observed_loss_change": [-9e-5],
+        "sign_match": [True],
+    }).to_csv(worker_dirs[0] / "one_step_transfer.csv", index=False)
+
+    output = tmp_path / "merged"
+    result = merge_cross_subnet_interaction_workers(
+        worker_dirs, output, expected_batches=2
+    )
+    merged_dot = pd.read_csv(output / "gradient_dot_matrix.csv").drop(columns="width")
+    np.testing.assert_allclose(np.diag(merged_dot), 1.5)
+    assert result["gpu_workers"] == 2
+    assert result["num_fixed_training_batches"] == 2
+    assert result["weights_unchanged"]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -246,6 +247,8 @@ def run_cross_subnet_interaction_probe(
     observed_comparison_path: str | Path | None = None,
     device: str = "cuda",
     num_batches: int = PROBE_BATCHES,
+    batch_offset: int = 0,
+    run_one_step: bool = True,
 ) -> dict:
     """Run the common-reference interaction diagnostic without updating weights."""
     checkpoint, config_path = Path(checkpoint), Path(config_path)
@@ -255,6 +258,9 @@ def run_cross_subnet_interaction_probe(
     output_dir.mkdir(parents=True, exist_ok=True)
     if int(num_batches) not in range(1, 65):
         raise ValueError("num_batches must be between 1 and 64")
+    batch_offset = int(batch_offset)
+    if batch_offset < 0 or batch_offset + int(num_batches) > 64:
+        raise ValueError("batch_offset must select batches within the first 64")
     config = yaml.safe_load(config_path.read_text())
     config["dataset"]["root"] = str(dataset_root)
     config["dataset"]["download"] = True
@@ -294,7 +300,9 @@ def run_cross_subnet_interaction_probe(
     )
     probe_ids = []
     for batch_index, (_, _, sample_ids) in enumerate(probe_loader):
-        if batch_index >= num_batches:
+        if batch_index < batch_offset:
+            continue
+        if batch_index >= batch_offset + num_batches:
             break
         probe_ids.extend(torch.as_tensor(sample_ids).tolist())
     pd.DataFrame({"order": range(len(probe_ids)), "sample_id": probe_ids}).to_csv(
@@ -321,7 +329,9 @@ def run_cross_subnet_interaction_probe(
     norm_rows, effect_rows = [], []
     one_step = None
     for batch_index, (images, labels, _) in enumerate(probe_loader):
-        if batch_index >= num_batches:
+        if batch_index < batch_offset:
+            continue
+        if batch_index >= batch_offset + num_batches:
             break
         images, labels = images.to(torch_device), labels.to(torch_device)
         matrix, dot, cosine, norms, frozen_teacher = _batch_gradients(
@@ -345,7 +355,7 @@ def run_cross_subnet_interaction_probe(
                 "benefit_resource": benefit_resource[index],
                 "delta_benefit": delta_benefit[index],
             })
-        if batch_index == 0:
+        if run_one_step and batch_index == batch_offset:
             one_step = one_step_transfer(
                 model, images, labels, parameters, matrix, dot, frozen_teacher,
                 config, epsilon=ONE_STEP_EPSILON,
@@ -353,7 +363,9 @@ def run_cross_subnet_interaction_probe(
         del matrix, dot, cosine, norms, frozen_teacher
         if torch_device.type == "cuda":
             torch.cuda.empty_cache()
-        print(f"[cross-subnet interaction] batch {batch_index + 1}/{num_batches}", flush=True)
+        completed = batch_index - batch_offset + 1
+        print(f"[cross-subnet interaction] batch {completed}/{num_batches} "
+              f"(global batch {batch_index})", flush=True)
 
     if len(effect_rows) != num_batches * 16:
         raise RuntimeError("Diagnostic loader ended before the requested fixed minibatches")
@@ -367,6 +379,7 @@ def run_cross_subnet_interaction_probe(
     _matrix_frame(mean_dot).to_csv(output_dir / "gradient_dot_matrix.csv", index=False)
     _matrix_frame(mean_cosine).to_csv(output_dir / "gradient_cosine_matrix.csv", index=False)
     norm_frame = pd.DataFrame(norm_rows)
+    norm_frame.to_csv(output_dir / "gradient_norms_by_batch.csv", index=False)
     norm_frame.groupby("width", as_index=False).agg(
         mean_gradient_norm=("gradient_norm", "mean"),
         std_gradient_norm=("gradient_norm", "std"),
@@ -400,8 +413,8 @@ def run_cross_subnet_interaction_probe(
             observed, on="width", how="left", validate="one_to_one",
         )
     effect.to_csv(output_dir / "policy_expected_effect.csv", index=False)
-    assert one_step is not None
-    one_step.to_csv(output_dir / "one_step_transfer.csv", index=False)
+    if one_step is not None:
+        one_step.to_csv(output_dir / "one_step_transfer.csv", index=False)
     _plots(output_dir, mean_cosine, effect)
 
     correlations = None
@@ -428,6 +441,8 @@ def run_cross_subnet_interaction_probe(
         "observed_comparison_path": str(observed_path) if observed_path else None,
         "num_fixed_training_batches": int(num_batches),
         "num_fixed_training_samples": len(probe_ids),
+        "batch_offset": batch_offset,
+        "global_batch_indices": list(range(batch_offset, batch_offset + int(num_batches))),
         "widths": list(GRID),
         "loss": {"full_width": "CE", "smaller_widths": "CE + KD", "kd_lambda": 1.0, "temperature": 2.0},
         "gradient_scope": "all shared trainable convolution/projection/classifier linear weights; BN excluded",
@@ -437,6 +452,165 @@ def run_cross_subnet_interaction_probe(
         "model_eval_during_probe": True,
         "weights_unchanged": parameter_digest_before == parameter_digest_after,
         "bn_buffers_unchanged_during_probe": buffer_digest_before == buffer_digest_after,
+        "one_step_sources": list(ONE_STEP_SOURCES),
+        "one_step_epsilon": ONE_STEP_EPSILON,
+        "one_step_performed": bool(one_step is not None),
+        "one_step_sign_match_rate": (
+            float(one_step["sign_match"].mean()) if one_step is not None else None
+        ),
+        "observed_seed3_accuracy_available": bool(complete_observed),
+        "delta_benefit_vs_observed_accuracy": correlations,
+        "endpoint_delta_benefit": {
+            "0.25": float(effect.loc[np.isclose(effect.width, 0.25), "delta_benefit"].iloc[0]),
+            "1.00": float(effect.loc[np.isclose(effect.width, 1.0), "delta_benefit"].iloc[0]),
+        },
+        "width_0.40_delta_benefit": float(
+            effect.loc[np.isclose(effect.width, 0.40), "delta_benefit"].iloc[0]
+        ),
+        "policy_updated": False,
+        "seed4_training_authorized_or_started": False,
+    }
+    (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    return metadata
+
+
+def merge_cross_subnet_interaction_workers(
+    worker_dirs: list[str | Path],
+    output_dir: str | Path,
+    observed_comparison_path: str | Path | None = None,
+    expected_batches: int = PROBE_BATCHES,
+) -> dict:
+    """Merge disjoint batch shards produced concurrently on separate GPUs."""
+    worker_dirs = [Path(path) for path in worker_dirs]
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if len(worker_dirs) < 2:
+        raise ValueError("Multi-GPU merge requires at least two worker directories")
+    worker_metadata = [json.loads((path / "metadata.json").read_text()) for path in worker_dirs]
+    for item in worker_metadata:
+        if item["training_performed"] or item["optimizer_steps"] != 0 or item["test_used"]:
+            raise RuntimeError("A worker violated the read-only diagnostic contract")
+        if not item["weights_unchanged"] or not item["bn_buffers_unchanged_during_probe"]:
+            raise RuntimeError("A worker changed model state")
+    for key in (
+        "checkpoint_sha256", "geometry_marginals_sha256", "resource_marginals_sha256"
+    ):
+        if len({item[key] for item in worker_metadata}) != 1:
+            raise RuntimeError(f"Workers disagree on {key}")
+    batch_indices = sorted(
+        index for item in worker_metadata for index in item["global_batch_indices"]
+    )
+    if batch_indices != list(range(int(expected_batches))):
+        raise RuntimeError(f"Worker shards do not cover batches 0..{expected_batches - 1}")
+
+    def read_matrix(root: Path, name: str) -> np.ndarray:
+        frame = pd.read_csv(root / name)
+        if tuple(frame["width"].round(2)) != GRID:
+            raise RuntimeError(f"Invalid width ordering in {root / name}")
+        return frame.drop(columns="width").to_numpy(float)
+
+    counts = np.asarray([item["num_fixed_training_batches"] for item in worker_metadata])
+    mean_dot = sum(
+        count * read_matrix(root, "gradient_dot_matrix.csv")
+        for root, count in zip(worker_dirs, counts)
+    ) / counts.sum()
+    mean_cosine = sum(
+        count * read_matrix(root, "gradient_cosine_matrix.csv")
+        for root, count in zip(worker_dirs, counts)
+    ) / counts.sum()
+    _matrix_frame(mean_dot).to_csv(output_dir / "gradient_dot_matrix.csv", index=False)
+    _matrix_frame(mean_cosine).to_csv(output_dir / "gradient_cosine_matrix.csv", index=False)
+
+    norms = pd.concat(
+        [pd.read_csv(root / "gradient_norms_by_batch.csv") for root in worker_dirs],
+        ignore_index=True,
+    ).sort_values(["batch", "width"])
+    effects_by_batch = pd.concat(
+        [pd.read_csv(root / "policy_expected_effect_by_batch.csv") for root in worker_dirs],
+        ignore_index=True,
+    ).sort_values(["batch", "width"])
+    if len(norms) != int(expected_batches) * len(GRID) or len(effects_by_batch) != len(norms):
+        raise RuntimeError("Merged worker row count is incomplete")
+    norms.to_csv(output_dir / "gradient_norms_by_batch.csv", index=False)
+    norms.groupby("width", as_index=False).agg(
+        mean_gradient_norm=("gradient_norm", "mean"),
+        std_gradient_norm=("gradient_norm", "std"),
+        min_gradient_norm=("gradient_norm", "min"),
+        max_gradient_norm=("gradient_norm", "max"),
+    ).to_csv(output_dir / "gradient_norms.csv", index=False)
+    effects_by_batch.to_csv(output_dir / "policy_expected_effect_by_batch.csv", index=False)
+    effect = effects_by_batch.groupby("width", as_index=False).agg(
+        benefit_geometry=("benefit_geometry", "mean"),
+        benefit_resource=("benefit_resource", "mean"),
+        delta_benefit=("delta_benefit", "mean"),
+        delta_benefit_std=("delta_benefit", "std"),
+    )
+    effect["observed_delta_accuracy_seed3"] = np.nan
+    observed_path = Path(observed_comparison_path) if observed_comparison_path else None
+    if observed_path is not None and observed_path.is_file():
+        observed = pd.read_csv(observed_path)
+        observed_width = "width" if "width" in observed else "budget"
+        observed_delta = (
+            "geometry_minus_resource_accuracy"
+            if "geometry_minus_resource_accuracy" in observed else "delta_accuracy"
+        )
+        observed = observed[[observed_width, observed_delta]].rename(columns={
+            observed_width: "width", observed_delta: "observed_delta_accuracy_seed3"
+        })
+        observed["width"] = observed["width"].astype(float).round(2)
+        effect["width"] = effect["width"].astype(float).round(2)
+        effect = effect.drop(columns="observed_delta_accuracy_seed3").merge(
+            observed, on="width", how="left", validate="one_to_one"
+        )
+    effect.to_csv(output_dir / "policy_expected_effect.csv", index=False)
+
+    one_step_sources = [root / "one_step_transfer.csv" for root in worker_dirs]
+    one_step_sources = [path for path in one_step_sources if path.is_file()]
+    if len(one_step_sources) != 1:
+        raise RuntimeError("Exactly one worker must perform one-step transfer")
+    shutil.copy2(one_step_sources[0], output_dir / "one_step_transfer.csv")
+    one_step = pd.read_csv(output_dir / "one_step_transfer.csv")
+    id_frames = [pd.read_csv(root / "fixed_training_subset_ids.csv") for root in worker_dirs]
+    ids = pd.concat(id_frames, ignore_index=True).drop(columns="order")
+    ids.insert(0, "order", range(len(ids)))
+    ids.to_csv(output_dir / "fixed_training_subset_ids.csv", index=False)
+    _plots(output_dir, mean_cosine, effect)
+
+    complete_observed = effect["observed_delta_accuracy_seed3"].notna().all()
+    correlations = None
+    if complete_observed:
+        pearson = pearsonr(effect["delta_benefit"], effect["observed_delta_accuracy_seed3"])
+        spearman = spearmanr(effect["delta_benefit"], effect["observed_delta_accuracy_seed3"])
+        correlations = {
+            "pearson_r": float(pearson.statistic), "pearson_p": float(pearson.pvalue),
+            "spearman_rho": float(spearman.statistic), "spearman_p": float(spearman.pvalue),
+        }
+    first = worker_metadata[0]
+    metadata = {
+        "status": "POST_HOC_MECHANISTIC_DIAGNOSTIC_COMPLETE",
+        "execution": "two_gpu_disjoint_batch_shards",
+        "gpu_workers": len(worker_dirs),
+        "worker_batch_indices": [item["global_batch_indices"] for item in worker_metadata],
+        "independent_of_seed4_training": True,
+        "training_performed": False,
+        "optimizer_steps": 0,
+        "test_used": False,
+        "checkpoint_role": first["checkpoint_role"],
+        "checkpoint": first["checkpoint"],
+        "checkpoint_sha256": first["checkpoint_sha256"],
+        "geometry_marginals_sha256": first["geometry_marginals_sha256"],
+        "resource_marginals_sha256": first["resource_marginals_sha256"],
+        "num_fixed_training_batches": int(counts.sum()),
+        "num_fixed_training_samples": len(ids),
+        "widths": list(GRID),
+        "loss": first["loss"],
+        "gradient_scope": first["gradient_scope"],
+        "gradient_parameter_tensors": first["gradient_parameter_tensors"],
+        "gradient_parameter_scalars": first["gradient_parameter_scalars"],
+        "bn_calibrated_independently_on_each_worker": True,
+        "model_eval_during_probe": True,
+        "weights_unchanged": True,
+        "bn_buffers_unchanged_during_probe": True,
         "one_step_sources": list(ONE_STEP_SOURCES),
         "one_step_epsilon": ONE_STEP_EPSILON,
         "one_step_sign_match_rate": float(one_step["sign_match"].mean()),
