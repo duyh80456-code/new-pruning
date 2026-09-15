@@ -326,7 +326,7 @@ def run_cross_subnet_interaction_probe(
 
     dot_sum = torch.zeros((16, 16), dtype=torch.float64)
     cosine_sum = torch.zeros((16, 16), dtype=torch.float64)
-    norm_rows, effect_rows = [], []
+    norm_rows, effect_rows, gram_batches = [], [], []
     one_step = None
     for batch_index, (images, labels, _) in enumerate(probe_loader):
         if batch_index < batch_offset:
@@ -339,6 +339,7 @@ def run_cross_subnet_interaction_probe(
         )
         dot_cpu = dot.detach().double().cpu()
         cosine_cpu = cosine.detach().double().cpu()
+        gram_batches.append(dot_cpu.numpy()[1:-1, 1:-1])
         dot_sum += dot_cpu
         cosine_sum += cosine_cpu
         benefit_geometry, benefit_resource, delta_benefit = policy_expected_benefits(
@@ -369,6 +370,14 @@ def run_cross_subnet_interaction_probe(
 
     if len(effect_rows) != num_batches * 16:
         raise RuntimeError("Diagnostic loader ended before the requested fixed minibatches")
+    gram_tensor = np.stack(gram_batches).astype(np.float64, copy=False)
+    if gram_tensor.shape != (num_batches, len(INTERIOR_WIDTHS), len(INTERIOR_WIDTHS)):
+        raise RuntimeError(f"Unexpected per-batch Gram shape: {gram_tensor.shape}")
+    np.save(output_dir / "gradient_gram_matrices.npy", gram_tensor)
+    np.save(
+        output_dir / "gradient_gram_batch_ids.npy",
+        np.arange(batch_offset, batch_offset + num_batches, dtype=np.int64),
+    )
     parameter_digest_after = _state_digest(model.named_parameters())
     buffer_digest_after = _state_digest(model.named_buffers())
     if parameter_digest_before != parameter_digest_after or buffer_digest_before != buffer_digest_after:
@@ -574,6 +583,22 @@ def merge_cross_subnet_interaction_workers(
     ids = pd.concat(id_frames, ignore_index=True).drop(columns="order")
     ids.insert(0, "order", range(len(ids)))
     ids.to_csv(output_dir / "fixed_training_subset_ids.csv", index=False)
+    gram_parts = []
+    for root in worker_dirs:
+        values = np.load(root / "gradient_gram_matrices.npy")
+        batch_ids = np.load(root / "gradient_gram_batch_ids.npy")
+        if values.shape != (len(batch_ids), len(INTERIOR_WIDTHS), len(INTERIOR_WIDTHS)):
+            raise RuntimeError(f"Invalid saved Gram shard in {root}")
+        gram_parts.extend(zip(batch_ids.tolist(), values))
+    gram_parts.sort(key=lambda item: item[0])
+    if [item[0] for item in gram_parts] != list(range(int(expected_batches))):
+        raise RuntimeError("Per-batch Gram shards do not cover every global batch exactly once")
+    gram_tensor = np.stack([item[1] for item in gram_parts]).astype(np.float64, copy=False)
+    np.save(output_dir / "gram_matrices.npy", gram_tensor)
+    pd.DataFrame({
+        "batch_id": range(int(expected_batches)),
+        "fold": np.arange(int(expected_batches)) % 4,
+    }).to_csv(output_dir / "fold_assignment.csv", index=False)
     _plots(output_dir, mean_cosine, effect)
 
     complete_observed = effect["observed_delta_accuracy_seed3"].notna().all()
@@ -602,6 +627,8 @@ def merge_cross_subnet_interaction_workers(
         "resource_marginals_sha256": first["resource_marginals_sha256"],
         "num_fixed_training_batches": int(counts.sum()),
         "num_fixed_training_samples": len(ids),
+        "per_batch_interior_gram_shape": list(gram_tensor.shape),
+        "per_batch_interior_grams_saved": True,
         "widths": list(GRID),
         "loss": first["loss"],
         "gradient_scope": first["gradient_scope"],

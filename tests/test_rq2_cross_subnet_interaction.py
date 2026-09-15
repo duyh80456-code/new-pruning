@@ -102,6 +102,11 @@ def test_two_worker_merge_covers_disjoint_batches(tmp_path):
         pd.DataFrame({"order": range(2), "sample_id": [2 * worker, 2 * worker + 1]}).to_csv(
             root / "fixed_training_subset_ids.csv", index=False
         )
+        np.save(
+            root / "gradient_gram_matrices.npy",
+            np.eye(len(INTERIOR_WIDTHS), dtype=np.float64)[None] * (worker + 1),
+        )
+        np.save(root / "gradient_gram_batch_ids.npy", np.asarray([offset], dtype=np.int64))
     pd.DataFrame({
         "source_width": [0.4], "target_width": [0.25], "epsilon": [1e-5],
         "predicted_loss_change": [-1e-4], "observed_loss_change": [-9e-5],
@@ -117,3 +122,4 @@ def test_two_worker_merge_covers_disjoint_batches(tmp_path):
     assert result["gpu_workers"] == 2
     assert result["num_fixed_training_batches"] == 2
     assert result["weights_unchanged"]
+    assert np.load(output / "gram_matrices.npy").shape == (2, 14, 14)
