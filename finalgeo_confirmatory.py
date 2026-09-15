@@ -13,7 +13,6 @@ import torch
 
 from data import build_confirmatory_loaders, build_interim_validation_loaders
 from evaluation import calibrate_batch_norm, evaluate_width
-from profiling import profile_subnet
 from research_utils import seed_everything
 from rq2_anchor_placement import GRID, UNIFORM_ANCHORS, _sha256, evaluate_checkpoint
 from rq2_finalgeo_selector import EXPECTED_PUREGEO, _canonical_hash
@@ -248,7 +247,6 @@ def evaluate_validation_checkpoint(
             int(config["evaluation"]["bn_calibration_batches"]),
         )
         metrics = evaluate_width(model, loaders.validation, width, device)
-        flops, params = profile_subnet(model, width)
         extract_representation_views(
             model, loaders.geometry, width, device, random_matrix,
             output_dir / "validation_representations",
@@ -256,7 +254,7 @@ def evaluate_validation_checkpoint(
         rows.append({
             "seed": int(seed), "method": method, "split": "validation_5k",
             "budget": width, "is_train_anchor": width in anchors,
-            **metrics, "flops": flops, "params": params,
+            **metrics,
         })
     metrics = pd.DataFrame(rows)
     metrics.to_csv(output_dir / "validation_budget_metrics.csv", index=False)
