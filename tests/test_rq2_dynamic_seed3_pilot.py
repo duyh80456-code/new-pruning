@@ -63,37 +63,44 @@ def _make_frozen_sources(tmp_path):
 def test_frozen_pilot_policies_are_matched_hashed_and_sampler_valid(tmp_path):
     theory, preview, development = _make_frozen_sources(tmp_path)
     protocol_dir = tmp_path / "protocol"
-    protocol = freeze_pilot_policies(theory, preview, development, protocol_dir)
+    protocol = freeze_pilot_policies(
+        theory, preview, development, protocol_dir, pilot_seed=4
+    )
     assert protocol["accuracy_used_to_build_policy"] is False
     assert protocol["test_used"] is False
-    assert protocol["status"] == "FROZEN_BEFORE_SEED3_PILOT"
+    assert protocol["status"] == "FROZEN_BEFORE_DECLARED_DYNAMIC_PILOT_SEED"
+    assert protocol["seed"] == 4
     expected_compute = protocol["expected_total_compute"]
     for method in METHODS:
         pairs, pi, flops, loaded = load_frozen_policy(protocol_dir, method)
         sanity = simulate_sampler_sanity(
-            pairs, pi, flops, loaded["fixed_endpoint_compute"], method, draws=100_000
+            pairs, pi, flops, loaded["fixed_endpoint_compute"], method,
+            seed=4, draws=100_000,
         )
         assert sanity["passed"]
+        assert sanity["sampler_seed"] in (100004, 200004)
         assert abs(sanity["expected_total_flops"] - expected_compute) / expected_compute < 1e-8
 
 
 def test_finalize_pilot_produces_validation_only_width_delta_and_pattern_gate(tmp_path):
     root = tmp_path
+    seed = 4
     widths = np.asarray(GRID)
     resource = 0.55 + 0.12 * widths
     geometry = resource.copy()
     geometry[(widths >= 0.30) & (widths <= 0.45)] += 0.01
     geometry[(widths >= 0.50) & (widths <= 0.55)] -= 0.001
     for method, accuracy in (("resource_dynamic", resource), ("geometry_dynamic", geometry)):
-        output = root / "evaluation" / method / "seed_3"
+        output = root / "evaluation" / method / f"seed_{seed}"
         output.mkdir(parents=True)
         pd.DataFrame({
-            "method": method, "seed": 3, "split": "validation_5k",
+            "method": method, "seed": seed, "split": "validation_5k",
             "width": GRID, "accuracy": accuracy, "loss": 1.0,
         }).to_csv(output / "dense_validation_accuracy.csv", index=False)
-    decision = finalize_pilot(root)
+    decision = finalize_pilot(root, seed=seed)
     assert decision["test_used"] is False
     assert decision["verdict"] == "DEVELOPMENT GO"
+    assert decision["seed"] == 4
     comparison = pd.read_csv(root / "dynamic_pilot_width_comparison.csv")
     assert len(comparison) == 16
     assert comparison.loc[comparison.width.eq(0.40), "geometry_minus_resource_accuracy"].iloc[0] > 0
