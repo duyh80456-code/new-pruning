@@ -16,7 +16,9 @@ import yaml
 from data import build_development_train_loaders
 from rq2_dynamic_seed3_pilot import (
     DEFAULT_PILOT_SEED,
+    GEOMETRY_CONTINUOUS_METHOD,
     METHODS,
+    RUN_METHODS,
     evaluate_dynamic_method,
     finalize_pilot,
     freeze_pilot_policies,
@@ -87,6 +89,7 @@ def run_seed_pilot(
     output_dir,
     gpu_ids=(0, 1),
     seed=DEFAULT_PILOT_SEED,
+    include_geometry_continuous=False,
 ):
     if len(gpu_ids) != 2:
         raise RuntimeError("The two dynamic methods should run concurrently on Kaggle T4x2")
@@ -96,6 +99,7 @@ def run_seed_pilot(
     seed = int(seed)
     if seed in (0, 1, 2) or seed < 0:
         raise ValueError("Pilot seed must be nonnegative and outside development seeds 0,1,2")
+    active_methods = (*METHODS, GEOMETRY_CONTINUOUS_METHOD) if include_geometry_continuous else METHODS
     base = _load_config(development_root / "resolved_config.yaml")
     base["experiment"]["output_dir"] = str(root)
     base["experiment"]["device"] = "cuda"
@@ -132,18 +136,18 @@ def run_seed_pilot(
             root / method / f"seed_{seed}" / "epoch_100.pt",
             root / method / f"seed_{seed}" / "training_provenance.json",
         ],
-    } for method in METHODS]
+    } for method in active_methods]
     timings = _schedule(config_path, root, protocol_dir, list(gpu_ids), train_jobs)
-    if not all((root / method / f"seed_{seed}" / "epoch_100.pt").is_file() for method in METHODS):
+    if not all((root / method / f"seed_{seed}" / "epoch_100.pt").is_file() for method in active_methods):
         raise RuntimeError("Both epoch-100 checkpoints must exist before validation comparison")
 
     eval_jobs = [{
         "name": f"eval_{method}_seed_{seed}", "stage": "eval", "method": method,
         "seed": seed,
         "complete": [root / "evaluation" / method / f"seed_{seed}" / "dense_validation_accuracy.csv"],
-    } for method in METHODS]
+    } for method in active_methods]
     timings.update(_schedule(config_path, root, protocol_dir, list(gpu_ids), eval_jobs))
-    decision = finalize_pilot(root, seed=seed)
+    decision = finalize_pilot(root, seed=seed, methods=active_methods)
     pd.DataFrame([
         {"job": name, "minutes": seconds / 60.0} for name, seconds in timings.items()
     ]).to_csv(root / "runtime_by_job.csv", index=False)
@@ -164,18 +168,20 @@ def main():
     parser.add_argument("--root")
     parser.add_argument("--protocol-dir")
     parser.add_argument("--stage", choices=("train", "eval", "full"), default="full")
-    parser.add_argument("--method", choices=METHODS)
+    parser.add_argument("--method", choices=RUN_METHODS)
     parser.add_argument("--development-root")
     parser.add_argument("--theory-root")
     parser.add_argument("--preview-root")
     parser.add_argument("--output-dir")
     parser.add_argument("--gpu-ids", nargs="*", type=int)
     parser.add_argument("--seed", type=int, default=DEFAULT_PILOT_SEED)
+    parser.add_argument("--include-geometry-continuous", action="store_true")
     args = parser.parse_args()
     if args.stage == "full":
         result = run_seed_pilot(
             args.development_root, args.theory_root, args.preview_root,
             args.output_dir, args.gpu_ids or [0, 1], seed=args.seed,
+            include_geometry_continuous=args.include_geometry_continuous,
         )
         print(json.dumps(result["decision"], indent=2))
     else:

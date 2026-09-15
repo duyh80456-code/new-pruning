@@ -25,6 +25,8 @@ from training import kd_loss
 
 DEFAULT_PILOT_SEED = 3
 METHODS = ("geometry_dynamic", "resource_dynamic")
+GEOMETRY_CONTINUOUS_METHOD = "geometry_dynamic_continuous"
+RUN_METHODS = (*METHODS, GEOMETRY_CONTINUOUS_METHOD)
 SAMPLER_SEED_OFFSETS = {"geometry_dynamic": 100000, "resource_dynamic": 200000}
 PHASES = ((1, 50, 0.1), (51, 100, 0.01))
 UPDATE_GEOMETRY_DURING_TRAINING = False
@@ -32,9 +34,18 @@ UPDATE_POLICY_DURING_TRAINING = False
 
 
 def sampler_seed(method: str, seed: int) -> int:
+    policy = "geometry_dynamic" if method == GEOMETRY_CONTINUOUS_METHOD else method
+    if policy not in METHODS:
+        raise ValueError(f"Unknown dynamic pilot method: {method}")
+    return SAMPLER_SEED_OFFSETS[policy] + int(seed)
+
+
+def policy_method(method: str) -> str:
+    if method == GEOMETRY_CONTINUOUS_METHOD:
+        return "geometry_dynamic"
     if method not in METHODS:
         raise ValueError(f"Unknown dynamic pilot method: {method}")
-    return SAMPLER_SEED_OFFSETS[method] + int(seed)
+    return method
 
 
 def validate_pilot_config(config: dict) -> None:
@@ -236,11 +247,10 @@ def freeze_pilot_policies(
 
 
 def load_frozen_policy(protocol_dir: str | Path, method: str):
-    if method not in METHODS:
-        raise ValueError(f"Unknown dynamic pilot method: {method}")
+    policy = policy_method(method)
     protocol_dir = Path(protocol_dir)
     protocol = json.loads((protocol_dir / "dynamic_pilot_frozen_protocol.json").read_text())
-    entry = protocol["frozen_policy_files"][method]
+    entry = protocol["frozen_policy_files"][policy]
     path = protocol_dir / entry["path"]
     if _sha256(path) != entry["sha256"]:
         raise RuntimeError(f"Frozen {method} pair distribution hash mismatch")
@@ -248,7 +258,7 @@ def load_frozen_policy(protocol_dir: str | Path, method: str):
     if _sha256(marginals_path) != protocol["frozen_marginals"]["sha256"]:
         raise RuntimeError("Frozen dynamic marginal table hash mismatch")
     marginals = pd.read_csv(marginals_path).sort_values("width")
-    pi_column = "pi_geometry" if method == "geometry_dynamic" else "pi_resource"
+    pi_column = "pi_geometry" if policy == "geometry_dynamic" else "pi_resource"
     pi = marginals[pi_column].to_numpy(float)
     pair_table = _validate_pair_table(pd.read_csv(path), pi)
     flops = dict(zip(marginals["width"].round(2), marginals["flops"].astype(float)))
@@ -353,6 +363,7 @@ def _train_phase(
     phase_dir: Path,
     initial_checkpoint: Path | None = None,
     seed: int = DEFAULT_PILOT_SEED,
+    continuous_schedule: bool = False,
 ) -> Path:
     """Train one phase with exact epoch resume and an isolated pair-sampler RNG."""
     device = torch.device(config["experiment"]["device"])
@@ -366,6 +377,8 @@ def _train_phase(
     isolated_sampler_seed = sampler_seed(method, seed)
     sampler_rng = np.random.default_rng(isolated_sampler_seed)
     latest = phase_dir / "latest.pt"
+    frozen_policy_key = policy_method(method)
+    frozen_policy_hash = protocol["frozen_policy_files"][frozen_policy_key]["sha256"]
     start_epoch = first_epoch
     cumulative_batches = 0
     cumulative_realized_flops = 0.0
@@ -378,7 +391,7 @@ def _train_phase(
         payload = torch.load(latest, map_location="cpu", weights_only=False)
         if (
             payload.get("method") != method or int(payload.get("seed", -1)) != seed
-            or payload.get("policy_sha256") != protocol["frozen_policy_files"][method]["sha256"]
+            or payload.get("policy_sha256") != frozen_policy_hash
         ):
             raise RuntimeError("Resume checkpoint method/seed/frozen-policy identity mismatch")
         model.load_state_dict(payload["model"])
@@ -401,7 +414,7 @@ def _train_phase(
         payload = torch.load(initial_checkpoint, map_location="cpu", weights_only=False)
         if (
             payload.get("method") != method or int(payload.get("seed", -1)) != seed
-            or payload.get("policy_sha256") != protocol["frozen_policy_files"][method]["sha256"]
+            or payload.get("policy_sha256") != frozen_policy_hash
         ):
             raise RuntimeError("Phase-1 checkpoint method/seed/frozen-policy identity mismatch")
         model.load_state_dict(payload["model"])
@@ -490,7 +503,8 @@ def _train_phase(
         epoch_realized = epoch_flops / epoch_batches
         metrics_records.append({
             "method": method, "seed": seed, "epoch": epoch,
-            "phase": 1 if epoch <= 50 else 2,
+            "phase": 1 if continuous_schedule or epoch <= 50 else 2,
+            "schedule": "continuous_1_100" if continuous_schedule else "reset_50_plus_50",
             "train_loss": epoch_loss / epoch_examples, "learning_rate": lr,
             "batches": epoch_batches,
             "expected_total_flops_per_batch": expected_total_flops,
@@ -521,15 +535,18 @@ def _train_phase(
         checkpoint = {
             "model": model.state_dict(), "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(), "epoch": epoch, "method": method,
-            "seed": seed, "phase": 1 if epoch <= 50 else 2,
+            "seed": seed, "phase": 1 if continuous_schedule or epoch <= 50 else 2,
+            "schedule": "continuous_1_100" if continuous_schedule else "reset_50_plus_50",
             "rng": _capture_rng(loaders.train, sampler_rng),
             "cumulative_batches": cumulative_batches,
             "cumulative_realized_flops": cumulative_realized_flops,
             "width_counts": {str(key): value for key, value in cumulative_width_counts.items()},
             "pair_counts": {f"{key[0]:.2f},{key[1]:.2f}": value for key, value in cumulative_pair_counts.items()},
-            "policy_sha256": protocol["frozen_policy_files"][method]["sha256"],
+            "policy_sha256": frozen_policy_hash,
         }
         _atomic_checkpoint(latest, checkpoint)
+        if epoch == 50:
+            shutil.copy2(latest, output / "epoch_050.pt")
         print(
             f"{method} seed={seed} epoch {epoch}/100 | loss={epoch_loss/epoch_examples:.4f}, "
             f"lr={lr:.6g}, realized/expected={epoch_realized/expected_total_flops:.4f}",
@@ -559,26 +576,37 @@ def train_dynamic_method(
     final = output / "epoch_100.pt"
     if final.is_file() and (output / "training_provenance.json").is_file():
         return final
-    phase_1 = _train_phase(
-        config, output, method, pair_table, pi, interior_flops, protocol,
-        1, 50, 0.1, output / "phase_1", seed=seed,
-    )
-    final = _train_phase(
-        config, output, method, pair_table, pi, interior_flops, protocol,
-        51, 100, 0.01, output, initial_checkpoint=phase_1, seed=seed,
-    )
+    if method == GEOMETRY_CONTINUOUS_METHOD:
+        final = _train_phase(
+            config, output, method, pair_table, pi, interior_flops, protocol,
+            1, 100, 0.1, output, seed=seed, continuous_schedule=True,
+        )
+        schedule = "continuous_1_100"
+    else:
+        phase_1 = _train_phase(
+            config, output, method, pair_table, pi, interior_flops, protocol,
+            1, 50, 0.1, output / "phase_1", seed=seed,
+        )
+        final = _train_phase(
+            config, output, method, pair_table, pi, interior_flops, protocol,
+            51, 100, 0.01, output, initial_checkpoint=phase_1, seed=seed,
+        )
+        schedule = "reset_50_plus_50"
     shutil.copy2(final, output / "checkpoint.pt")
     provenance = {
         "experiment": "rq2_dynamic_seed_pilot", "seed": seed, "method": method,
-        "epochs": 100, "phase1_epochs": 50, "phase2_epochs": 50,
-        "phase1_learning_rate": 0.1, "phase2_learning_rate": 0.01,
+        "epochs": 100, "schedule": schedule,
+        "phase1_epochs": 100 if schedule == "continuous_1_100" else 50,
+        "phase2_epochs": 0 if schedule == "continuous_1_100" else 50,
+        "phase1_learning_rate": 0.1,
+        "phase2_learning_rate": None if schedule == "continuous_1_100" else 0.01,
         "optimizer_state_reused_at_phase_boundary": False,
         "scheduler_state_reused_at_phase_boundary": False,
-        "model_data_rng_restarted_at_phase_boundary": True,
-        "sampler_rng_continued_at_phase_boundary": True,
+        "model_data_rng_restarted_at_phase_boundary": schedule == "reset_50_plus_50",
+        "sampler_rng_continued_at_phase_boundary": schedule == "reset_50_plus_50",
         "sampler_seed": sampler_seed(method, seed),
         "endpoints": [0.25, 1.0], "interior_slots": 2, "subnets_per_batch": 4,
-        "geometry_p": 1.0 if method == "geometry_dynamic" else None,
+        "geometry_p": 1.0 if policy_method(method) == "geometry_dynamic" else None,
         "policy_frozen": True, "online_geometry": False,
         "accuracy_used_to_build_policy": False, "test_used": False,
         "development_geometry_seeds": [0, 1, 2],
@@ -586,9 +614,9 @@ def train_dynamic_method(
         "expected_total_compute_ratio_vs_uniform": protocol["expected_total_compute_ratio_vs_uniform"],
         "policy_source": (
             "p1_linear_expected_geometry_weighted_waiting_debt"
-            if method == "geometry_dynamic" else "maximum_entropy_resource_matched_compute"
+            if policy_method(method) == "geometry_dynamic" else "maximum_entropy_resource_matched_compute"
         ),
-        "policy_sha256": protocol["frozen_policy_files"][method]["sha256"],
+        "policy_sha256": protocol["frozen_policy_files"][policy_method(method)]["sha256"],
         "epoch_050_sha256": _sha256(output / "epoch_050.pt"),
         "epoch_100_sha256": _sha256(final),
     }
@@ -604,7 +632,7 @@ def evaluate_dynamic_method(
 ) -> Path:
     """Evaluate dense validation only after epoch 100; never construct the test dataset."""
     seed = int(seed)
-    if method not in METHODS or seed in (0, 1, 2) or seed < 0:
+    if method not in RUN_METHODS or seed in (0, 1, 2) or seed < 0:
         raise ValueError("Dynamic pilot evaluation requires a registered method and non-development seed")
     root = Path(root)
     checkpoint = root / method / f"seed_{seed}" / "epoch_100.pt"
@@ -649,16 +677,20 @@ def _longest_negative_run(widths: np.ndarray, deltas: np.ndarray) -> int:
     return longest
 
 
-def finalize_pilot(root: str | Path, seed: int = DEFAULT_PILOT_SEED) -> dict:
+def finalize_pilot(
+    root: str | Path,
+    seed: int = DEFAULT_PILOT_SEED,
+    methods: tuple[str, ...] = METHODS,
+) -> dict:
     root = Path(root)
     seed = int(seed)
     frames = [
         pd.read_csv(root / "evaluation" / method / f"seed_{seed}" / "dense_validation_accuracy.csv")
-        for method in METHODS
+        for method in methods
     ]
     metrics = pd.concat(frames, ignore_index=True)
-    if len(metrics) != 32 or set(metrics["split"]) != {"validation_5k"}:
-        raise RuntimeError("Expected 16 validation rows for each dynamic method")
+    if len(metrics) != 16 * len(methods) or set(metrics["split"]) != {"validation_5k"}:
+        raise RuntimeError("Expected 16 validation rows for every requested dynamic method")
     metrics.to_csv(root / "dense_validation_accuracy.csv", index=False)
     rows = []
     for method, group in metrics.groupby("method"):
@@ -678,6 +710,10 @@ def finalize_pilot(root: str | Path, seed: int = DEFAULT_PILOT_SEED) -> dict:
     wide["geometry_minus_resource_accuracy"] = (
         wide["geometry_dynamic"] - wide["resource_dynamic"]
     )
+    if GEOMETRY_CONTINUOUS_METHOD in methods:
+        wide["continuous_minus_reset_geometry_accuracy"] = (
+            wide[GEOMETRY_CONTINUOUS_METHOD] - wide["geometry_dynamic"]
+        )
     wide.to_csv(root / "dynamic_pilot_width_comparison.csv", index=False)
     indexed = summary.set_index("method")
     deltas = {
@@ -709,5 +745,16 @@ def finalize_pilot(root: str | Path, seed: int = DEFAULT_PILOT_SEED) -> dict:
         "seeds_6_7_8_authorized_automatically": False,
         "note": f"The seed-{seed} gate is development evidence, not confirmatory inference.",
     }
+    if GEOMETRY_CONTINUOUS_METHOD in methods:
+        decision["continuous_minus_reset_geometry"] = {
+            metric: float(
+                indexed.loc[GEOMETRY_CONTINUOUS_METHOD, metric]
+                - indexed.loc["geometry_dynamic", metric]
+            )
+            for metric in (
+                "dense_mean_accuracy", "worst_accuracy", "low_mean_accuracy",
+                "mid_mean_accuracy", "high_mean_accuracy", "full_width_accuracy",
+            )
+        }
     (root / "dynamic_pilot_decision.json").write_text(json.dumps(decision, indent=2) + "\n")
     return decision
