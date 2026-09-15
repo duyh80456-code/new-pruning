@@ -63,7 +63,9 @@ def test_complete_cpu_diagnostic_writes_expected_outputs(tmp_path):
         "num_fixed_training_batches": 2,
     }))
     moments = np.linspace(1.0, 3.0, len(GRID))
-    dot = np.diag(moments)
+    # Simulate the small GPU reduction discrepancy between GEMM's diagonal and
+    # torch.linalg.vector_norm; m_i must follow the explicit squared norms.
+    dot = np.diag(moments * 1.0001)
     matrix = pd.DataFrame(dot, columns=[f"{width:.2f}" for width in GRID])
     matrix.insert(0, "width", GRID)
     matrix.to_csv(root / "gradient_dot_matrix.csv", index=False)
