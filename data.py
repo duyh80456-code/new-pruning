@@ -39,6 +39,15 @@ class InterimValidationLoaders:
     geometry: DataLoader
 
 
+@dataclass(frozen=True)
+class DevelopmentTrainLoaders:
+    """Leakage-safe training loaders that never instantiate the CIFAR test split."""
+
+    train: DataLoader
+    validation: DataLoader
+    calibration: DataLoader
+
+
 def _cifar100_transforms():
     mean, std = (0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)
     augmented = transforms.Compose(
@@ -217,6 +226,50 @@ def build_confirmatory_loaders(config: dict, training_seed: int) -> Confirmatory
         test=test_loader,
         calibration=calibration_loader,
         geometry=geometry_loader,
+    )
+
+
+def build_development_train_loaders(config: dict, training_seed: int) -> DevelopmentTrainLoaders:
+    """Build augmented train plus fixed validation/BN loaders without opening test data."""
+    data_cfg = config["dataset"]
+    if data_cfg["name"].lower() != "cifar100" or data_cfg.get("fake_data", False):
+        raise ValueError("Development training loaders require real CIFAR-100")
+    augmented, deterministic = _cifar100_transforms()
+    root = Path(data_cfg["root"])
+    download = data_cfg.get("download", False)
+    raw_train = datasets.CIFAR100(root=root, train=True, transform=None, download=download)
+    train_augmented = IndexedDataset(
+        datasets.CIFAR100(root=root, train=True, transform=augmented, download=False)
+    )
+    train_deterministic = IndexedDataset(
+        datasets.CIFAR100(root=root, train=True, transform=deterministic, download=False)
+    )
+    train_indices, validation_indices = _stratified_cifar_split(
+        raw_train.targets, int(data_cfg["validation_size"]), int(data_cfg["split_seed"])
+    )
+    calibration_size = int(data_cfg["bn_calibration_size"])
+    if calibration_size > len(train_indices):
+        raise ValueError("BN calibration subset exceeds the training split")
+    workers = int(data_cfg.get("num_workers", 0))
+    pin_memory = torch.cuda.is_available()
+    train_loader = DataLoader(
+        Subset(train_augmented, train_indices),
+        batch_size=int(config["training"]["batch_size"]), shuffle=True,
+        num_workers=workers, pin_memory=pin_memory,
+        generator=torch.Generator().manual_seed(int(training_seed)),
+    )
+    validation_loader = DataLoader(
+        Subset(train_deterministic, validation_indices),
+        batch_size=int(config["evaluation"]["batch_size"]), shuffle=False,
+        num_workers=workers, pin_memory=pin_memory,
+    )
+    calibration_loader = DataLoader(
+        Subset(train_deterministic, train_indices[:calibration_size]),
+        batch_size=int(config["training"]["batch_size"]), shuffle=False,
+        num_workers=workers, pin_memory=pin_memory,
+    )
+    return DevelopmentTrainLoaders(
+        train=train_loader, validation=validation_loader, calibration=calibration_loader
     )
 
 
