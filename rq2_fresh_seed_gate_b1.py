@@ -6,6 +6,7 @@ import copy
 import json
 import random
 import shutil
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -39,6 +40,78 @@ from training import kd_loss
 FRESH_SEED = 6
 CHECKPOINT_EPOCHS = (10, 50, 100)
 METHOD = "fresh_uniform_fixed"
+
+
+def _safe_extract(archive: Path, destination: Path) -> Path:
+    destination.mkdir(parents=True, exist_ok=True)
+    resolved = destination.resolve()
+    with zipfile.ZipFile(archive) as bundle:
+        for member in bundle.infolist():
+            target = (destination / member.filename).resolve()
+            if target != resolved and resolved not in target.parents:
+                raise RuntimeError(f"Unsafe archive member: {member.filename}")
+        bundle.extractall(destination)
+    return destination
+
+
+def _is_fresh_progress_root(root: Path) -> bool:
+    protocol = root / "frozen_fresh_protocol.json"
+    if not protocol.is_file():
+        return False
+    try:
+        payload = json.loads(protocol.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return (
+        payload.get("status") == "FROZEN_BEFORE_FRESH_TRAINING"
+        and int(payload.get("seed", -1)) == FRESH_SEED
+        and payload.get("trajectory") == METHOD
+        and payload.get("anchors") == list(UNIFORM_ANCHORS)
+        and payload.get("checkpoints") == list(CHECKPOINT_EPOCHS)
+    )
+
+
+def materialize_fresh_progress(
+    input_root: str | Path,
+    destination: str | Path,
+    extraction_root: str | Path,
+) -> Path:
+    """Restore one immutable seed-6 progress tree from Kaggle input if needed."""
+    input_root, destination, extraction_root = map(
+        Path, (input_root, destination, extraction_root)
+    )
+    # Never replace newer in-session progress with an older attached artifact.
+    if _is_fresh_progress_root(destination):
+        return destination
+    candidates = sorted({
+        path.parent for path in input_root.rglob("frozen_fresh_protocol.json")
+        if _is_fresh_progress_root(path.parent)
+    })
+    if not candidates:
+        matching_archives = []
+        for archive in sorted(input_root.rglob("*.zip")):
+            try:
+                with zipfile.ZipFile(archive) as bundle:
+                    names = bundle.namelist()
+            except (OSError, zipfile.BadZipFile):
+                continue
+            if any(name.endswith("fresh_seed_6/frozen_fresh_protocol.json") for name in names):
+                matching_archives.append(archive)
+        if len(matching_archives) == 1:
+            extracted = _safe_extract(matching_archives[0], extraction_root)
+            candidates = sorted({
+                path.parent for path in extracted.rglob("frozen_fresh_protocol.json")
+                if _is_fresh_progress_root(path.parent)
+            })
+    if len(candidates) > 1:
+        raise RuntimeError(f"Multiple seed-6 progress roots are attached: {candidates}")
+    if len(candidates) == 1:
+        shutil.copytree(candidates[0], destination, dirs_exist_ok=True)
+        if not _is_fresh_progress_root(destination):
+            raise RuntimeError("Materialized seed-6 progress failed protocol validation")
+        return destination
+    destination.mkdir(parents=True, exist_ok=True)
+    return destination
 
 
 def load_fresh_config(config_path: str | Path, dataset_root: str | Path) -> dict:
@@ -402,5 +475,5 @@ def merge_and_evaluate_fresh_states(
 
 __all__ = [
     "FRESH_SEED", "CHECKPOINT_EPOCHS", "load_fresh_config", "train_fresh_trajectory",
-    "extract_fresh_state", "merge_and_evaluate_fresh_states",
+    "extract_fresh_state", "merge_and_evaluate_fresh_states", "materialize_fresh_progress",
 ]

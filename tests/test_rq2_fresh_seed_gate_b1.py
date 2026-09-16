@@ -3,7 +3,9 @@ import json
 import numpy as np
 import pandas as pd
 
-from rq2_fresh_seed_gate_b1 import CHECKPOINT_EPOCHS, merge_and_evaluate_fresh_states
+from rq2_fresh_seed_gate_b1 import (
+    CHECKPOINT_EPOCHS, materialize_fresh_progress, merge_and_evaluate_fresh_states,
+)
 from rq2_pairwise_incremental_value import MODEL_FEATURES
 from rq2_pairwise_surrogate_regret import INTERIOR_WIDTHS, PAIR_INDICES
 
@@ -57,3 +59,23 @@ def test_merge_fresh_states_and_apply_frozen_predictor(tmp_path):
     assert list(table.State) == ["F10", "F50", "F100"]
     assert {"mae_R", "mae_R_plus_SW", "spearman_rho_R", "spearman_rho_R_plus_SW"}.issubset(table)
     assert (root / "state_metadata.json").is_file()
+
+
+def test_materialize_fresh_progress_and_preserve_existing_working_copy(tmp_path):
+    attached = tmp_path / "input" / "dataset" / "fresh_seed_6"
+    attached.mkdir(parents=True)
+    protocol = {
+        "status": "FROZEN_BEFORE_FRESH_TRAINING", "seed": 6,
+        "trajectory": "fresh_uniform_fixed", "anchors": [0.25, 0.5, 0.75, 1.0],
+        "checkpoints": [10, 50, 100],
+    }
+    (attached / "frozen_fresh_protocol.json").write_text(json.dumps(protocol))
+    (attached / "phase_1_latest.pt").write_bytes(b"attached-progress")
+    destination = tmp_path / "working" / "fresh_seed_6"
+    resolved = materialize_fresh_progress(tmp_path / "input", destination, tmp_path / "extract")
+    assert resolved == destination
+    assert (destination / "phase_1_latest.pt").read_bytes() == b"attached-progress"
+    # An in-session tree wins over a possibly stale attached copy.
+    (destination / "phase_1_latest.pt").write_bytes(b"newer-in-session-progress")
+    materialize_fresh_progress(tmp_path / "input", destination, tmp_path / "extract")
+    assert (destination / "phase_1_latest.pt").read_bytes() == b"newer-in-session-progress"
