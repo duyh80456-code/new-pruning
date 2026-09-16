@@ -15,14 +15,16 @@ import numpy as np
 import pandas as pd
 import torch
 import yaml
+from scipy.stats import pearsonr, spearmanr
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
 from data import build_interim_validation_loaders
+from evaluation import calibrate_batch_norm
 from rq2_anchor_placement import GRID, _sha256
 from rq2_cross_subnet_interaction import _flat_gradient, _state_digest, interaction_parameters
 from rq2_gradient_variance_v3 import importance_corrected_variance
-from rq2_probabilistic_support import INTERIOR_WIDTHS, pair_marginals
+from rq2_probabilistic_support import INTERIOR_WIDTHS, maximum_entropy_pairs, pair_marginals
 from s1_width import make_model
 from training import kd_loss
 
@@ -32,6 +34,7 @@ EPOCHS = (10, 50, 100)
 NUM_BATCHES = 8
 PROBE_BATCH_SIZE = 128
 TARGET_INTERIOR_WEIGHT = 1.0 / 7.0
+PROTOCOL_VERSION = 2
 
 
 def _safe_extract(archive: Path, destination: Path) -> Path:
@@ -185,6 +188,122 @@ def _batch_gradient_matrix(model, images, labels, parameters, config) -> torch.T
     return matrix
 
 
+def _sliced_projection_bank(feature_bank: dict, num_projections: int, seed: int):
+    first = np.asarray(feature_bank[GRID[0]], dtype=np.float64)
+    rng = np.random.default_rng(int(seed))
+    directions = rng.normal(size=(int(num_projections), first.shape[1]))
+    directions /= np.linalg.norm(directions, axis=1, keepdims=True).clip(min=1e-12)
+    projected = {}
+    for width in GRID:
+        features = np.asarray(feature_bank[width], dtype=np.float64)
+        if features.shape != first.shape or not np.isfinite(features).all():
+            raise RuntimeError("Trajectory representation banks are not aligned and finite")
+        projected[width] = np.sort(features @ directions.T, axis=0)
+    return projected
+
+
+def _sw_from_projected(projected_a: np.ndarray, projected_b: np.ndarray) -> float:
+    # Equal-size/equal-weight 1-D Wasserstein is the mean absolute difference
+    # between sorted samples; average over the frozen sliced directions.
+    return float(np.mean(np.abs(projected_a - projected_b)))
+
+
+def _current_geometry(model, loaders, config: dict, device: torch.device):
+    """Recompute learned-projection SW geometry using the registered protocol."""
+    parameter_before = _state_digest(model.named_parameters())
+    buffer_before = _state_digest(model.named_buffers())
+    original_buffers = {
+        name: tensor.detach().clone() for name, tensor in model.named_buffers()
+    }
+    feature_bank, reference_ids = {}, None
+    try:
+        for width in GRID:
+            calibrate_batch_norm(
+                model, loaders.calibration, width, device,
+                int(config["evaluation"]["bn_calibration_batches"]),
+            )
+            model.set_width(width); model.eval()
+            features, sample_ids = [], []
+            with torch.no_grad():
+                for images, _, ids in loaders.geometry:
+                    z = F.normalize(model.forward_features(images.to(device)), p=2, dim=1)
+                    features.append(z.cpu())
+                    sample_ids.append(torch.as_tensor(ids).cpu())
+            features = torch.cat(features)
+            ids = torch.cat(sample_ids)
+            if reference_ids is None:
+                reference_ids = ids
+            elif not torch.equal(reference_ids, ids):
+                raise RuntimeError("Geometry sample IDs/order changed across widths")
+            if not bool(torch.isfinite(features).all()) or float(features.std()) <= 1e-8:
+                raise RuntimeError(f"Invalid learned-projection features at width {width}")
+            feature_bank[width] = features.numpy()
+    finally:
+        with torch.no_grad():
+            for name, tensor in model.named_buffers():
+                tensor.copy_(original_buffers[name])
+    if parameter_before != _state_digest(model.named_parameters()):
+        raise RuntimeError("Geometry extraction changed model parameters")
+    if buffer_before != _state_digest(model.named_buffers()):
+        raise RuntimeError("Geometry extraction did not restore BN buffers")
+
+    projected = _sliced_projection_bank(
+        feature_bank, int(config["geometry"]["num_projections"]),
+        int(config["geometry"]["projection_seed"]),
+    )
+    edge_rows, edges = [], []
+    for left, right in zip(GRID[:-1], GRID[1:]):
+        value = _sw_from_projected(projected[left], projected[right])
+        edges.append(value)
+        edge_rows.append({
+            "budget_start": left, "budget_end": right,
+            "wasserstein_jump": value, "G": value / (right - left),
+        })
+    pair_rows = []
+    for i, left in enumerate(INTERIOR_WIDTHS):
+        for right in INTERIOR_WIDTHS[i + 1:]:
+            pair_rows.append({
+                "width_i": left, "width_j": right,
+                "representation_sw": _sw_from_projected(projected[left], projected[right]),
+            })
+    cells = pd.DataFrame({
+        "width": INTERIOR_WIDTHS,
+        "current_functional_mass": [0.5 * (edges[i] + edges[i + 1]) for i in range(14)],
+    })
+    cells["current_functional_mass_normalized"] = (
+        cells.current_functional_mass / cells.current_functional_mass.sum()
+    )
+    return cells, pd.DataFrame(edge_rows), pd.DataFrame(pair_rows), reference_ids.tolist()
+
+
+def _correlation_rows(path: str, epoch: int, cells: pd.DataFrame, pairs: pd.DataFrame):
+    rows = []
+    comparisons = (
+        ("current_a_vs_m", cells.current_functional_mass, cells.gradient_second_moment),
+        ("frozen_a_vs_m", cells.frozen_functional_mass_normalized, cells.gradient_second_moment),
+        ("current_a_vs_oracle_pi", cells.current_functional_mass, cells.pi_oracle),
+    )
+    for name, x, y in comparisons:
+        for metric, function in (("Pearson", pearsonr), ("Spearman", spearmanr)):
+            value = function(np.asarray(x, float), np.asarray(y, float))
+            rows.append({
+                "path": path, "epoch": epoch, "analysis": name, "metric": metric,
+                "coefficient": float(value.statistic), "pvalue": float(value.pvalue),
+                "n": len(x),
+            })
+    pair_rows = []
+    for target in ("gradient_euclidean_distance", "gradient_cosine_dissimilarity"):
+        for metric, function in (("Pearson", pearsonr), ("Spearman", spearmanr)):
+            value = function(pairs.representation_sw, pairs[target])
+            pair_rows.append({
+                "path": path, "epoch": epoch,
+                "analysis": f"representation_SW_vs_{target}", "metric": metric,
+                "coefficient": float(value.statistic), "pvalue": float(value.pvalue),
+                "n_pairs": len(pairs),
+            })
+    return rows, pair_rows
+
+
 def _gram_checks(grams: np.ndarray) -> dict:
     if grams.shape != (NUM_BATCHES, len(INTERIOR_WIDTHS), len(INTERIOR_WIDTHS)):
         raise RuntimeError(f"Unexpected interior Gram shape {grams.shape}")
@@ -225,11 +344,18 @@ def probe_trajectory_path(
     policies = _policy_inputs(ht_root)
     torch_device = torch.device(device if torch.cuda.is_available() else "cpu")
     batches, probe_ids = _fixed_probe_batches(config, dataset_root, torch_device)
+    geometry_config = json.loads(json.dumps(config))
+    geometry_config["dataset"]["root"] = str(dataset_root)
+    geometry_config["dataset"]["download"] = False
+    geometry_loaders = build_interim_validation_loaders(geometry_config)
     pd.DataFrame({"order": range(len(probe_ids)), "sample_id": probe_ids}).to_csv(
         output_dir / "fixed_training_subset_ids.csv", index=False
     )
     target_weights = np.full(len(INTERIOR_WIDTHS), TARGET_INTERIOR_WEIGHT)
     trajectory_rows, total_rows, drift_rows, distance_rows = [], [], [], []
+    geometry_rows, edge_rows, pair_rows = [], [], []
+    correlation_rows, pair_correlation_rows = [], []
+    geometry_probe_ids = None
     checkpoint_hashes, gram_checks = {}, {}
     for epoch in EPOCHS:
         checkpoint = ht_root / path / "seed_3" / f"epoch_{epoch:03d}.pt"
@@ -274,11 +400,6 @@ def probe_trajectory_path(
             ])
         v_geo = float(batch_variances["geo"].mean())
         v_resource = float(batch_variances["resource"].mean())
-        trajectory_rows.append({
-            "path": path, "epoch": epoch, "V_geo": v_geo, "V_resource": v_resource,
-            "delta_geo_resource": v_geo - v_resource,
-            "ratio_geo_resource": v_geo / v_resource,
-        })
         mean_target = sum_target / NUM_BATCHES
         v_data = max(0.0, sum_target_norm2 / NUM_BATCHES - float(
             torch.dot(mean_target.double(), mean_target.double())
@@ -296,17 +417,91 @@ def probe_trajectory_path(
         oracle = 2.0 * np.sqrt(moments) / np.sqrt(moments).sum()
         if abs(oracle.sum() - 2.0) > 1e-10 or np.any(oracle <= 0) or np.any(oracle > 1):
             raise RuntimeError("Invalid trajectory gradient oracle marginal")
+
+        cells, current_edges, representation_pairs, current_geometry_ids = _current_geometry(
+            model, geometry_loaders, geometry_config, torch_device
+        )
+        if geometry_probe_ids is None:
+            geometry_probe_ids = current_geometry_ids
+            pd.DataFrame({
+                "order": range(len(geometry_probe_ids)), "sample_id": geometry_probe_ids,
+            }).to_csv(output_dir / "fixed_geometry_subset_ids.csv", index=False)
+        elif geometry_probe_ids != current_geometry_ids:
+            raise RuntimeError("Geometry sample IDs/order changed across checkpoints")
+        frozen_mass = np.square(policies["geo"][0])
+        frozen_mass = frozen_mass / frozen_mass.sum()
+        current_score = np.sqrt(cells.current_functional_mass.to_numpy(float))
+        current_pi = 2.0 * current_score / current_score.sum()
+        if np.any(current_pi <= 0) or np.any(current_pi > 1) or abs(current_pi.sum() - 2) > 1e-9:
+            raise RuntimeError("Current-geometry allocation is infeasible")
+        current_pairs = maximum_entropy_pairs(current_pi)[0]
+        oracle_pairs = maximum_entropy_pairs(oracle)[0]
+        dynamic_variance = float(np.mean([
+            importance_corrected_variance(gram, target_weights, current_pi, current_pairs)[
+                "importance_corrected_variance"
+            ] for gram in grams
+        ]))
+        oracle_variance = float(np.mean([
+            importance_corrected_variance(gram, target_weights, oracle, oracle_pairs)[
+                "importance_corrected_variance"
+            ] for gram in grams
+        ]))
+        trajectory_rows.append({
+            "path": path, "epoch": epoch, "V_geo": v_geo, "V_resource": v_resource,
+            "V_current_geometry": dynamic_variance,
+            "V_gradient_oracle_marginal": oracle_variance,
+            "delta_geo_resource": v_geo - v_resource,
+            "ratio_geo_resource": v_geo / v_resource,
+        })
+        cells["path"] = path; cells["epoch"] = epoch
+        cells["frozen_functional_mass_normalized"] = frozen_mass
+        cells["gradient_second_moment"] = moments
+        cells["pi_frozen_geo"] = policies["geo"][0]
+        cells["pi_resource"] = policies["resource"][0]
+        cells["pi_current_geometry"] = current_pi
+        cells["pi_oracle"] = oracle
+        geometry_rows.extend(cells.to_dict("records"))
+        current_edges["path"] = path; current_edges["epoch"] = epoch
+        edge_rows.extend(current_edges.to_dict("records"))
+
+        mean_gram = grams.mean(axis=0)
+        width_index = {width: index for index, width in enumerate(INTERIOR_WIDTHS)}
+        pair_metrics = []
+        for row in representation_pairs.itertuples(index=False):
+            i, j = width_index[round(float(row.width_i), 2)], width_index[round(float(row.width_j), 2)]
+            norm_i, norm_j, cross = mean_gram[i, i], mean_gram[j, j], mean_gram[i, j]
+            distance_sq = max(0.0, norm_i + norm_j - 2.0 * cross)
+            pair_metrics.append({
+                "path": path, "epoch": epoch,
+                "width_i": row.width_i, "width_j": row.width_j,
+                "representation_sw": row.representation_sw,
+                "gradient_dot": cross,
+                "gradient_euclidean_distance": np.sqrt(distance_sq),
+                "gradient_cosine_dissimilarity": 1.0 - cross / max(np.sqrt(norm_i * norm_j), 1e-30),
+            })
+        pair_frame = pd.DataFrame(pair_metrics)
+        pair_rows.extend(pair_metrics)
+        current_correlations, current_pair_correlations = _correlation_rows(
+            path, epoch, cells, pair_frame
+        )
+        correlation_rows.extend(current_correlations)
+        pair_correlation_rows.extend(current_pair_correlations)
         for index, width in enumerate(INTERIOR_WIDTHS):
             drift_rows.append({
                 "path": path, "epoch": epoch, "width": width,
                 "pi_geo": policies["geo"][0][index],
                 "pi_resource": policies["resource"][0][index],
+                "pi_current_geometry": current_pi[index],
                 "pi_oracle": oracle[index], "gradient_second_moment": moments[index],
             })
         distance_rows.append({
             "path": path, "epoch": epoch,
             "tv_geo_oracle": 0.5 * float(np.abs(policies["geo"][0] - oracle).sum()),
             "tv_resource_oracle": 0.5 * float(np.abs(policies["resource"][0] - oracle).sum()),
+            "tv_current_geometry_oracle": 0.5 * float(np.abs(current_pi - oracle).sum()),
+            "tv_current_geometry_frozen_geo": 0.5 * float(
+                np.abs(current_pi - policies["geo"][0]).sum()
+            ),
         })
         if parameter_before != _state_digest(model.named_parameters()):
             raise RuntimeError("Trajectory probe changed model weights")
@@ -320,16 +515,36 @@ def probe_trajectory_path(
     pd.DataFrame(total_rows).to_csv(output_dir / "quick_total_variance.csv", index=False)
     pd.DataFrame(drift_rows).to_csv(output_dir / "quick_oracle_drift.csv", index=False)
     pd.DataFrame(distance_rows).to_csv(output_dir / "quick_policy_distance.csv", index=False)
+    pd.DataFrame(geometry_rows).to_csv(output_dir / "quick_dynamic_geometry_by_width.csv", index=False)
+    pd.DataFrame(edge_rows).to_csv(output_dir / "quick_dynamic_geometry_edges.csv", index=False)
+    pd.DataFrame(correlation_rows).to_csv(
+        output_dir / "quick_geometry_gradient_correlations.csv", index=False
+    )
+    pd.DataFrame(pair_rows).to_csv(output_dir / "quick_pair_structure.csv", index=False)
+    pd.DataFrame(pair_correlation_rows).to_csv(
+        output_dir / "quick_pair_structure_correlations.csv", index=False
+    )
     metadata = {
         "status": "QUICK_TRAJECTORY_PATH_COMPLETE", "path": path,
+        "protocol_version": PROTOCOL_VERSION,
         "epochs": list(EPOCHS), "num_fixed_training_batches": NUM_BATCHES,
         "batch_size": PROBE_BATCH_SIZE, "probe_batch_ids": probe_ids,
+        "geometry_subset_ids": geometry_probe_ids,
         "checkpoint_sha256": checkpoint_hashes, "gram_checks": gram_checks,
         "training_performed": False, "optimizer_steps": 0, "accuracy_computed": False,
         "test_used": False, "policy_updated": False, "model_eval": True,
         "weights_unchanged": True, "bn_buffers_unchanged": True,
         "gradient_scope": "shared convolution/projection/classifier weights; BN affine/buffers excluded",
         "probe_data": "fixed first 8 batches of the deterministic 45k training split; no augmentation",
+        "geometry_protocol": {
+            "representation": "learned_projection_128d_l2",
+            "feature_subset": "fixed 2000-image validation subset",
+            "bn_recalibration": True,
+            "num_projections": int(config["geometry"]["num_projections"]),
+            "projection_seed": int(config["geometry"]["projection_seed"]),
+            "buffers_restored_after_each_checkpoint": True,
+            "frozen_mass_reconstruction": "normalized a_frozen proportional to pi_geo^2 (p=1)",
+        },
         "variance_scale": "unscaled target-family loss; historical divide-by-4 multiplies all variances by 1/16",
         "loss": {"full": "CE", "smaller": "CE+KD", "kd_lambda": 1.0, "temperature": 2.0},
     }
@@ -373,6 +588,50 @@ def _plot_outputs(output_dir: Path, trajectory: pd.DataFrame, total: pd.DataFram
     fig.savefig(output_dir / "quick_oracle_drift.png", dpi=200); plt.close(fig)
 
 
+def _plot_geometry_tracking(output_dir: Path, geometry: pd.DataFrame,
+                            correlations: pd.DataFrame,
+                            pair_correlations: pd.DataFrame) -> None:
+    fig, axes = plt.subplots(2, 3, figsize=(14, 8), sharex=False, sharey=False)
+    for row_index, path in enumerate(PATHS):
+        for column_index, epoch in enumerate(EPOCHS):
+            axis = axes[row_index, column_index]
+            frame = geometry.loc[geometry.path.eq(path) & geometry.epoch.eq(epoch)]
+            axis.scatter(frame.current_functional_mass_normalized,
+                         frame.gradient_second_moment, s=35)
+            for row in frame.itertuples():
+                axis.annotate(f"{row.width:.2f}",
+                              (row.current_functional_mass_normalized,
+                               row.gradient_second_moment), fontsize=7)
+            axis.set_title(f"{path}, epoch {epoch}")
+            axis.grid(alpha=0.2)
+    fig.supxlabel("Current normalized functional mass a_i(theta_t)")
+    fig.supylabel("Current gradient second moment m_i(theta_t)")
+    fig.tight_layout(); fig.savefig(
+        output_dir / "quick_current_geometry_vs_m.png", dpi=200
+    ); plt.close(fig)
+
+    selected = correlations.loc[
+        correlations.metric.eq("Spearman")
+        & correlations.analysis.isin(("current_a_vs_m", "frozen_a_vs_m"))
+    ]
+    fig, axis = plt.subplots(figsize=(9, 5))
+    for (path, analysis), frame in selected.groupby(["path", "analysis"]):
+        axis.plot(frame.epoch, frame.coefficient, marker="o", label=f"{path}: {analysis}")
+    axis.axhline(0, color="black", linewidth=1)
+    axis.set(xlabel="Epoch", ylabel="Spearman correlation with current m_i")
+    axis.grid(alpha=0.25); axis.legend(); fig.tight_layout()
+    fig.savefig(output_dir / "quick_geometry_gradient_tracking.png", dpi=200); plt.close(fig)
+
+    selected_pairs = pair_correlations.loc[pair_correlations.metric.eq("Spearman")]
+    fig, axis = plt.subplots(figsize=(9, 5))
+    for (path, analysis), frame in selected_pairs.groupby(["path", "analysis"]):
+        axis.plot(frame.epoch, frame.coefficient, marker="o", label=f"{path}: {analysis}")
+    axis.axhline(0, color="black", linewidth=1)
+    axis.set(xlabel="Epoch", ylabel="Spearman pair-structure correlation")
+    axis.grid(alpha=0.25); axis.legend(fontsize=8); fig.tight_layout()
+    fig.savefig(output_dir / "quick_pair_structure_tracking.png", dpi=200); plt.close(fig)
+
+
 def merge_trajectory_paths(worker_dirs: list[str | Path], output_dir: str | Path) -> dict:
     worker_dirs, output_dir = [Path(path) for path in worker_dirs], Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -381,15 +640,21 @@ def merge_trajectory_paths(worker_dirs: list[str | Path], output_dir: str | Path
         raise RuntimeError("Trajectory workers must cover Geo-HT and Resource-HT exactly once")
     if len({tuple(item["probe_batch_ids"]) for item in metadata}) != 1:
         raise RuntimeError("Trajectory workers did not use identical fixed sample IDs/order")
+    if len({tuple(item["geometry_subset_ids"]) for item in metadata}) != 1:
+        raise RuntimeError("Trajectory workers did not use identical geometry sample IDs/order")
     for item in metadata:
         if (
             item["training_performed"] or item["optimizer_steps"] != 0 or item["test_used"]
             or not item["weights_unchanged"] or not item["bn_buffers_unchanged"]
+            or int(item.get("protocol_version", -1)) != PROTOCOL_VERSION
         ):
             raise RuntimeError("A trajectory worker violated the read-only contract")
     names = (
         "quick_trajectory_variance.csv", "quick_total_variance.csv",
         "quick_oracle_drift.csv", "quick_policy_distance.csv",
+        "quick_dynamic_geometry_by_width.csv", "quick_dynamic_geometry_edges.csv",
+        "quick_geometry_gradient_correlations.csv", "quick_pair_structure.csv",
+        "quick_pair_structure_correlations.csv",
     )
     merged = {}
     for name in names:
@@ -401,10 +666,21 @@ def merge_trajectory_paths(worker_dirs: list[str | Path], output_dir: str | Path
         output_dir, merged["quick_trajectory_variance.csv"],
         merged["quick_total_variance.csv"], merged["quick_policy_distance.csv"],
     )
+    _plot_geometry_tracking(
+        output_dir, merged["quick_dynamic_geometry_by_width.csv"],
+        merged["quick_geometry_gradient_correlations.csv"],
+        merged["quick_pair_structure_correlations.csv"],
+    )
     trajectory = merged["quick_trajectory_variance.csv"]
     total = merged["quick_total_variance.csv"]
+    correlations = merged["quick_geometry_gradient_correlations.csv"]
+    spearman = correlations.loc[
+        correlations.metric.eq("Spearman")
+        & correlations.analysis.isin(("current_a_vs_m", "frozen_a_vs_m"))
+    ].pivot(index=["path", "epoch"], columns="analysis", values="coefficient")
     result = {
         "status": "RQ2_V3_QUICK_TRAJECTORY_DIAGNOSTIC_COMPLETE",
+        "protocol_version": PROTOCOL_VERSION,
         "paths": list(PATHS), "epochs": list(EPOCHS),
         "execution": "two_gpu_one_trajectory_per_gpu",
         "training_performed": False, "optimizer_steps": 0, "accuracy_computed": False,
@@ -413,6 +689,10 @@ def merge_trajectory_paths(worker_dirs: list[str | Path], output_dir: str | Path
         "geo_lower_conditional_variance_count": int((trajectory.delta_geo_resource < 0).sum()),
         "comparisons": len(trajectory),
         "mean_total_relative_gain_geo": float(total.total_relative_gain_geo.mean()),
+        "current_geometry_better_than_frozen_count": int(
+            (spearman.current_a_vs_m > spearman.frozen_a_vs_m).sum()
+        ),
+        "geometry_gradient_comparisons": int(len(spearman)),
         "interpretation": "mechanism diagnostic only; no policy selection or accuracy claim",
     }
     (output_dir / "metadata.json").write_text(json.dumps(result, indent=2) + "\n")

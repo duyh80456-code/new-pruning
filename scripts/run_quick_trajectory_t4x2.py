@@ -15,7 +15,7 @@ import torch
 import yaml
 
 from data import build_interim_validation_loaders
-from rq2_quick_trajectory_diagnostic import PATHS, merge_trajectory_paths
+from rq2_quick_trajectory_diagnostic import PATHS, PROTOCOL_VERSION, merge_trajectory_paths
 
 
 def run_quick_trajectory_t4x2(ht_root, output_dir, dataset_root, gpu_ids=(0, 1)):
@@ -41,7 +41,10 @@ def run_quick_trajectory_t4x2(ht_root, output_dir, dataset_root, gpu_ids=(0, 1))
         complete = worker_dir / "metadata.json"
         if complete.is_file():
             metadata = json.loads(complete.read_text())
-            if metadata.get("status") == "QUICK_TRAJECTORY_PATH_COMPLETE":
+            if (
+                metadata.get("status") == "QUICK_TRAJECTORY_PATH_COMPLETE"
+                and int(metadata.get("protocol_version", -1)) == PROTOCOL_VERSION
+            ):
                 continue
         command = [
             sys.executable, "-m", "scripts.run_quick_trajectory_worker",
