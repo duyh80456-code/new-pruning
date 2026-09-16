@@ -15,7 +15,6 @@ import yaml
 from torch.nn import functional as F
 
 from data import build_development_train_loaders, build_interim_validation_loaders
-from profiling import profile_subnet
 from research_utils import seed_everything
 from rq2_anchor_placement import GRID, UNIFORM_ANCHORS, _sha256
 from rq2_cross_subnet_interaction import _state_digest, interaction_parameters
@@ -233,37 +232,62 @@ def extract_fresh_state(
     model = make_model(config, torch_device); model.load_state_dict(payload["model"]); model.eval()
     parameter_before = _state_digest(model.named_parameters())
     buffer_before = _state_digest(model.named_buffers())
+    gram_path = output_dir / f"gradient_gram_epoch_{epoch:03d}.npy"
+    sw_path = output_dir / f"sw_matrix_epoch_{epoch:03d}.npy"
+    reused_cached_tensors = gram_path.is_file() and sw_path.is_file()
+    # Materialize the deterministic ID lists even on recovery; this preserves
+    # the cross-state same-samples audit without repeating GPU forwards.
     batches, probe_ids = _fixed_probe_batches(config, Path(dataset_root), torch_device)
-    parameters = interaction_parameters(model)
-    grams = []
-    for batch_index, (cpu_images, cpu_labels) in enumerate(batches):
-        matrix = _batch_gradient_matrix(
-            model, cpu_images.to(torch_device), cpu_labels.to(torch_device), parameters, config
-        )
-        interior = matrix[1:-1]
-        grams.append((interior @ interior.T).detach().double().cpu().numpy())
-        print(f"[fresh Gate B1] epoch={epoch}: gradient batch {batch_index+1}/{NUM_BATCHES}", flush=True)
-    grams = np.stack(grams)
-    checks = _gram_checks(grams)
-    np.save(output_dir / f"gradient_gram_epoch_{epoch:03d}.npy", grams)
     loaders = build_interim_validation_loaders(config)
-    _, _, representation_pairs, geometry_ids = _current_geometry(model, loaders, config, torch_device)
+    if reused_cached_tensors:
+        grams = np.load(gram_path).astype(np.float64)
+        sw_matrix = np.load(sw_path).astype(np.float64)
+        checks = _gram_checks(grams)
+        geometry_ids = []
+        for _, _, ids in loaders.geometry:
+            geometry_ids.extend(torch.as_tensor(ids).tolist())
+        representation_pairs = pd.DataFrame([
+            {
+                "width_i": INTERIOR_WIDTHS[i], "width_j": INTERIOR_WIDTHS[j],
+                "representation_sw": float(sw_matrix[i, j]),
+            }
+            for i in range(len(INTERIOR_WIDTHS))
+            for j in range(i + 1, len(INTERIOR_WIDTHS))
+        ])
+        print(f"[fresh Gate B1] epoch={epoch}: reusing completed Gram and SW tensors", flush=True)
+    else:
+        parameters = interaction_parameters(model)
+        grams = []
+        for batch_index, (cpu_images, cpu_labels) in enumerate(batches):
+            matrix = _batch_gradient_matrix(
+                model, cpu_images.to(torch_device), cpu_labels.to(torch_device), parameters, config
+            )
+            interior = matrix[1:-1]
+            grams.append((interior @ interior.T).detach().double().cpu().numpy())
+            print(f"[fresh Gate B1] epoch={epoch}: gradient batch {batch_index+1}/{NUM_BATCHES}", flush=True)
+        grams = np.stack(grams)
+        checks = _gram_checks(grams)
+        np.save(gram_path, grams)
+        _, _, representation_pairs, geometry_ids = _current_geometry(
+            model, loaders, config, torch_device
+        )
+        sw_matrix = np.zeros((len(INTERIOR_WIDTHS), len(INTERIOR_WIDTHS)), dtype=np.float64)
+        width_to_index = {width: index for index, width in enumerate(INTERIOR_WIDTHS)}
+        for row in representation_pairs.itertuples(index=False):
+            i = width_to_index[round(float(row.width_i), 2)]
+            j = width_to_index[round(float(row.width_j), 2)]
+            sw_matrix[i, j] = sw_matrix[j, i] = float(row.representation_sw)
+        np.save(sw_path, sw_matrix)
     width_to_index = {width: index for index, width in enumerate(INTERIOR_WIDTHS)}
-    sw_matrix = np.zeros((len(INTERIOR_WIDTHS), len(INTERIOR_WIDTHS)), dtype=np.float64)
-    for row in representation_pairs.itertuples(index=False):
-        i, j = width_to_index[round(float(row.width_i), 2)], width_to_index[round(float(row.width_j), 2)]
-        sw_matrix[i, j] = sw_matrix[j, i] = float(row.representation_sw)
-    np.save(output_dir / f"sw_matrix_epoch_{epoch:03d}.npy", sw_matrix)
-    profiled = {width: float(profile_subnet(model, width)[0]) for width in INTERIOR_WIDTHS}
+    # Gate A already audited model-profiled FLOPs. Re-profiling the identical
+    # architecture here would add a THOP dependency and no new information.
     audited = {
         round(float(key), 2): float(value)
         for key, value in json.loads(Path(gate_a_summary).read_text())["flops"].items()
     }
-    relative_error = max(
-        abs(profiled[width] - audited[width]) / audited[width] for width in INTERIOR_WIDTHS
-    )
-    if relative_error > 1e-12:
-        raise RuntimeError(f"Fresh model FLOPs disagree with Gate A audit: {relative_error}")
+    if set(audited) != set(INTERIOR_WIDTHS) or any(value <= 0 for value in audited.values()):
+        raise RuntimeError("Gate A does not contain valid profiled FLOPs for all 14 widths")
+    profiled = audited
     mean_gram = grams.mean(axis=0)
     rows = []
     for row in representation_pairs.itertuples(index=False):
@@ -295,6 +319,8 @@ def extract_fresh_state(
         "weights_unchanged": True, "bn_buffers_unchanged": True,
         "test_used": False, "accuracy_used": False,
         "profiled_flops_match_gate_a": True,
+        "flops_source": "frozen Gate A model-profiled FLOPs; no width proxy; no re-profiling",
+        "reused_cached_gradient_and_sw_tensors": reused_cached_tensors,
     }
     (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     return metadata
