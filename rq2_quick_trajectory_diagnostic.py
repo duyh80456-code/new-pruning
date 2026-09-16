@@ -48,13 +48,23 @@ def _safe_extract(archive: Path, destination: Path) -> Path:
 
 def _is_complete_ht_root(root: Path) -> bool:
     decision = root / "ht_development_decision.json"
-    required = [root / "resolved_config.yaml", root / "protocol" / "frozen_dynamic_marginals.csv"]
+    required = [
+        root / "resolved_config.yaml",
+        root / "protocol" / "frozen_dynamic_marginals.csv",
+        root / "protocol" / "geometry_pair_distribution.csv",
+        root / "protocol" / "resource_pair_distribution.csv",
+    ]
     required += [
         root / path / "seed_3" / f"epoch_{epoch:03d}.pt"
         for path in PATHS for epoch in EPOCHS
     ]
-    if not decision.is_file() or not all(path.is_file() for path in required):
+    if not all(path.is_file() for path in required):
         return False
+    # The six immutable snapshots plus the frozen protocol are sufficient for
+    # this read-only probe. A missing finalizer decision must not hide a usable
+    # result when Kaggle stopped after training/evaluation.
+    if not decision.is_file():
+        return True
     try:
         payload = json.loads(decision.read_text())
     except json.JSONDecodeError:
@@ -65,18 +75,47 @@ def _is_complete_ht_root(root: Path) -> bool:
 def find_ht_development_root(input_root: str | Path, materialized_root: str | Path) -> Path:
     """Resolve one completed HT development result, extracting its ZIP when needed."""
     input_root, materialized_root = Path(input_root), Path(materialized_root)
-    candidates = sorted({path.parent for path in input_root.rglob("ht_development_decision.json")})
-    candidates = [path for path in candidates if _is_complete_ht_root(path)]
+    candidates = {
+        path.parents[2]
+        for path in input_root.rglob("epoch_100.pt")
+        if len(path.parents) >= 3 and path.parent.name == "seed_3"
+        and path.parent.parent.name in PATHS
+    }
+    candidates.update(path.parent for path in input_root.rglob("ht_development_decision.json"))
+    candidates = sorted(path for path in candidates if _is_complete_ht_root(path))
     if not candidates:
-        archives = sorted(input_root.rglob("rq2-v3-ht-seed3.zip"))
-        if len(archives) == 1:
-            extracted = _safe_extract(archives[0], materialized_root)
+        # Kaggle may rename notebook-output archives. Inspect ZIP central
+        # directories rather than depending on one exact filename.
+        matching_archives = []
+        for archive in sorted(input_root.rglob("*.zip")):
+            try:
+                with zipfile.ZipFile(archive) as bundle:
+                    names = {name.rstrip("/") for name in bundle.namelist()}
+            except (OSError, zipfile.BadZipFile):
+                continue
+            suffixes = (
+                "geo_ht/seed_3/epoch_010.pt", "geo_ht/seed_3/epoch_050.pt",
+                "geo_ht/seed_3/epoch_100.pt", "resource_ht/seed_3/epoch_010.pt",
+                "resource_ht/seed_3/epoch_050.pt", "resource_ht/seed_3/epoch_100.pt",
+                "protocol/frozen_dynamic_marginals.csv",
+            )
+            if all(any(name.endswith(suffix) for name in names) for suffix in suffixes):
+                matching_archives.append(archive)
+        if len(matching_archives) == 1:
+            extracted = _safe_extract(matching_archives[0], materialized_root)
             candidates = sorted({
-                path.parent for path in extracted.rglob("ht_development_decision.json")
-                if _is_complete_ht_root(path.parent)
+                path.parents[2] for path in extracted.rglob("epoch_100.pt")
+                if len(path.parents) >= 3 and path.parent.name == "seed_3"
+                and path.parent.parent.name in PATHS and _is_complete_ht_root(path.parents[2])
             })
     if len(candidates) != 1:
-        raise FileNotFoundError(f"Expected one complete rq2-v3-ht-seed3 result, found {candidates}")
+        visible_zips = sorted(str(path) for path in input_root.rglob("*.zip"))
+        visible_checkpoints = sorted(str(path) for path in input_root.rglob("epoch_100.pt"))
+        raise FileNotFoundError(
+            "Expected one HT root containing both methods at epochs 10/50/100 plus the frozen "
+            f"protocol; candidates={candidates}; visible_zips={visible_zips}; "
+            f"visible_epoch100_checkpoints={visible_checkpoints}"
+        )
     return candidates[0]
 
 

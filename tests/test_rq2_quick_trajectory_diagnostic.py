@@ -1,4 +1,6 @@
 import json
+import zipfile
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -28,13 +30,50 @@ def test_find_complete_ht_development_root(tmp_path):
         "status": "RQ2_V3_HT_SEED3_DEVELOPMENT_COMPLETE"
     }))
     (root / "resolved_config.yaml").write_text("experiment: {}\n")
-    (root / "protocol" / "frozen_dynamic_marginals.csv").write_text("width\n")
+    for name in (
+        "frozen_dynamic_marginals.csv", "geometry_pair_distribution.csv",
+        "resource_pair_distribution.csv",
+    ):
+        (root / "protocol" / name).write_text("width\n")
     for method in ("geo_ht", "resource_ht"):
         directory = root / method / "seed_3"
         directory.mkdir(parents=True)
         for epoch in EPOCHS:
             (directory / f"epoch_{epoch:03d}.pt").write_bytes(b"checkpoint")
     assert find_ht_development_root(tmp_path, tmp_path / "materialized") == root
+
+
+def test_finder_accepts_renamed_zip_and_missing_finalizer_decision(tmp_path):
+    source = tmp_path / "source"
+    (source / "protocol").mkdir(parents=True)
+    (source / "resolved_config.yaml").write_text("experiment: {}\n")
+    for name in (
+        "frozen_dynamic_marginals.csv", "geometry_pair_distribution.csv",
+        "resource_pair_distribution.csv",
+    ):
+        (source / "protocol" / name).write_text("width\n")
+    for method in ("geo_ht", "resource_ht"):
+        directory = source / method / "seed_3"
+        directory.mkdir(parents=True)
+        for epoch in EPOCHS:
+            (directory / f"epoch_{epoch:03d}.pt").write_bytes(b"checkpoint")
+    attached = tmp_path / "attached"
+    attached.mkdir()
+    archive = attached / "notebook-output-renamed.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        for path in source.rglob("*"):
+            if path.is_file():
+                bundle.write(path, Path("nested-export") / path.relative_to(source))
+    result = find_ht_development_root(attached, tmp_path / "materialized")
+    assert result.name == "nested-export"
+    assert _is_complete_ht_root_for_test(result)
+
+
+def _is_complete_ht_root_for_test(root):
+    return all(
+        (root / method / "seed_3" / f"epoch_{epoch:03d}.pt").is_file()
+        for method in ("geo_ht", "resource_ht") for epoch in EPOCHS
+    )
 
 
 def _worker_fixture(root, path, offset):
