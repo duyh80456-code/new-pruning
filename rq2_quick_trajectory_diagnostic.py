@@ -342,6 +342,12 @@ def probe_trajectory_path(
     ):
         raise RuntimeError("HT trajectory config does not match the locked loss/grid")
     policies = _policy_inputs(ht_root)
+    frozen_marginals = pd.read_csv(
+        ht_root / "protocol" / "frozen_dynamic_marginals.csv"
+    ).sort_values("width")
+    flops_by_width = dict(zip(
+        frozen_marginals.width.round(2), frozen_marginals.flops.astype(float)
+    ))
     torch_device = torch.device(device if torch.cuda.is_available() else "cpu")
     batches, probe_ids = _fixed_probe_batches(config, dataset_root, torch_device)
     geometry_config = json.loads(json.dumps(config))
@@ -460,6 +466,7 @@ def probe_trajectory_path(
         cells["pi_resource"] = policies["resource"][0]
         cells["pi_current_geometry"] = current_pi
         cells["pi_oracle"] = oracle
+        cells["flops"] = [flops_by_width[width] for width in INTERIOR_WIDTHS]
         geometry_rows.extend(cells.to_dict("records"))
         current_edges["path"] = path; current_edges["epoch"] = epoch
         edge_rows.extend(current_edges.to_dict("records"))
