@@ -111,7 +111,7 @@ def materialize_fresh_progress(
     destination: str | Path,
     extraction_root: str | Path,
 ) -> Path:
-    """Restore one immutable seed-6 progress tree from Kaggle input if needed."""
+    """Restore one immutable configured-fresh-seed progress tree if needed."""
     input_root, destination, extraction_root = map(
         Path, (input_root, destination, extraction_root)
     )
@@ -136,7 +136,7 @@ def materialize_fresh_progress(
             continue
         root = path.parent.parent
         looks_like_fresh_root = (
-            root.name == "fresh_seed_6"
+            root.name == f"fresh_seed_{FRESH_SEED}"
             or (root / "frozen_fresh_protocol.json").is_file()
             or (root / "training_provenance.json").is_file()
         )
@@ -156,17 +156,17 @@ def materialize_fresh_progress(
             by_identity.setdefault(identity, []).append(candidate)
         if len(by_identity) != 1:
             raise RuntimeError(
-                f"Conflicting complete seed-6 checkpoint families are attached: {snapshot_candidates}"
+                f"Conflicting complete seed-{FRESH_SEED} checkpoint families are attached: {snapshot_candidates}"
             )
         source = sorted(next(iter(by_identity.values())))[0]
-        print(f"Restoring complete fresh seed-6 snapshots from {source}", flush=True)
+        print(f"Restoring complete fresh seed-{FRESH_SEED} snapshots from {source}", flush=True)
         shutil.copytree(source, destination, dirs_exist_ok=True)
         if not _has_complete_fresh_snapshots(destination):
-            raise RuntimeError("Complete seed-6 snapshots failed materialization")
+            raise RuntimeError(f"Complete seed-{FRESH_SEED} snapshots failed materialization")
         return destination
     complete_archives = []
     required_suffixes = tuple(
-        f"fresh_seed_6/checkpoints/epoch_{epoch:03d}.pt" for epoch in CHECKPOINT_EPOCHS
+        f"fresh_seed_{FRESH_SEED}/checkpoints/epoch_{epoch:03d}.pt" for epoch in CHECKPOINT_EPOCHS
     )
     for archive in sorted(input_root.rglob("*.zip")):
         try:
@@ -200,7 +200,9 @@ def materialize_fresh_progress(
                     names = bundle.namelist()
             except (OSError, zipfile.BadZipFile):
                 continue
-            if any(name.endswith("fresh_seed_6/frozen_fresh_protocol.json") for name in names):
+            if any(name.endswith(
+                f"fresh_seed_{FRESH_SEED}/frozen_fresh_protocol.json"
+            ) for name in names):
                 matching_archives.append(archive)
         if len(matching_archives) == 1:
             extracted = _safe_extract(matching_archives[0], extraction_root)
@@ -209,11 +211,13 @@ def materialize_fresh_progress(
                 if _is_fresh_progress_root(path.parent)
             })
     if len(candidates) > 1:
-        raise RuntimeError(f"Multiple seed-6 progress roots are attached: {candidates}")
+        raise RuntimeError(f"Multiple seed-{FRESH_SEED} progress roots are attached: {candidates}")
     if len(candidates) == 1:
         shutil.copytree(candidates[0], destination, dirs_exist_ok=True)
         if not (_is_fresh_progress_root(destination) or _has_complete_fresh_snapshots(destination)):
-            raise RuntimeError("Materialized seed-6 progress failed identity validation")
+            raise RuntimeError(
+                f"Materialized seed-{FRESH_SEED} progress failed identity validation"
+            )
         return destination
     destination.mkdir(parents=True, exist_ok=True)
     return destination
@@ -372,7 +376,10 @@ def train_fresh_trajectory(config: dict, root: str | Path) -> Path:
     # interrupted export may lack resumable optimizer state/provenance; never
     # retrain merely to recreate those administrative files.
     if _has_complete_fresh_snapshots(root):
-        print("Fresh seed-6 checkpoints 10/50/100 already exist; skipping training.", flush=True)
+        print(
+            f"Fresh seed-{FRESH_SEED} checkpoints 10/50/100 already exist; skipping training.",
+            flush=True,
+        )
         return root / "checkpoints" / "epoch_100.pt"
     phase_one = _train_phase(config, root, 1, 50, 0.1, None)
     phase_two = _train_phase(config, root, 51, 100, 0.01, phase_one)
