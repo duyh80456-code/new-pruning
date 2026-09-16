@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import zipfile
 from itertools import combinations
 from pathlib import Path
@@ -67,6 +68,47 @@ def find_quick_trajectory_root(input_root: str | Path, materialized_root: str | 
         if _is_quick_root(path.parent)
     })
     if not candidates:
+        # Some Kaggle notebook outputs preserved the two worker directories but
+        # omitted the merged dynamic-geometry CSVs at the output root. Recover
+        # the exact merged inputs without rerunning either GPU worker.
+        recoverable = []
+        for worker_root in input_root.rglob("worker_paths"):
+            worker_dirs = [worker_root / path for path in PATHS]
+            required_per_worker = (
+                "quick_pair_structure.csv", "quick_dynamic_geometry_by_width.csv",
+            )
+            if all(
+                all((worker / name).is_file() for name in required_per_worker)
+                and all((worker / f"interior_grams_epoch_{epoch:03d}.npy").is_file()
+                        for epoch in EPOCHS)
+                for worker in worker_dirs
+            ):
+                recoverable.append(worker_root)
+        if len(recoverable) == 1:
+            destination = materialized_root / "recovered_quick_trajectory"
+            destination.mkdir(parents=True, exist_ok=True)
+            for name in ("quick_pair_structure.csv", "quick_dynamic_geometry_by_width.csv"):
+                merged = pd.concat(
+                    [pd.read_csv(recoverable[0] / path / name) for path in PATHS],
+                    ignore_index=True,
+                )
+                merged.to_csv(destination / name, index=False)
+            for path in PATHS:
+                target = destination / "worker_paths" / path
+                target.mkdir(parents=True, exist_ok=True)
+                for epoch in EPOCHS:
+                    shutil.copy2(
+                        recoverable[0] / path / f"interior_grams_epoch_{epoch:03d}.npy",
+                        target / f"interior_grams_epoch_{epoch:03d}.npy",
+                    )
+            (destination / "metadata.json").write_text(json.dumps({
+                "status": "RQ2_V3_QUICK_TRAJECTORY_DIAGNOSTIC_COMPLETE",
+                "recovered_from_worker_paths": str(recoverable[0]),
+                "training_performed": False,
+            }, indent=2) + "\n")
+            if _is_quick_root(destination):
+                candidates = [destination]
+    if not candidates:
         matching = []
         for archive in input_root.rglob("*.zip"):
             try:
@@ -88,8 +130,21 @@ def find_quick_trajectory_root(input_root: str | Path, materialized_root: str | 
                 if _is_quick_root(path.parent)
             })
     if len(candidates) != 1:
+        missing_diagnostics = []
+        for worker_root in input_root.rglob("worker_paths"):
+            for path in PATHS:
+                worker = worker_root / path
+                if worker.is_dir():
+                    missing = [name for name in (
+                        "quick_pair_structure.csv", "quick_dynamic_geometry_by_width.csv",
+                        *(f"interior_grams_epoch_{epoch:03d}.npy" for epoch in EPOCHS),
+                    ) if not (worker / name).is_file()]
+                    missing_diagnostics.append({"worker": str(worker), "missing": missing})
         raise FileNotFoundError(
-            f"Expected one complete dynamic-geometry quick diagnostic, found {candidates}"
+            "Expected one complete dynamic-geometry quick diagnostic. The attached output "
+            "must contain quick_pair_structure.csv, quick_dynamic_geometry_by_width.csv, "
+            "and six interior Gram stacks. "
+            f"complete_candidates={candidates}; worker_audit={missing_diagnostics}"
         )
     return candidates[0]
 

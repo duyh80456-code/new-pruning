@@ -8,6 +8,7 @@ from rq2_pairwise_surrogate_regret import (
     INTERIOR_WIDTHS,
     PAIR_INDICES,
     UNIFORM_PI,
+    find_quick_trajectory_root,
     gram_pair_scores,
     minimax_positive_scale,
     pair_table,
@@ -88,3 +89,34 @@ def test_full_six_state_regret_probe_writes_outputs(tmp_path):
         "pairwise_control_variances.png", "metadata.json",
     ):
         assert (output / name).is_file()
+
+
+def test_resolver_recovers_merged_inputs_from_worker_paths(tmp_path):
+    attached = tmp_path / "attached"
+    worker_root = attached / "some-output" / "worker_paths"
+    widths = np.asarray(INTERIOR_WIDTHS)
+    gram = np.outer(widths, widths)
+    for path in ("geo_ht", "resource_ht"):
+        worker = worker_root / path
+        worker.mkdir(parents=True)
+        pair_rows, geometry_rows = [], []
+        for epoch in EPOCHS:
+            np.save(worker / f"interior_grams_epoch_{epoch:03d}.npy", gram[None])
+            for i, j in PAIR_INDICES:
+                pair_rows.append({
+                    "path": path, "epoch": epoch, "width_i": widths[i],
+                    "width_j": widths[j], "representation_sw": abs(widths[i] - widths[j]),
+                })
+            for width in widths:
+                geometry_rows.append({
+                    "path": path, "epoch": epoch, "width": width,
+                    "flops": 1e6 * width * width,
+                })
+        pd.DataFrame(pair_rows).to_csv(worker / "quick_pair_structure.csv", index=False)
+        pd.DataFrame(geometry_rows).to_csv(
+            worker / "quick_dynamic_geometry_by_width.csv", index=False
+        )
+    resolved = find_quick_trajectory_root(attached, tmp_path / "materialized")
+    assert (resolved / "quick_pair_structure.csv").is_file()
+    assert (resolved / "quick_dynamic_geometry_by_width.csv").is_file()
+    assert json.loads((resolved / "metadata.json").read_text())["training_performed"] is False
