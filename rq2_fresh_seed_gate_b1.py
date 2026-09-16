@@ -71,23 +71,39 @@ def _is_fresh_progress_root(root: Path) -> bool:
     )
 
 
+def _snapshot_payload_valid(path: Path, expected_epoch: int) -> bool:
+    """Accept current snapshots and legacy snapshots with omitted bookkeeping."""
+    try:
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+    except (OSError, RuntimeError, ValueError, KeyError, EOFError):
+        return False
+    if not isinstance(payload, dict) or not isinstance(payload.get("model"), dict):
+        return False
+    recorded_epoch = payload.get("epoch")
+    recorded_seed = payload.get("seed")
+    recorded_method = payload.get("method")
+    if recorded_epoch is not None and int(recorded_epoch) != int(expected_epoch):
+        return False
+    if recorded_seed is not None and int(recorded_seed) != FRESH_SEED:
+        return False
+    # Early fresh-screening snapshots may omit method metadata. A conflicting
+    # explicit method is still rejected.
+    if recorded_method is not None and recorded_method not in {
+        METHOD, "uniform_fixed", "uniform", "fresh_uniform",
+    }:
+        return False
+    return True
+
+
 def _has_complete_fresh_snapshots(root: Path) -> bool:
     checkpoints = root / "checkpoints"
     paths = [checkpoints / f"epoch_{epoch:03d}.pt" for epoch in CHECKPOINT_EPOCHS]
     if not all(path.is_file() for path in paths):
         return False
-    try:
-        for epoch, path in zip(CHECKPOINT_EPOCHS, paths):
-            payload = torch.load(path, map_location="cpu", weights_only=False)
-            if (
-                payload.get("method") != METHOD
-                or int(payload.get("seed", -1)) != FRESH_SEED
-                or int(payload.get("epoch", -1)) != epoch
-            ):
-                return False
-    except (OSError, RuntimeError, ValueError, KeyError):
-        return False
-    return True
+    return all(
+        _snapshot_payload_valid(path, epoch)
+        for epoch, path in zip(CHECKPOINT_EPOCHS, paths)
+    )
 
 
 def materialize_fresh_progress(
@@ -114,11 +130,19 @@ def materialize_fresh_progress(
     # Older/interrupted notebook outputs can contain all immutable snapshots
     # but miss the final protocol/export cell. Recover them by checkpoint
     # identity rather than forcing a scientifically unnecessary retrain.
-    snapshot_candidates = sorted({
-        path.parent.parent for path in input_root.rglob("epoch_100.pt")
-        if path.parent.name == "checkpoints"
-        and _has_complete_fresh_snapshots(path.parent.parent)
-    })
+    snapshot_candidates = []
+    for path in input_root.rglob("epoch_100.pt"):
+        if path.parent.name != "checkpoints":
+            continue
+        root = path.parent.parent
+        looks_like_fresh_root = (
+            root.name == "fresh_seed_6"
+            or (root / "frozen_fresh_protocol.json").is_file()
+            or (root / "training_provenance.json").is_file()
+        )
+        if looks_like_fresh_root and _has_complete_fresh_snapshots(root):
+            snapshot_candidates.append(root)
+    snapshot_candidates = sorted(set(snapshot_candidates))
     # A complete attached checkpoint family always beats partial accidental
     # progress in /working. Deduplicate repeated notebook/dataset copies by the
     # hashes of their three immutable snapshots.
@@ -135,6 +159,7 @@ def materialize_fresh_progress(
                 f"Conflicting complete seed-6 checkpoint families are attached: {snapshot_candidates}"
             )
         source = sorted(next(iter(by_identity.values())))[0]
+        print(f"Restoring complete fresh seed-6 snapshots from {source}", flush=True)
         shutil.copytree(source, destination, dirs_exist_ok=True)
         if not _has_complete_fresh_snapshots(destination):
             raise RuntimeError("Complete seed-6 snapshots failed materialization")
@@ -386,7 +411,7 @@ def extract_fresh_state(
     torch_device = torch.device(device if torch.cuda.is_available() else "cpu")
     checkpoint = root / "checkpoints" / f"epoch_{epoch:03d}.pt"
     payload = torch.load(checkpoint, map_location=torch_device, weights_only=False)
-    if payload.get("method") != METHOD or int(payload.get("seed", -1)) != FRESH_SEED:
+    if not _snapshot_payload_valid(checkpoint, epoch):
         raise RuntimeError("Fresh checkpoint identity mismatch")
     model = make_model(config, torch_device); model.load_state_dict(payload["model"]); model.eval()
     parameter_before = _state_digest(model.named_parameters())

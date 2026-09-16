@@ -86,9 +86,10 @@ def test_materialize_complete_snapshots_without_protocol(tmp_path):
     source = tmp_path / "input" / "old-notebook" / "fresh_seed_6"
     checkpoints = source / "checkpoints"; checkpoints.mkdir(parents=True)
     for epoch in CHECKPOINT_EPOCHS:
-        torch.save({
-            "model": {}, "epoch": epoch, "seed": 6, "method": "fresh_uniform_fixed",
-        }, checkpoints / f"epoch_{epoch:03d}.pt")
+        payload = {"model": {}, "epoch": epoch, "seed": 6}
+        if epoch != 50:  # Exercise compatibility with legacy omitted method metadata.
+            payload["method"] = "fresh_uniform_fixed"
+        torch.save(payload, checkpoints / f"epoch_{epoch:03d}.pt")
     destination = tmp_path / "working" / "fresh_seed_6"
     destination.mkdir(parents=True)
     # Simulate the accidental epoch-1/2 restart observed in Kaggle. Complete
