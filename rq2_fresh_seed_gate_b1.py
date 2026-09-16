@@ -71,6 +71,25 @@ def _is_fresh_progress_root(root: Path) -> bool:
     )
 
 
+def _has_complete_fresh_snapshots(root: Path) -> bool:
+    checkpoints = root / "checkpoints"
+    paths = [checkpoints / f"epoch_{epoch:03d}.pt" for epoch in CHECKPOINT_EPOCHS]
+    if not all(path.is_file() for path in paths):
+        return False
+    try:
+        for epoch, path in zip(CHECKPOINT_EPOCHS, paths):
+            payload = torch.load(path, map_location="cpu", weights_only=False)
+            if (
+                payload.get("method") != METHOD
+                or int(payload.get("seed", -1)) != FRESH_SEED
+                or int(payload.get("epoch", -1)) != epoch
+            ):
+                return False
+    except (OSError, RuntimeError, ValueError, KeyError):
+        return False
+    return True
+
+
 def materialize_fresh_progress(
     input_root: str | Path,
     destination: str | Path,
@@ -81,12 +100,24 @@ def materialize_fresh_progress(
         Path, (input_root, destination, extraction_root)
     )
     # Never replace newer in-session progress with an older attached artifact.
-    if _is_fresh_progress_root(destination):
+    if _is_fresh_progress_root(destination) and (
+        _has_complete_fresh_snapshots(destination)
+        or (destination / "phase_1_latest.pt").is_file()
+    ):
         return destination
     candidates = sorted({
         path.parent for path in input_root.rglob("frozen_fresh_protocol.json")
         if _is_fresh_progress_root(path.parent)
     })
+    # Older/interrupted notebook outputs can contain all immutable snapshots
+    # but miss the final protocol/export cell. Recover them by checkpoint
+    # identity rather than forcing a scientifically unnecessary retrain.
+    snapshot_candidates = sorted({
+        path.parent.parent for path in input_root.rglob("epoch_100.pt")
+        if path.parent.name == "checkpoints"
+        and _has_complete_fresh_snapshots(path.parent.parent)
+    })
+    candidates = sorted(set(candidates) | set(snapshot_candidates))
     if not candidates:
         matching_archives = []
         for archive in sorted(input_root.rglob("*.zip")):
@@ -107,8 +138,8 @@ def materialize_fresh_progress(
         raise RuntimeError(f"Multiple seed-6 progress roots are attached: {candidates}")
     if len(candidates) == 1:
         shutil.copytree(candidates[0], destination, dirs_exist_ok=True)
-        if not _is_fresh_progress_root(destination):
-            raise RuntimeError("Materialized seed-6 progress failed protocol validation")
+        if not (_is_fresh_progress_root(destination) or _has_complete_fresh_snapshots(destination)):
+            raise RuntimeError("Materialized seed-6 progress failed identity validation")
         return destination
     destination.mkdir(parents=True, exist_ok=True)
     return destination
@@ -263,6 +294,12 @@ def train_fresh_trajectory(config: dict, root: str | Path) -> Path:
     resolved = root / "resolved_config.yaml"
     if not resolved.is_file():
         resolved.write_text(yaml.safe_dump(config, sort_keys=False))
+    # The three immutable snapshots are all downstream Gate B1 needs. An
+    # interrupted export may lack resumable optimizer state/provenance; never
+    # retrain merely to recreate those administrative files.
+    if _has_complete_fresh_snapshots(root):
+        print("Fresh seed-6 checkpoints 10/50/100 already exist; skipping training.", flush=True)
+        return root / "checkpoints" / "epoch_100.pt"
     phase_one = _train_phase(config, root, 1, 50, 0.1, None)
     phase_two = _train_phase(config, root, 51, 100, 0.01, phase_one)
     checkpoints = [root / "checkpoints" / f"epoch_{epoch:03d}.pt" for epoch in CHECKPOINT_EPOCHS]

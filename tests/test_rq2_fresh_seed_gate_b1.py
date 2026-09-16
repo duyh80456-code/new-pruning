@@ -2,6 +2,7 @@ import json
 
 import numpy as np
 import pandas as pd
+import torch
 
 from rq2_fresh_seed_gate_b1 import (
     CHECKPOINT_EPOCHS, materialize_fresh_progress, merge_and_evaluate_fresh_states,
@@ -79,3 +80,16 @@ def test_materialize_fresh_progress_and_preserve_existing_working_copy(tmp_path)
     (destination / "phase_1_latest.pt").write_bytes(b"newer-in-session-progress")
     materialize_fresh_progress(tmp_path / "input", destination, tmp_path / "extract")
     assert (destination / "phase_1_latest.pt").read_bytes() == b"newer-in-session-progress"
+
+
+def test_materialize_complete_snapshots_without_protocol(tmp_path):
+    source = tmp_path / "input" / "old-notebook" / "fresh_seed_6"
+    checkpoints = source / "checkpoints"; checkpoints.mkdir(parents=True)
+    for epoch in CHECKPOINT_EPOCHS:
+        torch.save({
+            "model": {}, "epoch": epoch, "seed": 6, "method": "fresh_uniform_fixed",
+        }, checkpoints / f"epoch_{epoch:03d}.pt")
+    destination = tmp_path / "working" / "fresh_seed_6"
+    materialize_fresh_progress(tmp_path / "input", destination, tmp_path / "extract")
+    assert all((destination / "checkpoints" / f"epoch_{epoch:03d}.pt").is_file()
+               for epoch in CHECKPOINT_EPOCHS)
