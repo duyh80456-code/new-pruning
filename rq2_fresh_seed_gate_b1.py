@@ -99,13 +99,15 @@ def materialize_fresh_progress(
     input_root, destination, extraction_root = map(
         Path, (input_root, destination, extraction_root)
     )
-    # Never replace newer in-session progress with an older attached artifact.
-    if _is_fresh_progress_root(destination) and (
-        _has_complete_fresh_snapshots(destination)
-        or (destination / "phase_1_latest.pt").is_file()
-    ):
+    # A complete in-session tree is already the strongest available state.
+    if _has_complete_fresh_snapshots(destination):
         return destination
-    candidates = sorted({
+    current_partial = (
+        _is_fresh_progress_root(destination)
+        or (destination / "phase_1_latest.pt").is_file()
+        or (destination / "phase_2_latest.pt").is_file()
+    )
+    protocol_candidates = sorted({
         path.parent for path in input_root.rglob("frozen_fresh_protocol.json")
         if _is_fresh_progress_root(path.parent)
     })
@@ -117,7 +119,54 @@ def materialize_fresh_progress(
         if path.parent.name == "checkpoints"
         and _has_complete_fresh_snapshots(path.parent.parent)
     })
-    candidates = sorted(set(candidates) | set(snapshot_candidates))
+    # A complete attached checkpoint family always beats partial accidental
+    # progress in /working. Deduplicate repeated notebook/dataset copies by the
+    # hashes of their three immutable snapshots.
+    if snapshot_candidates:
+        by_identity = {}
+        for candidate in snapshot_candidates:
+            identity = tuple(
+                _sha256(candidate / "checkpoints" / f"epoch_{epoch:03d}.pt")
+                for epoch in CHECKPOINT_EPOCHS
+            )
+            by_identity.setdefault(identity, []).append(candidate)
+        if len(by_identity) != 1:
+            raise RuntimeError(
+                f"Conflicting complete seed-6 checkpoint families are attached: {snapshot_candidates}"
+            )
+        source = sorted(next(iter(by_identity.values())))[0]
+        shutil.copytree(source, destination, dirs_exist_ok=True)
+        if not _has_complete_fresh_snapshots(destination):
+            raise RuntimeError("Complete seed-6 snapshots failed materialization")
+        return destination
+    complete_archives = []
+    required_suffixes = tuple(
+        f"fresh_seed_6/checkpoints/epoch_{epoch:03d}.pt" for epoch in CHECKPOINT_EPOCHS
+    )
+    for archive in sorted(input_root.rglob("*.zip")):
+        try:
+            with zipfile.ZipFile(archive) as bundle:
+                names = tuple(bundle.namelist())
+        except (OSError, zipfile.BadZipFile):
+            continue
+        if all(any(name.endswith(suffix) for name in names) for suffix in required_suffixes):
+            complete_archives.append(archive)
+    if len(complete_archives) == 1:
+        extracted = _safe_extract(complete_archives[0], extraction_root / "complete_snapshots")
+        roots = sorted({
+            path.parent.parent for path in extracted.rglob("epoch_100.pt")
+            if path.parent.name == "checkpoints"
+            and _has_complete_fresh_snapshots(path.parent.parent)
+        })
+        if len(roots) != 1:
+            raise RuntimeError(f"Archive did not yield one valid fresh checkpoint root: {roots}")
+        shutil.copytree(roots[0], destination, dirs_exist_ok=True)
+        return destination
+    if len(complete_archives) > 1:
+        raise RuntimeError(f"Multiple archives contain complete fresh checkpoints: {complete_archives}")
+    if current_partial:
+        return destination
+    candidates = protocol_candidates
     if not candidates:
         matching_archives = []
         for archive in sorted(input_root.rglob("*.zip")):

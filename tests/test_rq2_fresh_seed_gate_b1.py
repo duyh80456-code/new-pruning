@@ -90,6 +90,15 @@ def test_materialize_complete_snapshots_without_protocol(tmp_path):
             "model": {}, "epoch": epoch, "seed": 6, "method": "fresh_uniform_fixed",
         }, checkpoints / f"epoch_{epoch:03d}.pt")
     destination = tmp_path / "working" / "fresh_seed_6"
+    destination.mkdir(parents=True)
+    # Simulate the accidental epoch-1/2 restart observed in Kaggle. Complete
+    # attached snapshots must win over this partial /working state.
+    (destination / "frozen_fresh_protocol.json").write_text(json.dumps({
+        "status": "FROZEN_BEFORE_FRESH_TRAINING", "seed": 6,
+        "trajectory": "fresh_uniform_fixed", "anchors": [0.25, 0.5, 0.75, 1.0],
+        "checkpoints": [10, 50, 100],
+    }))
+    (destination / "phase_1_latest.pt").write_bytes(b"accidental-epoch-2")
     materialize_fresh_progress(tmp_path / "input", destination, tmp_path / "extract")
     assert all((destination / "checkpoints" / f"epoch_{epoch:03d}.pt").is_file()
                for epoch in CHECKPOINT_EPOCHS)
