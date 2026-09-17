@@ -36,6 +36,7 @@ from rq2_fresh_puresw_replication import find_cifar100_root, find_gate_a_summary
 from rq2_gradient_variance_v3 import importance_corrected_variance
 from rq2_pair_policies import (
     PairPolicy,
+    ResourceGeoPairPolicy,
     ResourcePairPolicy,
     SWPairPolicy,
     UniformPairPolicy,
@@ -63,10 +64,15 @@ from training import kd_loss
 
 PILOT_SEED = 3
 METHODS = ("uniform", "resource", "pure_sw")
+EXTENSION_METHODS = ("resource_geo",)
+ALL_METHODS = METHODS + EXTENSION_METHODS
 REFRESH_STATES = (10, 20, 30, 40, 50, 60, 70, 80, 90)
 EVAL_EPOCHS = (10, 20, 30, 40, 50, 60, 70, 80, 90, 100)
 DIAGNOSTIC_STATES = (("common_warmup", 10),) + tuple(
     (method, epoch) for method in METHODS for epoch in (50, 100)
+)
+RPGEO_DIAGNOSTIC_STATES = DIAGNOSTIC_STATES + tuple(
+    ("resource_geo", epoch) for epoch in (50, 100)
 )
 PAIR_RNG_SEED = 310003
 
@@ -250,13 +256,20 @@ def _restore_matched_rng(state: dict, loader, pair_rng: np.random.Generator) -> 
     _restore_rng(state, loader, pair_rng)
 
 
-def _policy_from_method(method: str, resource: PairPolicy, current_sw: np.ndarray | None):
+def _policy_from_method(
+    method: str,
+    resource: PairPolicy,
+    current_sw: np.ndarray | None,
+    flops_by_width: dict[float, float] | None = None,
+):
     if method == "uniform":
         return UniformPairPolicy()
     if method == "resource":
         return resource
     if method == "pure_sw" and current_sw is not None:
         return SWPairPolicy(current_sw)
+    if method == "resource_geo" and current_sw is not None and flops_by_width is not None:
+        return ResourceGeoPairPolicy(flops_by_width, current_sw, resource_retention=1.0)
     raise RuntimeError(f"Cannot construct policy {method}")
 
 
@@ -284,6 +297,7 @@ def _policy_sweep(
     state_epoch: int,
     output_dir: Path,
     expected_geometry_ids_sha256: str,
+    flops_by_width: dict[float, float],
 ) -> tuple[PairPolicy, float]:
     """Run the identical calibration/representation sweep for every method."""
     started = time.perf_counter()
@@ -293,7 +307,7 @@ def _policy_sweep(
     if _ids_sha256(list(map(int, sample_ids))) != expected_geometry_ids_sha256:
         raise RuntimeError("Policy geometry sample IDs/order changed during training")
     sw = _sw_matrix(representation_pairs)
-    policy = _policy_from_method(method, resource_policy, sw)
+    policy = _policy_from_method(method, resource_policy, sw, flops_by_width)
     output_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         output_dir / f"epoch_{state_epoch:03d}.npz",
@@ -303,6 +317,16 @@ def _policy_sweep(
         widths=np.asarray(INTERIOR_WIDTHS),
     )
     policy.frame().to_csv(output_dir / f"epoch_{state_epoch:03d}.csv", index=False)
+    if method == "resource_geo":
+        refresh_path = output_dir.parent / "rpgeo_refresh_metrics.csv"
+        row = {"epoch": int(state_epoch), **policy.diagnostics}
+        if refresh_path.is_file():
+            rows = pd.read_csv(refresh_path)
+            rows = rows.loc[~rows.epoch.eq(state_epoch)]
+            rows = pd.concat([rows, pd.DataFrame([row])], ignore_index=True)
+        else:
+            rows = pd.DataFrame([row])
+        rows.sort_values("epoch").to_csv(refresh_path, index=False)
     return policy, time.perf_counter() - started
 
 
@@ -466,7 +490,7 @@ def train_branch(
     gate_a_summary: str | Path,
     method: str,
 ) -> Path:
-    if method not in METHODS:
+    if method not in ALL_METHODS:
         raise ValueError(method)
     root = Path(root); output = root / method
     output.mkdir(parents=True, exist_ok=True); (output / "checkpoints").mkdir(exist_ok=True)
@@ -485,7 +509,8 @@ def train_branch(
     model = make_model(config, device)
     optimizer, scheduler = _optimizer_scheduler(model, config, 0.1)
     pair_rng = np.random.default_rng(PAIR_RNG_SEED)
-    resource_policy = ResourcePairPolicy(_flops(gate_a_summary))
+    flops_by_width = _flops(gate_a_summary)
+    resource_policy = ResourcePairPolicy(flops_by_width)
     current_policy = UniformPairPolicy() if method == "uniform" else resource_policy
     latest = output / "latest.pt"; start_epoch = 11
     source = torch.load(latest if latest.is_file() else common_path, map_location="cpu", weights_only=False)
@@ -531,6 +556,7 @@ def train_branch(
                 model, policy_loaders, config, device, method, resource_policy,
                 state_epoch, output / "sw_policies",
                 subset_audit["policy_geometry_ids_sha256"],
+                flops_by_width,
             )
         if epoch == 51:
             optimizer, scheduler = _optimizer_scheduler(model, config, 0.01)
@@ -611,6 +637,7 @@ def train_branch(
         "policy_geometry_ids_sha256": subset_audit["policy_geometry_ids_sha256"],
         "bn_calibration_ids_sha256": subset_audit["bn_calibration_ids_sha256"],
         "validation_ids_sha256": subset_audit["validation_ids_sha256"],
+        "resource_retention": 1.0 if method == "resource_geo" else None,
     }
     (output / "training_provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     return final
@@ -661,6 +688,9 @@ def extract_diagnostic_state(
         "uniform": UniformPairPolicy().probabilities,
         "resource": resource.probabilities,
         "pure_sw": SWPairPolicy(sw).probabilities,
+        "resource_geo": ResourceGeoPairPolicy(
+            _flops(gate_a_summary), sw, resource_retention=1.0
+        ).probabilities,
         "oracle": solve_pair_lp(gram_pair_scores(mean_gram)[0], maximize=True),
     }
     variances = {
@@ -677,7 +707,8 @@ def extract_diagnostic_state(
     row = {
         "state": f"{method}_E{epoch}", "method": method, "epoch": int(epoch),
         "V_uniform": variances["uniform"], "V_resource": variances["resource"],
-        "V_SW": variances["pure_sw"], "V_oracle": variances["oracle"],
+        "V_SW": variances["pure_sw"], "V_resource_geo": variances["resource_geo"],
+        "V_oracle": variances["oracle"],
         "SW_beats_uniform": bool(variances["pure_sw"] < variances["uniform"]),
         "SW_beats_resource": bool(variances["pure_sw"] < variances["resource"]),
     }
@@ -829,9 +860,91 @@ def finalize_screening(root: str | Path) -> dict:
     return decision
 
 
+def finalize_rpgeo_extension(root: str | Path) -> dict:
+    """Finalize the four-way development comparison without a confirmatory claim."""
+    root = Path(root)
+    methods = ("uniform", "resource", "pure_sw", "resource_geo")
+    training = pd.concat([
+        pd.read_csv(root / method / "metrics.csv") for method in methods
+    ], ignore_index=True)
+    for column, message in (
+        ("pair_uniform_draw_sha256", "Pair-uniform draw stream differed"),
+        ("train_sample_order_sha256", "Training sample order differed"),
+    ):
+        audit = training.pivot(index="epoch", columns="method", values=column)
+        if set(audit.columns) != set(methods) or not audit.nunique(axis=1).eq(1).all():
+            raise RuntimeError(f"{message} across the four methods")
+    training.to_csv(root / "rpgeo_training_metrics_all_methods.csv", index=False)
+    dense = pd.concat([
+        pd.read_csv(root / method / "dense_metrics.csv") for method in methods
+    ], ignore_index=True)
+    dense.to_csv(root / "rpgeo_dense_metrics_all_methods.csv", index=False)
+    final = dense.loc[dense.epoch.eq(100)].copy()
+    rows = []
+    for method, group in final.groupby("method"):
+        rows.append({
+            "method": method,
+            "dense_mean_accuracy": float(group.accuracy.mean()),
+            "interior_mean_accuracy": float(
+                group.loc[group.width.between(0.30, 0.95), "accuracy"].mean()
+            ),
+            "worst_accuracy": float(group.accuracy.min()),
+            "low_mean_accuracy": float(
+                group.loc[group.width.between(0.30, 0.45), "accuracy"].mean()
+            ),
+            "mid_mean_accuracy": float(
+                group.loc[group.width.between(0.50, 0.75), "accuracy"].mean()
+            ),
+            "high_mean_accuracy": float(
+                group.loc[group.width.between(0.80, 0.95), "accuracy"].mean()
+            ),
+            "full_width_accuracy": float(
+                group.loc[np.isclose(group.width, 1.0), "accuracy"].iloc[0]
+            ),
+        })
+    summary = pd.DataFrame(rows).sort_values("method")
+    if set(summary.method) != set(methods):
+        raise RuntimeError("Four-way RP-Geo finalization requires all epoch-100 branches")
+    summary.to_csv(root / "rpgeo_method_summary.csv", index=False)
+    indexed = summary.set_index("method")
+    comparisons = {
+        f"resource_geo_minus_{baseline}": {
+            column: float(indexed.loc["resource_geo", column] - indexed.loc[baseline, column])
+            for column in summary.columns if column != "method"
+        }
+        for baseline in ("resource", "pure_sw", "uniform")
+    }
+    diagnostics = pd.concat([
+        pd.read_csv(root / "diagnostics" / f"{method}_E{epoch}" / "variance.csv")
+        for method, epoch in RPGEO_DIAGNOSTIC_STATES
+    ], ignore_index=True)
+    diagnostics.to_csv(root / "rpgeo_trajectory_variance_diagnostics.csv", index=False)
+    decision = {
+        "status": "RPGEO_FOUR_WAY_DEVELOPMENT_COMPLETE",
+        "seed": PILOT_SEED,
+        "methods": list(methods),
+        "comparisons": comparisons,
+        "rpgeo_beats_resource_dense_mean": bool(
+            comparisons["resource_geo_minus_resource"]["dense_mean_accuracy"] > 0
+        ),
+        "rpgeo_beats_resource_interior_mean": bool(
+            comparisons["resource_geo_minus_resource"]["interior_mean_accuracy"] > 0
+        ),
+        "matched_pair_uniform_draw_stream_verified": True,
+        "matched_training_sample_order_verified": True,
+        "test_used": False,
+        "single_development_seed_only": True,
+        "confirmatory_claim_authorized": False,
+    }
+    (root / "rpgeo_summary.json").write_text(json.dumps(decision, indent=2) + "\n")
+    return decision
+
+
 __all__ = [
-    "PILOT_SEED", "METHODS", "DIAGNOSTIC_STATES", "load_config",
+    "PILOT_SEED", "METHODS", "EXTENSION_METHODS", "ALL_METHODS",
+    "DIAGNOSTIC_STATES", "RPGEO_DIAGNOSTIC_STATES", "load_config",
     "find_cifar100_root", "find_gate_a_summary", "train_common_warmup",
     "find_seed7_pass_summary", "materialize_progress", "train_branch",
     "extract_diagnostic_state", "finalize", "finalize_screening",
+    "finalize_rpgeo_extension",
 ]

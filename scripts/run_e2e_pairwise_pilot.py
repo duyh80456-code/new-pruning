@@ -9,17 +9,24 @@ import subprocess
 import sys
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from threading import Lock
 from pathlib import Path
 
 import pandas as pd
 
 from rq2_e2e_pairwise_pilot import (
+    ALL_METHODS,
     DIAGNOSTIC_STATES,
     METHODS,
+    RPGEO_DIAGNOSTIC_STATES,
     extract_diagnostic_state,
     load_config,
     train_branch,
 )
+from rq2_rpgeo_gate import GATE_STATES, run_rpgeo_offline_gate
+
+
+_RUNTIME_LOCK = Lock()
 
 
 def _schedule(jobs, launch, gpu_ids, label):
@@ -46,8 +53,8 @@ def _schedule(jobs, launch, gpu_ids, label):
 def run_branches(root, dataset_root, gate_a_summary, gpu_ids=(0, 1), methods=METHODS):
     root, dataset_root, gate_a_summary = map(Path, (root, dataset_root, gate_a_summary))
     methods = tuple(methods)
-    if not methods or len(set(methods)) != len(methods) or not set(methods).issubset(METHODS):
-        raise ValueError(f"methods must be a non-empty unique subset of {METHODS}, got {methods}")
+    if not methods or len(set(methods)) != len(methods) or not set(methods).issubset(ALL_METHODS):
+        raise ValueError(f"methods must be a non-empty unique subset of {ALL_METHODS}, got {methods}")
 
     def launch(method, gpu):
         command = [
@@ -61,10 +68,11 @@ def run_branches(root, dataset_root, gate_a_summary, gpu_ids=(0, 1), methods=MET
 
     timings = _schedule(methods, launch, gpu_ids, "e2e branches")
     runtime_path = root / "branch_runtime.csv"
-    if runtime_path.is_file():
-        timings = pd.concat([pd.read_csv(runtime_path), timings], ignore_index=True)
-        timings = timings.drop_duplicates(subset=["job"], keep="last")
-    timings.to_csv(runtime_path, index=False)
+    with _RUNTIME_LOCK:
+        if runtime_path.is_file():
+            timings = pd.concat([pd.read_csv(runtime_path), timings], ignore_index=True)
+            timings = timings.drop_duplicates(subset=["job"], keep="last")
+        timings.to_csv(runtime_path, index=False)
     return timings
 
 
@@ -73,9 +81,9 @@ def run_diagnostics(
 ):
     root, dataset_root, gate_a_summary = map(Path, (root, dataset_root, gate_a_summary))
     jobs = tuple((str(method), int(epoch)) for method, epoch in jobs)
-    allowed = set(DIAGNOSTIC_STATES)
+    allowed = set(RPGEO_DIAGNOSTIC_STATES)
     if not jobs or len(set(jobs)) != len(jobs) or not set(jobs).issubset(allowed):
-        raise ValueError(f"jobs must be a non-empty unique subset of {DIAGNOSTIC_STATES}")
+        raise ValueError(f"jobs must be a non-empty unique subset of {RPGEO_DIAGNOSTIC_STATES}")
 
     def launch(job, gpu):
         method, epoch = job
@@ -99,10 +107,11 @@ def run_diagnostics(
 
     timings = _schedule(jobs, launch, gpu_ids, "e2e diagnostics")
     runtime_path = root / "diagnostic_runtime.csv"
-    if runtime_path.is_file():
-        timings = pd.concat([pd.read_csv(runtime_path), timings], ignore_index=True)
-        timings = timings.drop_duplicates(subset=["job"], keep="last")
-    timings.to_csv(runtime_path, index=False)
+    with _RUNTIME_LOCK:
+        if runtime_path.is_file():
+            timings = pd.concat([pd.read_csv(runtime_path), timings], ignore_index=True)
+            timings = timings.drop_duplicates(subset=["job"], keep="last")
+        timings.to_csv(runtime_path, index=False)
     return timings
 
 
@@ -128,6 +137,60 @@ def run_completion(root, dataset_root, gate_a_summary, gpu_ids=(0, 1)):
         root, dataset_root, gate_a_summary, gpu_ids, uniform_jobs
     )
     return branch_runtime, diagnostic_runtime
+
+
+def run_rpgeo_extension(root, dataset_root, gate_a_summary, gpu_ids=(0, 1)):
+    """Run Uniform and the gated RP-Geo lane concurrently on two GPUs."""
+    root, dataset_root, gate_a_summary = map(Path, (root, dataset_root, gate_a_summary))
+    gpu_ids = tuple(map(int, gpu_ids))
+    if len(gpu_ids) != 2:
+        raise RuntimeError("RP-Geo extension requires exactly two GPUs")
+    required = (
+        root / "common_warmup" / "epoch_010.pt",
+        root / "resource" / "checkpoints" / "epoch_100.pt",
+        root / "pure_sw" / "checkpoints" / "epoch_100.pt",
+    )
+    missing = [str(path) for path in required if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"Attach the completed protocol-v2 Resource/Pure-SW root: {missing}")
+
+    def rpgeo_lane():
+        run_diagnostics(root, dataset_root, gate_a_summary, (gpu_ids[1],), GATE_STATES)
+        gate = run_rpgeo_offline_gate(root, gate_a_summary, root / "rpgeo_offline_gate")
+        if gate["decision"] != "GO":
+            return gate
+        run_branches(
+            root, dataset_root, gate_a_summary, (gpu_ids[1],), ("resource_geo",)
+        )
+        return gate
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        uniform_future = pool.submit(
+            run_branches, root, dataset_root, gate_a_summary, (gpu_ids[0],), ("uniform",)
+        )
+        rpgeo_future = pool.submit(rpgeo_lane)
+        uniform_runtime = uniform_future.result()
+        gate = rpgeo_future.result()
+    if gate["decision"] != "GO":
+        return {
+            "status": "RPGEO_EXTENSION_STOPPED_AT_GATE",
+            "gate": gate,
+            "uniform_complete": True,
+            "resource_geo_complete": False,
+        }, uniform_runtime, pd.DataFrame()
+    remaining = tuple(
+        job for job in RPGEO_DIAGNOSTIC_STATES
+        if job[0] in {"uniform", "resource_geo"}
+    )
+    diagnostic_runtime = run_diagnostics(
+        root, dataset_root, gate_a_summary, gpu_ids, remaining
+    )
+    return {
+        "status": "RPGEO_EXTENSION_TRAINING_COMPLETE",
+        "gate": gate,
+        "uniform_complete": True,
+        "resource_geo_complete": True,
+    }, uniform_runtime, diagnostic_runtime
 
 
 def main():
