@@ -149,9 +149,17 @@ def test_rpgeo_extension_stops_training_when_frozen_gate_is_not_go(monkeypatch, 
         runner, "run_rpgeo_offline_gate",
         lambda *args, **kwargs: {"decision": "NO_GO", "training_authorized": False},
     )
+    monkeypatch.setattr(
+        runner, "run_rpgeo_retention_probe",
+        lambda *args, **kwargs: {
+            "status": "RPGEO_NEAR_OPTIMAL_RETENTION_PROBE_COMPLETE",
+            "training_authorized": False,
+        },
+    )
     result, _, diagnostics = runner.run_rpgeo_extension(
         tmp_path, tmp_path, tmp_path / "gate.json", gpu_ids=(0, 1)
     )
     assert result["status"] == "RPGEO_EXTENSION_STOPPED_AT_GATE"
+    assert result["retention_probe"]["training_authorized"] is False
     assert branch_calls == [("uniform",)]
     assert diagnostics.empty

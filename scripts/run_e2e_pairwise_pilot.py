@@ -23,7 +23,11 @@ from rq2_e2e_pairwise_pilot import (
     load_config,
     train_branch,
 )
-from rq2_rpgeo_gate import GATE_STATES, run_rpgeo_offline_gate
+from rq2_rpgeo_gate import (
+    GATE_STATES,
+    run_rpgeo_offline_gate,
+    run_rpgeo_retention_probe,
+)
 
 
 _RUNTIME_LOCK = Lock()
@@ -158,11 +162,14 @@ def run_rpgeo_extension(root, dataset_root, gate_a_summary, gpu_ids=(0, 1)):
         run_diagnostics(root, dataset_root, gate_a_summary, (gpu_ids[1],), GATE_STATES)
         gate = run_rpgeo_offline_gate(root, gate_a_summary, root / "rpgeo_offline_gate")
         if gate["decision"] != "GO":
-            return gate
+            probe = run_rpgeo_retention_probe(
+                root, gate_a_summary, root / "rpgeo_retention_probe"
+            )
+            return {"gate": gate, "retention_probe": probe}
         run_branches(
             root, dataset_root, gate_a_summary, (gpu_ids[1],), ("resource_geo",)
         )
-        return gate
+        return {"gate": gate, "retention_probe": None}
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         uniform_future = pool.submit(
@@ -170,11 +177,13 @@ def run_rpgeo_extension(root, dataset_root, gate_a_summary, gpu_ids=(0, 1)):
         )
         rpgeo_future = pool.submit(rpgeo_lane)
         uniform_runtime = uniform_future.result()
-        gate = rpgeo_future.result()
+        lane = rpgeo_future.result()
+    gate = lane["gate"]
     if gate["decision"] != "GO":
         return {
             "status": "RPGEO_EXTENSION_STOPPED_AT_GATE",
             "gate": gate,
+            "retention_probe": lane["retention_probe"],
             "uniform_complete": True,
             "resource_geo_complete": False,
         }, uniform_runtime, pd.DataFrame()

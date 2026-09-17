@@ -38,6 +38,8 @@ def test_rpgeo_preserves_resource_optimum_and_reports_refinement():
     assert np.max(np.abs(incidence_matrix() @ q - 1 / 7)) < 1e-8
     assert rpgeo.diagnostics["resource_retention_achieved"] >= 1.0 - 1e-7
     assert rpgeo.diagnostics["geo_rg"] >= rpgeo.diagnostics["geo_resource"] - 1e-10
+    assert rpgeo.diagnostics["resource_constraint_type"] == "exact_resource_equality"
+    assert rpgeo.diagnostics["l1_vs_resource"] < 1e-8
     assert np.isclose(
         rpgeo.diagnostics["l1_vs_resource"],
         np.abs(rpgeo.probabilities - resource.probabilities).sum(),

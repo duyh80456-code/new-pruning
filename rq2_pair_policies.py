@@ -52,6 +52,15 @@ def resource_score_vector(flops_by_width: dict[float, float]) -> np.ndarray:
     ])
 
 
+def anti_monotone_resource_probabilities() -> np.ndarray:
+    """Closed-form Resource optimum for strictly increasing log-FLOPs."""
+    pair_to_index = {pair: index for index, pair in enumerate(PAIR_INDICES)}
+    q = np.zeros(NUM_PAIRS, dtype=float)
+    for i in range(7):
+        q[pair_to_index[(i, 13 - i)]] = 1.0 / 7.0
+    return validate_pair_probabilities(q)
+
+
 def solve_resource_preserving_geo(
     sw_matrix: np.ndarray,
     flops_by_width: dict[float, float],
@@ -71,25 +80,37 @@ def solve_resource_preserving_geo(
     geometry = np.asarray([float(sw[i, j] ** 2) for i, j in PAIR_INDICES])
     q_resource = validate_pair_probabilities(solve_pair_lp(resource, maximize=True))
     resource_star = float(resource @ q_resource)
-    eps_num = max(1e-10, 1e-8 * abs(resource_star))
-    resource_minimum = retention * resource_star - eps_num
     resource_scale = max(float(np.max(np.abs(resource))), abs(resource_star), 1.0)
     geometry_scale = max(float(np.max(np.abs(geometry))), 1.0)
-    result = linprog(
-        -geometry / geometry_scale,
-        A_ub=-resource[None, :] / resource_scale,
-        b_ub=np.asarray([-resource_minimum / resource_scale]),
-        A_eq=incidence_matrix(),
-        b_eq=UNIFORM_PI,
-        bounds=[(0.0, None)] * NUM_PAIRS,
-        method="highs",
-    )
+    if retention == 1.0:
+        # This must be a mathematical face, not an epsilon-thickened near-optimal set.
+        a_eq = np.vstack([incidence_matrix(), resource[None, :] / resource_scale])
+        b_eq = np.concatenate([UNIFORM_PI, [resource_star / resource_scale]])
+        result = linprog(
+            -geometry / geometry_scale,
+            A_eq=a_eq, b_eq=b_eq,
+            bounds=[(0.0, None)] * NUM_PAIRS, method="highs",
+        )
+        resource_minimum = resource_star
+        constraint_type = "exact_resource_equality"
+    else:
+        resource_minimum = retention * resource_star
+        result = linprog(
+            -geometry / geometry_scale,
+            A_ub=-resource[None, :] / resource_scale,
+            b_ub=np.asarray([-resource_minimum / resource_scale]),
+            A_eq=incidence_matrix(), b_eq=UNIFORM_PI,
+            bounds=[(0.0, None)] * NUM_PAIRS, method="highs",
+        )
+        constraint_type = "near_optimal_resource_inequality"
     if not result.success:
         raise RuntimeError(f"RP-Geo LP failed: {result.message}")
     q = validate_pair_probabilities(result.x)
     resource_rg = float(resource @ q)
-    tolerance = 10.0 * eps_num
-    if resource_rg < resource_minimum - tolerance:
+    tolerance = 1e-8 * max(1.0, abs(resource_star))
+    if retention == 1.0 and abs(resource_rg - resource_star) > tolerance:
+        raise RuntimeError("Exact-face RP-Geo solution does not equal the Resource optimum")
+    if retention < 1.0 and resource_rg < resource_minimum - tolerance:
         raise RuntimeError("RP-Geo solution violates the Resource-retention constraint")
     positive = q[q > 0]
     diagnostics = {
@@ -99,7 +120,8 @@ def solve_resource_preserving_geo(
         "resource_retention_achieved": (
             resource_rg / resource_star if resource_star > 0 else 1.0
         ),
-        "resource_numerical_epsilon": eps_num,
+        "resource_constraint_type": constraint_type,
+        "resource_constraint_tolerance": tolerance,
         "geo_resource": float(geometry @ q_resource),
         "geo_rg": float(geometry @ q),
         "l1_vs_resource": float(np.abs(q - q_resource).sum()),
@@ -157,7 +179,11 @@ class UniformPairPolicy(PairPolicy):
 class ResourcePairPolicy(PairPolicy):
     def __init__(self, flops_by_width: dict[float, float]):
         scores = resource_score_vector(flops_by_width)
-        super().__init__("resource", validate_pair_probabilities(solve_pair_lp(scores, maximize=True)))
+        probabilities = validate_pair_probabilities(solve_pair_lp(scores, maximize=True))
+        closed_form = anti_monotone_resource_probabilities()
+        if np.max(np.abs(probabilities - closed_form)) > 1e-7:
+            raise RuntimeError("Resource LP disagrees with the anti-monotone closed-form optimum")
+        super().__init__("resource", probabilities)
 
 
 class SWPairPolicy(PairPolicy):
@@ -185,6 +211,7 @@ class ResourceGeoPairPolicy(PairPolicy):
 __all__ = [
     "PairPolicy", "UniformPairPolicy", "ResourcePairPolicy", "SWPairPolicy",
     "ResourceGeoPairPolicy", "resource_score_vector", "solve_resource_preserving_geo",
+    "anti_monotone_resource_probabilities",
     "solve_fixed_marginal_lp", "sample_pair", "pair_table",
     "validate_pair_probabilities",
 ]
