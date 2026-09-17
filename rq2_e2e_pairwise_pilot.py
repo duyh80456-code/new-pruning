@@ -22,7 +22,11 @@ import torch
 import yaml
 from torch.nn import functional as F
 
-from data import build_development_train_loaders, build_interim_validation_loaders
+from data import (
+    build_development_train_loaders,
+    build_interim_validation_loaders,
+    build_policy_geometry_loaders,
+)
 from evaluation import calibrate_batch_norm, evaluate_width
 from research_utils import seed_everything
 from rq2_anchor_placement import GRID, _sha256
@@ -114,16 +118,19 @@ def materialize_progress(
     )
     if (destination / "frozen_protocol.json").is_file():
         return destination
+    experiment_name = destination.name
     candidates = sorted({
         path.parent for path in input_root.rglob("frozen_protocol.json")
-        if path.parent.name == "e2e_pairwise_pilot"
+        if path.parent.name == experiment_name
     })
     if not candidates:
         archives = []
         for archive in input_root.rglob("*.zip"):
             try:
                 with zipfile.ZipFile(archive) as bundle:
-                    if any(name.endswith("e2e_pairwise_pilot/frozen_protocol.json") for name in bundle.namelist()):
+                    if any(name.endswith(
+                        f"{experiment_name}/frozen_protocol.json"
+                    ) for name in bundle.namelist()):
                         archives.append(archive)
             except (OSError, zipfile.BadZipFile):
                 continue
@@ -131,7 +138,7 @@ def materialize_progress(
             extracted = _safe_extract(archives[0], extraction_root)
             candidates = sorted({
                 path.parent for path in extracted.rglob("frozen_protocol.json")
-                if path.parent.name == "e2e_pairwise_pilot"
+                if path.parent.name == experiment_name
             })
         elif len(archives) > 1:
             raise RuntimeError(f"Multiple pilot resume archives attached: {archives}")
@@ -185,6 +192,50 @@ def _optimizer_scheduler(model, config: dict, learning_rate: float):
     return optimizer, torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50)
 
 
+def _ordered_loader_ids(loader) -> list[int]:
+    ids = []
+    for _, _, batch_ids in loader:
+        ids.extend(torch.as_tensor(batch_ids).cpu().tolist())
+    return list(map(int, ids))
+
+
+def _ids_sha256(ids: list[int]) -> str:
+    return hashlib.sha256(np.asarray(ids, dtype=np.int64).tobytes()).hexdigest()
+
+
+def _audit_policy_subsets(policy_loaders, evaluation_loaders, output: Path) -> dict:
+    calibration_ids = _ordered_loader_ids(policy_loaders.calibration)
+    policy_ids = _ordered_loader_ids(policy_loaders.geometry)
+    validation_ids = _ordered_loader_ids(evaluation_loaders.validation)
+    sets = map(set, (calibration_ids, policy_ids, validation_ids))
+    calibration_set, policy_set, validation_set = sets
+    if calibration_set & policy_set:
+        raise RuntimeError("Policy geometry overlaps BN calibration")
+    if calibration_set & validation_set or policy_set & validation_set:
+        raise RuntimeError("Online-policy inputs overlap validation")
+    audit = {
+        "status": "POLICY_GEOMETRY_SUBSETS_AUDITED",
+        "policy_geometry_source": "training_split_disjoint_from_bn_calibration",
+        "bn_calibration_count": len(calibration_ids),
+        "policy_geometry_count": len(policy_ids),
+        "validation_count": len(validation_ids),
+        "bn_calibration_ids_sha256": _ids_sha256(calibration_ids),
+        "policy_geometry_ids_sha256": _ids_sha256(policy_ids),
+        "validation_ids_sha256": _ids_sha256(validation_ids),
+        "bn_calibration_policy_geometry_disjoint": True,
+        "bn_calibration_validation_disjoint": True,
+        "policy_geometry_validation_disjoint": True,
+    }
+    path = output / "data_subset_audit.json"
+    if path.is_file():
+        previous = json.loads(path.read_text())
+        if previous != audit:
+            raise RuntimeError("Policy subset identity changed across resume")
+    else:
+        path.write_text(json.dumps(audit, indent=2) + "\n")
+    return audit
+
+
 def _capture_matched_rng(loader, pair_rng: np.random.Generator, device: torch.device) -> dict:
     """Capture one logical CUDA stream so a GPU-0 checkpoint restores on any worker GPU."""
     state = _capture_rng(loader, pair_rng)
@@ -232,12 +283,15 @@ def _policy_sweep(
     resource_policy: PairPolicy,
     state_epoch: int,
     output_dir: Path,
+    expected_geometry_ids_sha256: str,
 ) -> tuple[PairPolicy, float]:
     """Run the identical calibration/representation sweep for every method."""
     started = time.perf_counter()
     _, _, representation_pairs, sample_ids = _current_geometry(
         model, loaders, config, device
     )
+    if _ids_sha256(list(map(int, sample_ids))) != expected_geometry_ids_sha256:
+        raise RuntimeError("Policy geometry sample IDs/order changed during training")
     sw = _sw_matrix(representation_pairs)
     policy = _policy_from_method(method, resource_policy, sw)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -348,8 +402,9 @@ def train_common_warmup(config: dict, root: str | Path) -> Path:
     for epoch in range(start_epoch, 11):
         model.train(); started = time.perf_counter()
         pair_counts = np.zeros(NUM_PAIRS, dtype=int); width_counts = np.zeros(14, dtype=int)
-        losses = []; draws = []
-        for images, labels, _ in loaders.train:
+        losses = []; draws = []; epoch_sample_ids = []
+        for images, labels, sample_ids in loaders.train:
+            epoch_sample_ids.extend(torch.as_tensor(sample_ids).cpu().tolist())
             images, labels = images.to(device), labels.to(device)
             draw = float(pair_rng.random()); draws.append(draw)
             wi, wj, pair_index = policy.sample(draw)
@@ -367,6 +422,7 @@ def train_common_warmup(config: dict, root: str | Path) -> Path:
             "train_loss": float(np.mean(losses)), "learning_rate": lr,
             "wall_clock_seconds": time.perf_counter() - started,
             "pair_uniform_draw_sha256": hashlib.sha256(np.asarray(draws).tobytes()).hexdigest(),
+            "train_sample_order_sha256": _ids_sha256(list(map(int, epoch_sample_ids))),
         })
         for index, (i, j) in enumerate(PAIR_INDICES):
             pair_rows.append({
@@ -424,6 +480,8 @@ def train_branch(
     seed_everything(PILOT_SEED)
     loaders = build_development_train_loaders(config, training_seed=PILOT_SEED)
     evaluation_loaders = build_interim_validation_loaders(config)
+    policy_loaders = build_policy_geometry_loaders(config)
+    subset_audit = _audit_policy_subsets(policy_loaders, evaluation_loaders, output)
     model = make_model(config, device)
     optimizer, scheduler = _optimizer_scheduler(model, config, 0.1)
     pair_rng = np.random.default_rng(PAIR_RNG_SEED)
@@ -470,15 +528,17 @@ def train_branch(
         policy_seconds = 0.0
         if state_epoch in REFRESH_STATES:
             current_policy, policy_seconds = _policy_sweep(
-                model, evaluation_loaders, config, device, method, resource_policy,
+                model, policy_loaders, config, device, method, resource_policy,
                 state_epoch, output / "sw_policies",
+                subset_audit["policy_geometry_ids_sha256"],
             )
         if epoch == 51:
             optimizer, scheduler = _optimizer_scheduler(model, config, 0.01)
         model.train(); started = time.perf_counter()
         pair_counts = np.zeros(NUM_PAIRS, dtype=int); width_counts = np.zeros(14, dtype=int)
-        losses, draws = [], []
-        for images, labels, _ in loaders.train:
+        losses, draws, epoch_sample_ids = [], [], []
+        for images, labels, sample_ids in loaders.train:
+            epoch_sample_ids.extend(torch.as_tensor(sample_ids).cpu().tolist())
             images, labels = images.to(device), labels.to(device)
             draw = float(pair_rng.random()); draws.append(draw)
             wi, wj, pair_index = current_policy.sample(draw)
@@ -497,6 +557,7 @@ def train_branch(
             "wall_clock_seconds": time.perf_counter() - started,
             "policy_computation_seconds": policy_seconds,
             "pair_uniform_draw_sha256": hashlib.sha256(np.asarray(draws).tobytes()).hexdigest(),
+            "train_sample_order_sha256": _ids_sha256(list(map(int, epoch_sample_ids))),
         })
         for index, (i, j) in enumerate(PAIR_INDICES):
             pair_rows.append({
@@ -543,6 +604,13 @@ def train_branch(
         "loss_reduction": "mean_of_four_equal_subnet_losses",
         "importance_or_ht_weighting": False, "learned_hybrid": False,
         "accuracy_used_to_build_policy": False, "test_used": False,
+        "validation_used_to_build_policy": False,
+        "test_used_to_build_policy": False,
+        "policy_geometry_source": subset_audit["policy_geometry_source"],
+        "policy_geometry_size": subset_audit["policy_geometry_count"],
+        "policy_geometry_ids_sha256": subset_audit["policy_geometry_ids_sha256"],
+        "bn_calibration_ids_sha256": subset_audit["bn_calibration_ids_sha256"],
+        "validation_ids_sha256": subset_audit["validation_ids_sha256"],
     }
     (output / "training_provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     return final
@@ -583,9 +651,9 @@ def extract_diagnostic_state(
         grams.append((matrix @ matrix.T).detach().double().cpu().numpy())
         print(f"[e2e diagnostic] {method}-{epoch}: batch {batch_index+1}/{NUM_BATCHES}", flush=True)
     grams = np.stack(grams); checks = _gram_checks(grams); mean_gram = grams.mean(axis=0)
-    loaders = build_interim_validation_loaders(config)
+    policy_loaders = build_policy_geometry_loaders(config)
     _, _, representation_pairs, geometry_ids = _current_geometry(
-        model, loaders, config, torch_device
+        model, policy_loaders, config, torch_device
     )
     sw = _sw_matrix(representation_pairs)
     resource = ResourcePairPolicy(_flops(gate_a_summary))
@@ -635,6 +703,11 @@ def finalize(root: str | Path) -> dict:
     )
     if set(draw_audit.columns) != set(METHODS) or not draw_audit.nunique(axis=1).eq(1).all():
         raise RuntimeError("The three branches did not consume the same pair-uniform draw stream")
+    data_audit = training_metrics.pivot(
+        index="epoch", columns="method", values="train_sample_order_sha256"
+    )
+    if set(data_audit.columns) != set(METHODS) or not data_audit.nunique(axis=1).eq(1).all():
+        raise RuntimeError("Training sample order differed across methods")
     training_metrics.to_csv(root / "training_metrics_all_methods.csv", index=False)
     dense = pd.concat([pd.read_csv(root / method / "dense_metrics.csv") for method in METHODS])
     dense.to_csv(root / "dense_metrics_all_methods.csv", index=False)
@@ -644,6 +717,9 @@ def finalize(root: str | Path) -> dict:
         rows.append({
             "method": method,
             "dense_mean_accuracy": float(group.accuracy.mean()),
+            "interior_mean_accuracy": float(
+                group.loc[group.width.between(0.30, 0.95), "accuracy"].mean()
+            ),
             "worst_accuracy": float(group.accuracy.min()),
             "low_mean_accuracy": float(group.loc[group.width.between(0.30, 0.45), "accuracy"].mean()),
             "mid_mean_accuracy": float(group.loc[group.width.between(0.50, 0.75), "accuracy"].mean()),
@@ -674,6 +750,7 @@ def finalize(root: str | Path) -> dict:
         "full_width_delta_vs_uniform": comparisons["pure_sw_minus_uniform"]["full_width_accuracy"],
         "comparisons": comparisons, "test_used": False,
         "matched_pair_uniform_draw_stream_verified": True,
+        "matched_training_sample_order_verified": True,
         "single_development_seed_only": True,
         "confirmatory_claim_authorized": False,
     }

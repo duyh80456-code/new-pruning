@@ -28,6 +28,7 @@ def test_finalize_e2e_pairwise_pilot_is_development_only(tmp_path):
                 "method": method, "seed": 3, "epoch": epoch,
                 "train_loss": 1.0, "learning_rate": 0.1,
                 "pair_uniform_draw_sha256": f"matched-{epoch}",
+                "train_sample_order_sha256": f"data-{epoch}",
             }
             for epoch in range(11, 101)
         ]).to_csv(folder / "metrics.csv", index=False)
@@ -45,5 +46,8 @@ def test_finalize_e2e_pairwise_pilot_is_development_only(tmp_path):
     assert result["single_development_seed_only"] is True
     assert result["confirmatory_claim_authorized"] is False
     assert result["matched_pair_uniform_draw_stream_verified"] is True
+    assert result["matched_training_sample_order_verified"] is True
     assert (tmp_path / "method_summary.csv").is_file()
     assert (tmp_path / "trajectory_variance_diagnostics.csv").is_file()
+    method_summary = pd.read_csv(tmp_path / "method_summary.csv")
+    assert "interior_mean_accuracy" in method_summary.columns

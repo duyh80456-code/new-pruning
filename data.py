@@ -40,6 +40,14 @@ class InterimValidationLoaders:
 
 
 @dataclass(frozen=True)
+class PolicyGeometryLoaders:
+    """Training-derived deterministic loaders used only to construct online policies."""
+
+    calibration: DataLoader
+    geometry: DataLoader
+
+
+@dataclass(frozen=True)
 class DevelopmentTrainLoaders:
     """Leakage-safe training loaders that never instantiate the CIFAR test split."""
 
@@ -309,6 +317,54 @@ def build_interim_validation_loaders(config: dict) -> InterimValidationLoaders:
         geometry=DataLoader(
             Subset(deterministic_train, validation_indices[:geometry_size]),
             batch_size=evaluation_batch_size, shuffle=False,
+            num_workers=workers, pin_memory=pin_memory,
+        ),
+    )
+
+
+def build_policy_geometry_loaders(config: dict) -> PolicyGeometryLoaders:
+    """Build leakage-safe online-policy geometry from the 45k training split.
+
+    BN calibration and policy geometry are fixed, deterministic, disjoint
+    slices of the training split.  Neither slice intersects validation.
+    """
+    data_cfg = config["dataset"]
+    if data_cfg["name"].lower() != "cifar100" or data_cfg.get("fake_data", False):
+        raise ValueError("Policy geometry loaders require real CIFAR-100")
+    _, deterministic = _cifar100_transforms()
+    root = Path(data_cfg["root"])
+    download = data_cfg.get("download", False)
+    raw_train = datasets.CIFAR100(root=root, train=True, transform=None, download=download)
+    deterministic_train = IndexedDataset(
+        datasets.CIFAR100(root=root, train=True, transform=deterministic, download=False)
+    )
+    train_indices, validation_indices = _stratified_cifar_split(
+        raw_train.targets, int(data_cfg["validation_size"]), int(data_cfg["split_seed"])
+    )
+    calibration_size = int(data_cfg["bn_calibration_size"])
+    geometry_size = int(data_cfg["feature_subset_size"])
+    if calibration_size + geometry_size > len(train_indices):
+        raise ValueError("BN calibration plus policy geometry exceeds the training split")
+    calibration_indices = train_indices[:calibration_size]
+    geometry_indices = train_indices[calibration_size:calibration_size + geometry_size]
+    calibration_set, geometry_set, validation_set = map(
+        set, (calibration_indices, geometry_indices, validation_indices)
+    )
+    if calibration_set & geometry_set:
+        raise RuntimeError("Policy geometry overlaps BN calibration")
+    if calibration_set & validation_set or geometry_set & validation_set:
+        raise RuntimeError("Online-policy inputs overlap validation")
+    workers = int(data_cfg.get("num_workers", 0))
+    pin_memory = torch.cuda.is_available()
+    return PolicyGeometryLoaders(
+        calibration=DataLoader(
+            Subset(deterministic_train, calibration_indices),
+            batch_size=int(config["training"]["batch_size"]), shuffle=False,
+            num_workers=workers, pin_memory=pin_memory,
+        ),
+        geometry=DataLoader(
+            Subset(deterministic_train, geometry_indices),
+            batch_size=int(config["evaluation"]["batch_size"]), shuffle=False,
             num_workers=workers, pin_memory=pin_memory,
         ),
     )

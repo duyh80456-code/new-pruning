@@ -3,7 +3,7 @@ import json
 
 import pandas as pd
 
-from data import build_interim_validation_loaders
+from data import build_interim_validation_loaders, build_policy_geometry_loaders
 from finalgeo_confirmatory import (
     METHOD_ANCHORS,
     finalize_confirmatory,
@@ -124,6 +124,43 @@ def test_interim_validation_loader_never_constructs_test_split(monkeypatch, tmp_
     loaders = build_interim_validation_loaders(config)
     assert calls == [True, True]
     assert len(loaders.validation.dataset) == 100
+
+
+def test_policy_geometry_uses_disjoint_training_slice(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeCifar:
+        def __init__(self, root, train, transform, download):
+            calls.append(bool(train))
+            self.targets = list(range(100)) * 3
+
+        def __len__(self):
+            return len(self.targets)
+
+        def __getitem__(self, index):
+            raise AssertionError("Loader construction should not fetch an image")
+
+    monkeypatch.setattr("data.datasets.CIFAR100", FakeCifar)
+    config = {
+        "dataset": {
+            "name": "cifar100", "root": str(tmp_path), "download": False,
+            "split_seed": 7, "validation_size": 100, "bn_calibration_size": 40,
+            "feature_subset_size": 60, "num_workers": 0,
+        },
+        "training": {"batch_size": 8},
+        "evaluation": {"batch_size": 16},
+    }
+    policy = build_policy_geometry_loaders(config)
+    evaluation = build_interim_validation_loaders(config)
+    calibration_ids = set(policy.calibration.dataset.indices)
+    geometry_ids = set(policy.geometry.dataset.indices)
+    validation_ids = set(evaluation.validation.dataset.indices)
+    assert calls == [True, True, True, True]
+    assert len(calibration_ids) == 40
+    assert len(geometry_ids) == 60
+    assert calibration_ids.isdisjoint(geometry_ids)
+    assert calibration_ids.isdisjoint(validation_ids)
+    assert geometry_ids.isdisjoint(validation_ids)
 
 
 def test_finalize_applies_frozen_success_gates(tmp_path):
