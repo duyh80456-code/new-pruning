@@ -68,8 +68,14 @@ def run_branches(root, dataset_root, gate_a_summary, gpu_ids=(0, 1), methods=MET
     return timings
 
 
-def run_diagnostics(root, dataset_root, gate_a_summary, gpu_ids=(0, 1)):
+def run_diagnostics(
+    root, dataset_root, gate_a_summary, gpu_ids=(0, 1), jobs=DIAGNOSTIC_STATES,
+):
     root, dataset_root, gate_a_summary = map(Path, (root, dataset_root, gate_a_summary))
+    jobs = tuple((str(method), int(epoch)) for method, epoch in jobs)
+    allowed = set(DIAGNOSTIC_STATES)
+    if not jobs or len(set(jobs)) != len(jobs) or not set(jobs).issubset(allowed):
+        raise ValueError(f"jobs must be a non-empty unique subset of {DIAGNOSTIC_STATES}")
 
     def launch(job, gpu):
         method, epoch = job
@@ -91,9 +97,37 @@ def run_diagnostics(root, dataset_root, gate_a_summary, gpu_ids=(0, 1)):
         started = time.perf_counter()
         return subprocess.run(command, env=env).returncode, time.perf_counter() - started
 
-    timings = _schedule(DIAGNOSTIC_STATES, launch, gpu_ids, "e2e diagnostics")
-    timings.to_csv(root / "diagnostic_runtime.csv", index=False)
+    timings = _schedule(jobs, launch, gpu_ids, "e2e diagnostics")
+    runtime_path = root / "diagnostic_runtime.csv"
+    if runtime_path.is_file():
+        timings = pd.concat([pd.read_csv(runtime_path), timings], ignore_index=True)
+        timings = timings.drop_duplicates(subset=["job"], keep="last")
+    timings.to_csv(runtime_path, index=False)
     return timings
+
+
+def run_completion(root, dataset_root, gate_a_summary, gpu_ids=(0, 1)):
+    """Train Uniform while the other GPU diagnoses already-complete branches."""
+    gpu_ids = tuple(map(int, gpu_ids))
+    if len(gpu_ids) != 2:
+        raise RuntimeError("Optimized completion requires exactly two GPUs")
+    existing_jobs = tuple(
+        job for job in DIAGNOSTIC_STATES if job[0] in {"common_warmup", "resource", "pure_sw"}
+    )
+    uniform_jobs = tuple(job for job in DIAGNOSTIC_STATES if job[0] == "uniform")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        branch_future = pool.submit(
+            run_branches, root, dataset_root, gate_a_summary, (gpu_ids[0],), ("uniform",)
+        )
+        diagnostic_future = pool.submit(
+            run_diagnostics, root, dataset_root, gate_a_summary, (gpu_ids[1],), existing_jobs
+        )
+        branch_runtime = branch_future.result()
+        diagnostic_future.result()
+    diagnostic_runtime = run_diagnostics(
+        root, dataset_root, gate_a_summary, gpu_ids, uniform_jobs
+    )
+    return branch_runtime, diagnostic_runtime
 
 
 def main():

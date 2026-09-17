@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import scripts.run_e2e_pairwise_pilot as runner
 
 from rq2_e2e_pairwise_pilot import (
     DIAGNOSTIC_STATES,
@@ -62,3 +63,27 @@ def test_finalize_e2e_pairwise_pilot_is_development_only(tmp_path):
     assert screening["uniform_pending"] is True
     assert screening["matched_training_sample_order_verified"] is True
     assert (tmp_path / "screening_method_summary.csv").is_file()
+
+
+def test_completion_overlaps_uniform_with_existing_diagnostics(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_branches(root, dataset_root, gate_a_summary, gpu_ids, methods):
+        calls.append(("branches", tuple(gpu_ids), tuple(methods)))
+        return pd.DataFrame([{"job": "uniform"}])
+
+    def fake_diagnostics(root, dataset_root, gate_a_summary, gpu_ids, jobs):
+        calls.append(("diagnostics", tuple(gpu_ids), tuple(jobs)))
+        return pd.DataFrame([{"job": str(job)} for job in jobs])
+
+    monkeypatch.setattr(runner, "run_branches", fake_branches)
+    monkeypatch.setattr(runner, "run_diagnostics", fake_diagnostics)
+    branch_runtime, diagnostic_runtime = runner.run_completion(
+        tmp_path, tmp_path, tmp_path / "gate.json", gpu_ids=(0, 1)
+    )
+    assert not branch_runtime.empty and not diagnostic_runtime.empty
+    assert ("branches", (0,), ("uniform",)) in calls
+    existing = next(call for call in calls if call[0] == "diagnostics" and call[1] == (1,))
+    assert {method for method, _ in existing[2]} == {"common_warmup", "resource", "pure_sw"}
+    uniform = next(call for call in calls if call[0] == "diagnostics" and call[1] == (0, 1))
+    assert {method for method, _ in uniform[2]} == {"uniform"}
