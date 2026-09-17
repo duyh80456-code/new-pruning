@@ -1,0 +1,49 @@
+import json
+from pathlib import Path
+
+import pandas as pd
+
+from rq2_e2e_pairwise_pilot import DIAGNOSTIC_STATES, METHODS, finalize
+from rq2_anchor_placement import GRID
+
+
+def test_finalize_e2e_pairwise_pilot_is_development_only(tmp_path):
+    rows = []
+    for method_index, method in enumerate(METHODS):
+        folder = tmp_path / method
+        folder.mkdir()
+        for epoch in range(10, 101, 10):
+            for width in GRID:
+                rows.append({
+                    "method": method, "seed": 3, "epoch": epoch,
+                    "split": "validation_5k", "width": width,
+                    "accuracy": 0.5 + 0.01 * method_index + 0.001 * width,
+                    "loss": 1.0,
+                })
+        pd.DataFrame([row for row in rows if row["method"] == method]).to_csv(
+            folder / "dense_metrics.csv", index=False
+        )
+        pd.DataFrame([
+            {
+                "method": method, "seed": 3, "epoch": epoch,
+                "train_loss": 1.0, "learning_rate": 0.1,
+                "pair_uniform_draw_sha256": f"matched-{epoch}",
+            }
+            for epoch in range(11, 101)
+        ]).to_csv(folder / "metrics.csv", index=False)
+    for method, epoch in DIAGNOSTIC_STATES:
+        folder = tmp_path / "diagnostics" / f"{method}_E{epoch}"
+        folder.mkdir(parents=True)
+        pd.DataFrame([{
+            "state": f"{method}_E{epoch}", "method": method, "epoch": epoch,
+            "V_uniform": 3.0, "V_resource": 2.5, "V_SW": 2.0,
+            "V_oracle": 1.0, "SW_beats_uniform": True, "SW_beats_resource": True,
+        }]).to_csv(folder / "variance.csv", index=False)
+    result = finalize(tmp_path)
+    assert result["status"] == "E2E_PAIRWISE_PILOT_COMPLETE"
+    assert result["primary_dense_accuracy_pass"] is True
+    assert result["single_development_seed_only"] is True
+    assert result["confirmatory_claim_authorized"] is False
+    assert result["matched_pair_uniform_draw_stream_verified"] is True
+    assert (tmp_path / "method_summary.csv").is_file()
+    assert (tmp_path / "trajectory_variance_diagnostics.csv").is_file()
