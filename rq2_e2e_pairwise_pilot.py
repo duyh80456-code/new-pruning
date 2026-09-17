@@ -758,9 +758,80 @@ def finalize(root: str | Path) -> dict:
     return decision
 
 
+def finalize_screening(root: str | Path) -> dict:
+    """Summarize Resource versus Pure-SW without implying a full-pilot claim."""
+    root = Path(root)
+    methods = ("resource", "pure_sw")
+    training_metrics = pd.concat([
+        pd.read_csv(root / method / "metrics.csv") for method in methods
+    ], ignore_index=True)
+    for column, message in (
+        ("pair_uniform_draw_sha256", "Pair-uniform draw stream differed"),
+        ("train_sample_order_sha256", "Training sample order differed"),
+    ):
+        audit = training_metrics.pivot(index="epoch", columns="method", values=column)
+        if set(audit.columns) != set(methods) or not audit.nunique(axis=1).eq(1).all():
+            raise RuntimeError(f"{message} across screening methods")
+    training_metrics.to_csv(root / "training_metrics_screening.csv", index=False)
+    dense = pd.concat([
+        pd.read_csv(root / method / "dense_metrics.csv") for method in methods
+    ], ignore_index=True)
+    dense.to_csv(root / "dense_metrics_screening.csv", index=False)
+    final = dense.loc[dense.epoch.eq(100)].copy()
+    rows = []
+    for method, group in final.groupby("method"):
+        rows.append({
+            "method": method,
+            "dense_mean_accuracy": float(group.accuracy.mean()),
+            "interior_mean_accuracy": float(
+                group.loc[group.width.between(0.30, 0.95), "accuracy"].mean()
+            ),
+            "worst_accuracy": float(group.accuracy.min()),
+            "low_mean_accuracy": float(
+                group.loc[group.width.between(0.30, 0.45), "accuracy"].mean()
+            ),
+            "mid_mean_accuracy": float(
+                group.loc[group.width.between(0.50, 0.75), "accuracy"].mean()
+            ),
+            "high_mean_accuracy": float(
+                group.loc[group.width.between(0.80, 0.95), "accuracy"].mean()
+            ),
+            "full_width_accuracy": float(
+                group.loc[np.isclose(group.width, 1.0), "accuracy"].iloc[0]
+            ),
+        })
+    table = pd.DataFrame(rows).sort_values("method")
+    if set(table.method) != set(methods):
+        raise RuntimeError("Screening requires complete Resource and Pure-SW epoch-100 metrics")
+    table.to_csv(root / "screening_method_summary.csv", index=False)
+    indexed = table.set_index("method")
+    delta = {
+        column: float(indexed.loc["pure_sw", column] - indexed.loc["resource", column])
+        for column in table.columns if column != "method"
+    }
+    decision = {
+        "status": "E2E_PAIRWISE_RESOURCE_PURE_SW_SCREENING_COMPLETE",
+        "seed": PILOT_SEED,
+        "methods_completed": list(methods),
+        "pure_sw_minus_resource": delta,
+        "pure_sw_beats_resource_dense_mean": bool(delta["dense_mean_accuracy"] > 0),
+        "pure_sw_beats_resource_interior_mean": bool(delta["interior_mean_accuracy"] > 0),
+        "matched_pair_uniform_draw_stream_verified": True,
+        "matched_training_sample_order_verified": True,
+        "test_used": False,
+        "uniform_pending": True,
+        "diagnostics_pending": True,
+        "full_pilot_complete": False,
+        "single_development_seed_only": True,
+        "confirmatory_claim_authorized": False,
+    }
+    (root / "screening_summary.json").write_text(json.dumps(decision, indent=2) + "\n")
+    return decision
+
+
 __all__ = [
     "PILOT_SEED", "METHODS", "DIAGNOSTIC_STATES", "load_config",
     "find_cifar100_root", "find_gate_a_summary", "train_common_warmup",
     "find_seed7_pass_summary", "materialize_progress", "train_branch",
-    "extract_diagnostic_state", "finalize",
+    "extract_diagnostic_state", "finalize", "finalize_screening",
 ]

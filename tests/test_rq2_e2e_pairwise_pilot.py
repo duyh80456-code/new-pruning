@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from rq2_e2e_pairwise_pilot import DIAGNOSTIC_STATES, METHODS, finalize
+from rq2_e2e_pairwise_pilot import (
+    DIAGNOSTIC_STATES,
+    METHODS,
+    finalize,
+    finalize_screening,
+)
 from rq2_anchor_placement import GRID
 
 
@@ -51,3 +56,9 @@ def test_finalize_e2e_pairwise_pilot_is_development_only(tmp_path):
     assert (tmp_path / "trajectory_variance_diagnostics.csv").is_file()
     method_summary = pd.read_csv(tmp_path / "method_summary.csv")
     assert "interior_mean_accuracy" in method_summary.columns
+    screening = finalize_screening(tmp_path)
+    assert screening["status"] == "E2E_PAIRWISE_RESOURCE_PURE_SW_SCREENING_COMPLETE"
+    assert screening["full_pilot_complete"] is False
+    assert screening["uniform_pending"] is True
+    assert screening["matched_training_sample_order_verified"] is True
+    assert (tmp_path / "screening_method_summary.csv").is_file()

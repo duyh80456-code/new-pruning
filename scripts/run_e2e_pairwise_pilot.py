@@ -43,8 +43,11 @@ def _schedule(jobs, launch, gpu_ids, label):
     return pd.DataFrame(timings)
 
 
-def run_branches(root, dataset_root, gate_a_summary, gpu_ids=(0, 1)):
+def run_branches(root, dataset_root, gate_a_summary, gpu_ids=(0, 1), methods=METHODS):
     root, dataset_root, gate_a_summary = map(Path, (root, dataset_root, gate_a_summary))
+    methods = tuple(methods)
+    if not methods or len(set(methods)) != len(methods) or not set(methods).issubset(METHODS):
+        raise ValueError(f"methods must be a non-empty unique subset of {METHODS}, got {methods}")
 
     def launch(method, gpu):
         command = [
@@ -56,8 +59,12 @@ def run_branches(root, dataset_root, gate_a_summary, gpu_ids=(0, 1)):
         started = time.perf_counter()
         return subprocess.run(command, env=env).returncode, time.perf_counter() - started
 
-    timings = _schedule(METHODS, launch, gpu_ids, "e2e branches")
-    timings.to_csv(root / "branch_runtime.csv", index=False)
+    timings = _schedule(methods, launch, gpu_ids, "e2e branches")
+    runtime_path = root / "branch_runtime.csv"
+    if runtime_path.is_file():
+        timings = pd.concat([pd.read_csv(runtime_path), timings], ignore_index=True)
+        timings = timings.drop_duplicates(subset=["job"], keep="last")
+    timings.to_csv(runtime_path, index=False)
     return timings
 
 
