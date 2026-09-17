@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -13,6 +14,7 @@ from threading import Lock
 from pathlib import Path
 
 import pandas as pd
+import torch
 
 from rq2_e2e_pairwise_pilot import (
     ALL_METHODS,
@@ -82,6 +84,7 @@ def run_branches(root, dataset_root, gate_a_summary, gpu_ids=(0, 1), methods=MET
 
 def run_diagnostics(
     root, dataset_root, gate_a_summary, gpu_ids=(0, 1), jobs=DIAGNOSTIC_STATES,
+    output_namespace="diagnostics",
 ):
     root, dataset_root, gate_a_summary = map(Path, (root, dataset_root, gate_a_summary))
     jobs = tuple((str(method), int(epoch)) for method, epoch in jobs)
@@ -91,7 +94,7 @@ def run_diagnostics(
 
     def launch(job, gpu):
         method, epoch = job
-        output = root / "diagnostics" / f"{method}_E{epoch}"
+        output = root / output_namespace / f"{method}_E{epoch}"
         metadata = output / "metadata.json"
         if metadata.is_file():
             try:
@@ -110,7 +113,7 @@ def run_diagnostics(
         return subprocess.run(command, env=env).returncode, time.perf_counter() - started
 
     timings = _schedule(jobs, launch, gpu_ids, "e2e diagnostics")
-    runtime_path = root / "diagnostic_runtime.csv"
+    runtime_path = root / f"{output_namespace}_runtime.csv"
     with _RUNTIME_LOCK:
         if runtime_path.is_file():
             timings = pd.concat([pd.read_csv(runtime_path), timings], ignore_index=True)
@@ -144,7 +147,7 @@ def run_completion(root, dataset_root, gate_a_summary, gpu_ids=(0, 1)):
 
 
 def run_rpgeo_extension(root, dataset_root, gate_a_summary, gpu_ids=(0, 1)):
-    """Run Uniform and the gated RP-Geo lane concurrently on two GPUs."""
+    """Run Stage A/B only: Uniform, exact falsification, and retention probe."""
     root, dataset_root, gate_a_summary = map(Path, (root, dataset_root, gate_a_summary))
     gpu_ids = tuple(map(int, gpu_ids))
     if len(gpu_ids) != 2:
@@ -161,15 +164,10 @@ def run_rpgeo_extension(root, dataset_root, gate_a_summary, gpu_ids=(0, 1)):
     def rpgeo_lane():
         run_diagnostics(root, dataset_root, gate_a_summary, (gpu_ids[1],), GATE_STATES)
         gate = run_rpgeo_offline_gate(root, gate_a_summary, root / "rpgeo_offline_gate")
-        if gate["decision"] != "GO":
-            probe = run_rpgeo_retention_probe(
-                root, gate_a_summary, root / "rpgeo_retention_probe"
-            )
-            return {"gate": gate, "retention_probe": probe}
-        run_branches(
-            root, dataset_root, gate_a_summary, (gpu_ids[1],), ("resource_geo",)
+        probe = run_rpgeo_retention_probe(
+            root, gate_a_summary, root / "rpgeo_retention_probe"
         )
-        return {"gate": gate, "retention_probe": None}
+        return {"gate": gate, "retention_probe": probe}
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         uniform_future = pool.submit(
@@ -178,28 +176,96 @@ def run_rpgeo_extension(root, dataset_root, gate_a_summary, gpu_ids=(0, 1)):
         rpgeo_future = pool.submit(rpgeo_lane)
         uniform_runtime = uniform_future.result()
         lane = rpgeo_future.result()
-    gate = lane["gate"]
-    if gate["decision"] != "GO":
-        return {
-            "status": "RPGEO_EXTENSION_STOPPED_AT_GATE",
-            "gate": gate,
-            "retention_probe": lane["retention_probe"],
-            "uniform_complete": True,
-            "resource_geo_complete": False,
-        }, uniform_runtime, pd.DataFrame()
-    remaining = tuple(
-        job for job in RPGEO_DIAGNOSTIC_STATES
-        if job[0] in {"uniform", "resource_geo"}
-    )
+    remaining = tuple(job for job in RPGEO_DIAGNOSTIC_STATES if job[0] == "uniform")
     diagnostic_runtime = run_diagnostics(
         root, dataset_root, gate_a_summary, gpu_ids, remaining
     )
     return {
-        "status": "RPGEO_EXTENSION_TRAINING_COMPLETE",
-        "gate": gate,
+        "status": "RPGEO_STAGE_AB_COMPLETE",
+        "gate": lane["gate"],
+        "retention_probe": lane["retention_probe"],
         "uniform_complete": True,
-        "resource_geo_complete": True,
+        "resource_geo_complete": False,
+        "near_optimal_training_authorized": False,
     }, uniform_runtime, diagnostic_runtime
+
+
+def run_frozen_rpgeo_training(root, dataset_root, gate_a_summary, gpu_ids=(0, 1)):
+    """Stage C: train only from an independently frozen near-optimal retention."""
+    root, dataset_root, gate_a_summary = map(Path, (root, dataset_root, gate_a_summary))
+    gpu_ids = tuple(map(int, gpu_ids))
+    if len(gpu_ids) != 2:
+        raise RuntimeError("Frozen RP-Geo training expects exactly two GPUs")
+    from rq2_e2e_pairwise_pilot import load_frozen_rpgeo_retention
+    freeze = load_frozen_rpgeo_retention(root)
+    epoch50 = (("resource_geo", 50),)
+    epoch100 = (("resource_geo", 100),)
+    common10 = (("common_warmup", 10),)
+    stage_c_namespace = "diagnostics_rpgeo_frozen"
+
+    # Keep GPU 1 useful: as soon as the atomic epoch-50 checkpoint appears,
+    # diagnose it while GPU 0 continues epochs 51--100.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        branch_future = pool.submit(
+            run_branches, root, dataset_root, gate_a_summary,
+            (gpu_ids[0],), ("resource_geo",),
+        )
+
+        def midpoint_diagnostic():
+            common_runtime = run_diagnostics(
+                root, dataset_root, gate_a_summary, (gpu_ids[1],), common10,
+                output_namespace=stage_c_namespace,
+            )
+            checkpoint = root / "resource_geo" / "checkpoints" / "epoch_050.pt"
+            expected_retention = float(freeze["resource_retention"])
+            expected_freeze_hash = hashlib.sha256(
+                (root / "rpgeo_frozen_retention.json").read_bytes()
+            ).hexdigest()
+            while True:
+                checkpoint_ready = False
+                if checkpoint.is_file():
+                    try:
+                        payload = torch.load(
+                            checkpoint, map_location="cpu", weights_only=False
+                        )
+                        checkpoint_ready = (
+                            float(payload.get("resource_retention", float("nan")))
+                            == expected_retention
+                            and payload.get("retention_freeze_sha256")
+                            == expected_freeze_hash
+                        )
+                    except (OSError, RuntimeError, EOFError):
+                        checkpoint_ready = False
+                if checkpoint_ready:
+                    break
+                if branch_future.done():
+                    branch_future.result()
+                    raise RuntimeError(
+                        "RP-Geo branch ended without a matching frozen-retention epoch-50 checkpoint"
+                    )
+                time.sleep(10)
+            midpoint = run_diagnostics(
+                root, dataset_root, gate_a_summary, (gpu_ids[1],), epoch50,
+                output_namespace=stage_c_namespace,
+            )
+            return pd.concat([common_runtime, midpoint], ignore_index=True)
+
+        midpoint_future = pool.submit(midpoint_diagnostic)
+        branch_runtime = branch_future.result()
+        midpoint_runtime = midpoint_future.result()
+    endpoint_runtime = run_diagnostics(
+        root, dataset_root, gate_a_summary, gpu_ids, epoch100,
+        output_namespace=stage_c_namespace,
+    )
+    diagnostic_runtime = pd.concat(
+        [midpoint_runtime, endpoint_runtime], ignore_index=True
+    )
+    return {
+        "status": "RPGEO_FROZEN_RETENTION_E2E_COMPLETE",
+        "resource_retention": float(freeze["resource_retention"]),
+        "retention_frozen_before_e2e": True,
+        "accuracy_used_to_select_retention": False,
+    }, branch_runtime, diagnostic_runtime
 
 
 def main():

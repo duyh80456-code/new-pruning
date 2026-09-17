@@ -261,6 +261,7 @@ def _policy_from_method(
     resource: PairPolicy,
     current_sw: np.ndarray | None,
     flops_by_width: dict[float, float] | None = None,
+    resource_retention: float | None = None,
 ):
     if method == "uniform":
         return UniformPairPolicy()
@@ -269,7 +270,11 @@ def _policy_from_method(
     if method == "pure_sw" and current_sw is not None:
         return SWPairPolicy(current_sw)
     if method == "resource_geo" and current_sw is not None and flops_by_width is not None:
-        return ResourceGeoPairPolicy(flops_by_width, current_sw, resource_retention=1.0)
+        if resource_retention is None:
+            raise RuntimeError("Frozen RP-Geo retention is required")
+        return ResourceGeoPairPolicy(
+            flops_by_width, current_sw, resource_retention=resource_retention
+        )
     raise RuntimeError(f"Cannot construct policy {method}")
 
 
@@ -298,6 +303,7 @@ def _policy_sweep(
     output_dir: Path,
     expected_geometry_ids_sha256: str,
     flops_by_width: dict[float, float],
+    resource_retention: float | None,
 ) -> tuple[PairPolicy, float]:
     """Run the identical calibration/representation sweep for every method."""
     started = time.perf_counter()
@@ -307,7 +313,9 @@ def _policy_sweep(
     if _ids_sha256(list(map(int, sample_ids))) != expected_geometry_ids_sha256:
         raise RuntimeError("Policy geometry sample IDs/order changed during training")
     sw = _sw_matrix(representation_pairs)
-    policy = _policy_from_method(method, resource_policy, sw, flops_by_width)
+    policy = _policy_from_method(
+        method, resource_policy, sw, flops_by_width, resource_retention
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         output_dir / f"epoch_{state_epoch:03d}.npz",
@@ -484,6 +492,34 @@ def _branch_checkpoint(output: Path, epoch: int) -> Path:
     return output / "checkpoints" / f"epoch_{epoch:03d}.pt"
 
 
+def load_frozen_rpgeo_retention(root: str | Path) -> dict:
+    root = Path(root)
+    path = root / "rpgeo_frozen_retention.json"
+    if not path.is_file():
+        raise FileNotFoundError("Frozen RP-Geo retention artifact is required before E2E")
+    payload = json.loads(path.read_text())
+    if (
+        payload.get("status") != "RPGEO_RETENTION_FROZEN_BEFORE_E2E"
+        or payload.get("selection_frozen") is not True
+        or payload.get("frozen_before_rpgeo_e2e") is not True
+        or payload.get("accuracy_used") is not False
+        or payload.get("selection_source") != "mechanistic_pareto_development"
+    ):
+        raise RuntimeError("Invalid RP-Geo retention freeze artifact")
+    retention = float(payload.get("resource_retention", 1.0))
+    if not 0.0 < retention < 1.0:
+        raise RuntimeError("Near-optimal RP-Geo retention must be strictly between zero and one")
+    sources = {
+        "probe_json_sha256": root / "rpgeo_retention_probe" / "rpgeo_retention_probe.json",
+        "probe_pareto_sha256": root / "rpgeo_retention_probe" / "rpgeo_retention_pareto.csv",
+        "probe_by_state_sha256": root / "rpgeo_retention_probe" / "rpgeo_retention_probe_by_state.csv",
+    }
+    for key, source in sources.items():
+        if not source.is_file() or payload.get(key) != _sha256(source):
+            raise RuntimeError(f"Frozen retention source mismatch: {key}")
+    return payload
+
+
 def train_branch(
     config: dict,
     root: str | Path,
@@ -494,8 +530,27 @@ def train_branch(
         raise ValueError(method)
     root = Path(root); output = root / method
     output.mkdir(parents=True, exist_ok=True); (output / "checkpoints").mkdir(exist_ok=True)
+    retention_freeze = (
+        load_frozen_rpgeo_retention(root) if method == "resource_geo" else None
+    )
+    resource_retention = (
+        float(retention_freeze["resource_retention"]) if retention_freeze else None
+    )
+    retention_freeze_sha256 = (
+        _sha256(root / "rpgeo_frozen_retention.json") if retention_freeze else None
+    )
     final = _branch_checkpoint(output, 100)
     if final.is_file() and (output / "training_provenance.json").is_file():
+        if method == "resource_geo":
+            provenance = json.loads((output / "training_provenance.json").read_text())
+            if (
+                not np.isclose(float(provenance.get("resource_retention", np.nan)), resource_retention)
+                or provenance.get("retention_freeze_sha256") != retention_freeze_sha256
+                or provenance.get("retention_frozen_before_e2e") is not True
+            ):
+                raise RuntimeError(
+                    "Existing RP-Geo result was not trained from the attached frozen retention"
+                )
         return final
     common_path = root / "common_warmup" / "epoch_010.pt"
     if not common_path.is_file():
@@ -525,6 +580,15 @@ def train_branch(
     if latest.is_file():
         if source.get("method") != method or int(source.get("seed", -1)) != PILOT_SEED:
             raise RuntimeError("Branch resume identity mismatch")
+        if method == "resource_geo" and not np.isclose(
+            float(source.get("resource_retention", np.nan)), resource_retention
+        ):
+            raise RuntimeError("RP-Geo resume retention does not match the frozen artifact")
+        if (
+            method == "resource_geo"
+            and source.get("retention_freeze_sha256") != retention_freeze_sha256
+        ):
+            raise RuntimeError("RP-Geo resume is bound to a different freeze artifact")
         start_epoch = int(source["epoch"]) + 1
         current_policy = PairPolicy(method, np.asarray(source["current_q"], float))
         if int(source["epoch"]) >= 51:
@@ -557,6 +621,7 @@ def train_branch(
                 state_epoch, output / "sw_policies",
                 subset_audit["policy_geometry_ids_sha256"],
                 flops_by_width,
+                resource_retention,
             )
         if epoch == 51:
             optimizer, scheduler = _optimizer_scheduler(model, config, 0.01)
@@ -614,6 +679,8 @@ def train_branch(
             "rng": _capture_matched_rng(loaders.train, pair_rng, device),
             "current_q": current_policy.probabilities.tolist(),
             "common_epoch10_sha256": _sha256(common_path),
+            "resource_retention": resource_retention,
+            "retention_freeze_sha256": retention_freeze_sha256,
         }
         _atomic_checkpoint(latest, checkpoint)
         if epoch in (50, 100):
@@ -637,7 +704,14 @@ def train_branch(
         "policy_geometry_ids_sha256": subset_audit["policy_geometry_ids_sha256"],
         "bn_calibration_ids_sha256": subset_audit["bn_calibration_ids_sha256"],
         "validation_ids_sha256": subset_audit["validation_ids_sha256"],
-        "resource_retention": 1.0 if method == "resource_geo" else None,
+        "resource_retention": resource_retention,
+        "retention_selection_uses_accuracy": (
+            retention_freeze["accuracy_used"] if retention_freeze else None
+        ),
+        "retention_frozen_before_e2e": (
+            retention_freeze["frozen_before_rpgeo_e2e"] if retention_freeze else None
+        ),
+        "retention_freeze_sha256": retention_freeze_sha256,
     }
     (output / "training_provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     return final
@@ -684,13 +758,19 @@ def extract_diagnostic_state(
     )
     sw = _sw_matrix(representation_pairs)
     resource = ResourcePairPolicy(_flops(gate_a_summary))
+    frozen_retention_path = root / "rpgeo_frozen_retention.json"
+    diagnostic_retention = (
+        float(load_frozen_rpgeo_retention(root)["resource_retention"])
+        if frozen_retention_path.is_file() else 1.0
+    )
+    rpgeo_policy = ResourceGeoPairPolicy(
+        _flops(gate_a_summary), sw, resource_retention=diagnostic_retention
+    )
     policies = {
         "uniform": UniformPairPolicy().probabilities,
         "resource": resource.probabilities,
         "pure_sw": SWPairPolicy(sw).probabilities,
-        "resource_geo": ResourceGeoPairPolicy(
-            _flops(gate_a_summary), sw, resource_retention=1.0
-        ).probabilities,
+        "resource_geo": rpgeo_policy.probabilities,
         "oracle": solve_pair_lp(gram_pair_scores(mean_gram)[0], maximize=True),
     }
     variances = {
@@ -709,6 +789,7 @@ def extract_diagnostic_state(
         "V_uniform": variances["uniform"], "V_resource": variances["resource"],
         "V_SW": variances["pure_sw"], "V_resource_geo": variances["resource_geo"],
         "V_oracle": variances["oracle"],
+        **rpgeo_policy.diagnostics,
         "SW_beats_uniform": bool(variances["pure_sw"] < variances["uniform"]),
         "SW_beats_resource": bool(variances["pure_sw"] < variances["resource"]),
     }
@@ -914,10 +995,25 @@ def finalize_rpgeo_extension(root: str | Path) -> dict:
         }
         for baseline in ("resource", "pure_sw", "uniform")
     }
-    diagnostics = pd.concat([
-        pd.read_csv(root / "diagnostics" / f"{method}_E{epoch}" / "variance.csv")
-        for method, epoch in RPGEO_DIAGNOSTIC_STATES
+    frozen_namespace = root / "diagnostics_rpgeo_frozen"
+    frozen_states = (("common_warmup", 10), ("resource_geo", 50), ("resource_geo", 100))
+    frozen_diagnostics = pd.concat([
+        pd.read_csv(frozen_namespace / f"{method}_E{epoch}" / "variance.csv")
+        for method, epoch in frozen_states
     ], ignore_index=True)
+    frozen_diagnostics.to_csv(
+        root / "rpgeo_frozen_policy_variance_t10_50_100.csv", index=False
+    )
+    base_states = tuple(job for job in DIAGNOSTIC_STATES if job[0] != "common_warmup")
+    diagnostics = pd.concat(
+        [frozen_diagnostics.loc[frozen_diagnostics.method.eq("common_warmup")]]
+        + [
+            pd.read_csv(root / "diagnostics" / f"{method}_E{epoch}" / "variance.csv")
+            for method, epoch in base_states
+        ]
+        + [frozen_diagnostics.loc[frozen_diagnostics.method.eq("resource_geo")]],
+        ignore_index=True,
+    )
     diagnostics.to_csv(root / "rpgeo_trajectory_variance_diagnostics.csv", index=False)
     decision = {
         "status": "RPGEO_FOUR_WAY_DEVELOPMENT_COMPLETE",
@@ -930,6 +1026,17 @@ def finalize_rpgeo_extension(root: str | Path) -> dict:
         "rpgeo_beats_resource_interior_mean": bool(
             comparisons["resource_geo_minus_resource"]["interior_mean_accuracy"] > 0
         ),
+        "resource_beats_pure_sw_dense_mean": bool(
+            indexed.loc["resource", "dense_mean_accuracy"]
+            > indexed.loc["pure_sw", "dense_mean_accuracy"]
+        ),
+        "target_pattern_resource_gt_sw_and_rpgeo_gt_resource": bool(
+            indexed.loc["resource", "dense_mean_accuracy"]
+            > indexed.loc["pure_sw", "dense_mean_accuracy"]
+            and indexed.loc["resource_geo", "dense_mean_accuracy"]
+            > indexed.loc["resource", "dense_mean_accuracy"]
+        ),
+        "primary_hypothesis": "resource_geo_dense_mean_accuracy > resource_dense_mean_accuracy",
         "matched_pair_uniform_draw_stream_verified": True,
         "matched_training_sample_order_verified": True,
         "test_used": False,
@@ -945,6 +1052,7 @@ __all__ = [
     "DIAGNOSTIC_STATES", "RPGEO_DIAGNOSTIC_STATES", "load_config",
     "find_cifar100_root", "find_gate_a_summary", "train_common_warmup",
     "find_seed7_pass_summary", "materialize_progress", "train_branch",
+    "load_frozen_rpgeo_retention",
     "extract_diagnostic_state", "finalize", "finalize_screening",
     "finalize_rpgeo_extension",
 ]

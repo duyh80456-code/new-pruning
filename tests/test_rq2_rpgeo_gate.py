@@ -6,9 +6,12 @@ import pandas as pd
 from rq2_pairwise_surrogate_regret import INTERIOR_WIDTHS
 from rq2_rpgeo_gate import (
     GATE_STATES,
+    find_rpgeo_retention_probe,
+    freeze_rpgeo_retention,
     run_rpgeo_offline_gate,
     run_rpgeo_retention_probe,
 )
+from rq2_e2e_pairwise_pilot import load_frozen_rpgeo_retention
 
 
 def test_rpgeo_offline_gate_writes_audited_exact_face_results(tmp_path):
@@ -48,4 +51,58 @@ def test_rpgeo_offline_gate_writes_audited_exact_face_results(tmp_path):
     )
     assert probe["training_authorized"] is False
     assert probe["selection_uses_accuracy"] is False
-    assert (tmp_path / "probe" / "rpgeo_retention_pareto.csv").is_file()
+    probe_dir = tmp_path / "probe"
+    pareto_path = probe_dir / "rpgeo_retention_pareto.csv"
+    assert pareto_path.is_file()
+    pareto = pd.read_csv(pareto_path)
+    assert "mean_oracle_gap_captured" in pareto
+    assert "minimum_oracle_gap_captured" in pareto
+    assert "oracle_gap_defined_states" in pareto
+    assert "mean_resource_sacrifice" in pareto
+    pareto["all_state_mechanistic_pass"] = False
+    pareto.to_csv(pareto_path, index=False)
+    with np.testing.assert_raises_regex(RuntimeError, "must pass movement"):
+        freeze_rpgeo_retention(
+            probe_dir, float(pareto.iloc[0].resource_retention_target),
+            tmp_path / "invalid_freeze.json",
+        )
+
+    # Build an eligible synthetic Pareto row to exercise the immutable freeze path.
+    pareto.loc[pareto.index[0], "all_state_mechanistic_pass"] = True
+    pareto.to_csv(pareto_path, index=False)
+
+    # Stage C accepts only a separately frozen, hash-bound artifact.
+    root_probe = root / "rpgeo_retention_probe"
+    root_probe.mkdir()
+    for name in (
+        "rpgeo_retention_probe.json",
+        "rpgeo_retention_pareto.csv",
+        "rpgeo_retention_probe_by_state.csv",
+    ):
+        (root_probe / name).write_bytes((probe_dir / name).read_bytes())
+    frozen_path = root / "rpgeo_frozen_retention.json"
+    selected_retention = float(pareto.iloc[0].resource_retention_target)
+    frozen = freeze_rpgeo_retention(root_probe, selected_retention, frozen_path)
+    assert frozen["selection_frozen"] is True
+    assert frozen["frozen_before_rpgeo_e2e"] is True
+    assert frozen["selection_source"] == "mechanistic_pareto_development"
+    assert frozen["accuracy_used"] is False
+    assert frozen["resource_retention"] == selected_retention
+    assert load_frozen_rpgeo_retention(root)["resource_retention"] == selected_retention
+
+    # Source mutation after freeze must invalidate the Stage-C gate.
+    with (root_probe / "rpgeo_retention_probe_by_state.csv").open("a") as handle:
+        handle.write("tampered\n")
+    with np.testing.assert_raises_regex(RuntimeError, "source mismatch"):
+        load_frozen_rpgeo_retention(root)
+
+    attached = tmp_path / "attached"
+    duplicate = attached / "notebook-output" / "rpgeo_retention_probe"
+    duplicate.mkdir(parents=True)
+    for name in (
+        "rpgeo_retention_probe.json",
+        "rpgeo_retention_pareto.csv",
+        "rpgeo_retention_probe_by_state.csv",
+    ):
+        (duplicate / name).write_bytes((probe_dir / name).read_bytes())
+    assert find_rpgeo_retention_probe(attached, tmp_path / "unused") == duplicate

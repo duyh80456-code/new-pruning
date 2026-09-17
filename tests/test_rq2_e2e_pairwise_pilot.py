@@ -1,7 +1,9 @@
 import json
+import hashlib
 from pathlib import Path
 
 import pandas as pd
+import torch
 import scripts.run_e2e_pairwise_pilot as runner
 
 from rq2_e2e_pairwise_pilot import (
@@ -87,7 +89,11 @@ def test_finalize_e2e_pairwise_pilot_is_development_only(tmp_path):
         for epoch in range(11, 101)
     ]).to_csv(folder / "metrics.csv", index=False)
     for diagnostic_method, epoch in RPGEO_DIAGNOSTIC_STATES:
-        diagnostic = tmp_path / "diagnostics" / f"{diagnostic_method}_E{epoch}"
+        namespace = (
+            "diagnostics_rpgeo_frozen"
+            if diagnostic_method == "resource_geo" else "diagnostics"
+        )
+        diagnostic = tmp_path / namespace / f"{diagnostic_method}_E{epoch}"
         if not diagnostic.exists():
             diagnostic.mkdir(parents=True)
             pd.DataFrame([{
@@ -96,6 +102,13 @@ def test_finalize_e2e_pairwise_pilot_is_development_only(tmp_path):
                 "V_uniform": 3.0, "V_resource": 2.5, "V_SW": 2.0,
                 "V_resource_geo": 1.8, "V_oracle": 1.0,
             }]).to_csv(diagnostic / "variance.csv", index=False)
+    frozen_common = tmp_path / "diagnostics_rpgeo_frozen" / "common_warmup_E10"
+    frozen_common.mkdir(parents=True)
+    pd.DataFrame([{
+        "state": "common_warmup_E10", "method": "common_warmup", "epoch": 10,
+        "V_uniform": 3.0, "V_resource": 2.5, "V_SW": 2.0,
+        "V_resource_geo": 1.8, "V_oracle": 1.0,
+    }]).to_csv(frozen_common / "variance.csv", index=False)
     extension = finalize_rpgeo_extension(tmp_path)
     assert extension["status"] == "RPGEO_FOUR_WAY_DEVELOPMENT_COMPLETE"
     assert extension["rpgeo_beats_resource_dense_mean"] is True
@@ -109,7 +122,9 @@ def test_completion_overlaps_uniform_with_existing_diagnostics(monkeypatch, tmp_
         calls.append(("branches", tuple(gpu_ids), tuple(methods)))
         return pd.DataFrame([{"job": "uniform"}])
 
-    def fake_diagnostics(root, dataset_root, gate_a_summary, gpu_ids, jobs):
+    def fake_diagnostics(
+        root, dataset_root, gate_a_summary, gpu_ids, jobs, output_namespace="diagnostics"
+    ):
         calls.append(("diagnostics", tuple(gpu_ids), tuple(jobs)))
         return pd.DataFrame([{"job": str(job)} for job in jobs])
 
@@ -126,7 +141,7 @@ def test_completion_overlaps_uniform_with_existing_diagnostics(monkeypatch, tmp_
     assert {method for method, _ in uniform[2]} == {"uniform"}
 
 
-def test_rpgeo_extension_stops_training_when_frozen_gate_is_not_go(monkeypatch, tmp_path):
+def test_rpgeo_stage_ab_never_trains_candidate(monkeypatch, tmp_path):
     for path in (
         tmp_path / "common_warmup" / "epoch_010.pt",
         tmp_path / "resource" / "checkpoints" / "epoch_100.pt",
@@ -159,7 +174,58 @@ def test_rpgeo_extension_stops_training_when_frozen_gate_is_not_go(monkeypatch, 
     result, _, diagnostics = runner.run_rpgeo_extension(
         tmp_path, tmp_path, tmp_path / "gate.json", gpu_ids=(0, 1)
     )
-    assert result["status"] == "RPGEO_EXTENSION_STOPPED_AT_GATE"
+    assert result["status"] == "RPGEO_STAGE_AB_COMPLETE"
     assert result["retention_probe"]["training_authorized"] is False
+    assert result["near_optimal_training_authorized"] is False
+    assert result["resource_geo_complete"] is False
     assert branch_calls == [("uniform",)]
-    assert diagnostics.empty
+    assert not diagnostics.empty
+
+
+def test_frozen_rpgeo_stage_c_trains_only_resource_geo(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_branches(root, dataset_root, gate_a_summary, gpu_ids, methods):
+        calls.append(("branches", tuple(gpu_ids), tuple(methods)))
+        if tuple(methods) == ("resource_geo",):
+            checkpoint = Path(root) / "resource_geo" / "checkpoints" / "epoch_050.pt"
+            checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            freeze_hash = hashlib.sha256(
+                (Path(root) / "rpgeo_frozen_retention.json").read_bytes()
+            ).hexdigest()
+            torch.save({
+                "resource_retention": 0.995,
+                "retention_freeze_sha256": freeze_hash,
+            }, checkpoint)
+        return pd.DataFrame([{"job": methods[0]}])
+
+    def fake_diagnostics(
+        root, dataset_root, gate_a_summary, gpu_ids, jobs, output_namespace="diagnostics"
+    ):
+        calls.append(("diagnostics", tuple(gpu_ids), tuple(jobs)))
+        return pd.DataFrame([{"job": str(job)} for job in jobs])
+
+    import rq2_e2e_pairwise_pilot as pilot
+
+    monkeypatch.setattr(runner, "run_branches", fake_branches)
+    monkeypatch.setattr(runner, "run_diagnostics", fake_diagnostics)
+    monkeypatch.setattr(
+        pilot,
+        "load_frozen_rpgeo_retention",
+        lambda root: {"resource_retention": 0.995},
+    )
+    (tmp_path / "rpgeo_frozen_retention.json").write_text("{}")
+    result, branches, diagnostics = runner.run_frozen_rpgeo_training(
+        tmp_path, tmp_path, tmp_path / "gate.json", gpu_ids=(0, 1)
+    )
+    assert result["status"] == "RPGEO_FROZEN_RETENTION_E2E_COMPLETE"
+    assert result["resource_retention"] == 0.995
+    assert result["retention_frozen_before_e2e"] is True
+    assert not branches.empty and not diagnostics.empty
+    assert ("branches", (0,), ("resource_geo",)) in calls
+    diagnostic_methods = {
+        method
+        for call in calls if call[0] == "diagnostics"
+        for method, _ in call[2]
+    }
+    assert diagnostic_methods == {"common_warmup", "resource_geo"}
