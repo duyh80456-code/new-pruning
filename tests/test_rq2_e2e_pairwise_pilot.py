@@ -228,4 +228,6 @@ def test_frozen_rpgeo_stage_c_trains_only_resource_geo(monkeypatch, tmp_path):
         for call in calls if call[0] == "diagnostics"
         for method, _ in call[2]
     }
-    assert diagnostic_methods == {"common_warmup", "resource_geo"}
+    assert diagnostic_methods == {
+        "common_warmup", "uniform", "resource", "pure_sw", "resource_geo"
+    }

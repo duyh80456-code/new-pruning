@@ -96,7 +96,13 @@ def run_diagnostics(
         method, epoch = job
         output = root / output_namespace / f"{method}_E{epoch}"
         metadata = output / "metadata.json"
-        if metadata.is_file():
+        required_outputs = (
+            output / "variance.csv",
+            output / "gradient_grams.npy",
+            output / "sw_matrix.npy",
+            output / "pair_policies.csv",
+        )
+        if metadata.is_file() and all(path.is_file() for path in required_outputs):
             try:
                 if json.loads(metadata.read_text()).get("status") == "E2E_PAIRWISE_DIAGNOSTIC_COMPLETE":
                     return 0, 0.0
@@ -260,6 +266,25 @@ def run_frozen_rpgeo_training(root, dataset_root, gate_a_summary, gpu_ids=(0, 1)
     diagnostic_runtime = pd.concat(
         [midpoint_runtime, endpoint_runtime], ignore_index=True
     )
+    # A screening/Stage-A archive can contain the trained Uniform checkpoint
+    # without its E50/E100 variance diagnostics. Complete only missing read-only
+    # base diagnostics before four-way finalization; never retrain a branch.
+    required_base = tuple(
+        job for job in DIAGNOSTIC_STATES if job[0] != "common_warmup"
+    )
+    missing_base = tuple(
+        job for job in required_base
+        if not (
+            root / "diagnostics" / f"{job[0]}_E{job[1]}" / "variance.csv"
+        ).is_file()
+    )
+    if missing_base:
+        base_runtime = run_diagnostics(
+            root, dataset_root, gate_a_summary, gpu_ids, missing_base
+        )
+        diagnostic_runtime = pd.concat(
+            [diagnostic_runtime, base_runtime], ignore_index=True
+        )
     return {
         "status": "RPGEO_FROZEN_RETENTION_E2E_COMPLETE",
         "resource_retention": float(freeze["resource_retention"]),
