@@ -18,6 +18,9 @@ from utils.distributed import dist_all_reduce_tensor
 from utils.distributed import master_only_print as print
 from utils.distributed import AllReduceDistributedDataParallel, allreduce_grads
 from utils.loss_ops import CrossEntropyLossSoft, CrossEntropyLossSmooth
+from utils.loss_ops import WassersteinLossSoft
+from utils.loss_ops import build_soft_criterion, build_pair_criterion
+from utils.loss_ops import get_classifier_weight, class_cost_matrix
 from models.slimmable_ops import bn_calibration_init
 from utils.config import FLAGS
 from utils.meters import ScalarMeter, flush_scalar_meters
@@ -308,6 +311,12 @@ def get_meters(phase):
         meters = get_single_meter(phase)
     if phase == 'val':
         meters['best_val'] = ScalarMeter('best_val')
+    if (phase == 'train' and getattr(FLAGS, 'horizontal_kd', False)
+            and getattr(FLAGS, 'slimmable_training', False)):
+        # hung off the widest meter because only the per-width meters are
+        # flushed, and an unfilled meter divides by zero there
+        meters[str(max(FLAGS.width_mult_list))]['pair_loss'] = ScalarMeter(
+            'train_pair_loss')
     return meters
 
 
@@ -361,7 +370,8 @@ def lr_schedule_per_iteration(optimizer, epoch, batch_idx=0):
 
 def forward_loss(
         model, criterion, input, target, meter, soft_target=None,
-        soft_criterion=None, return_soft_target=False, return_acc=False):
+        soft_criterion=None, return_soft_target=False, return_acc=False,
+        return_output=False):
     """forward model and return loss"""
     output = model(input)
     if soft_target is not None:
@@ -391,13 +401,17 @@ def forward_loss(
     if meter is not None:
         meter['loss'].cache(tensor[0])
     if return_soft_target:
+        if return_output:
+            return loss, torch.nn.functional.softmax(output, dim=1), output
         return loss, torch.nn.functional.softmax(output, dim=1)
+    if return_output:
+        return loss, output
     return loss
 
 
 def run_one_epoch(
         epoch, loader, model, criterion, optimizer, meters, phase='train',
-        soft_criterion=None):
+        soft_criterion=None, pair_criterion=None):
     """run one epoch for train/val/test/cal"""
     t_start = time.time()
     assert phase in ['train', 'val', 'test', 'cal'], 'Invalid phase.'
@@ -415,6 +429,9 @@ def run_one_epoch(
     elif getattr(FLAGS, 'slimmable_training', False):
         max_width = max(FLAGS.width_mult_list)
         min_width = min(FLAGS.width_mult_list)
+    needs_cost = (
+        isinstance(soft_criterion, WassersteinLossSoft)
+        or pair_criterion is not None)
 
     if getattr(FLAGS, 'distributed', False):
         loader.sampler.set_epoch(epoch)
@@ -435,6 +452,26 @@ def run_one_epoch(
                         widths_train.append(
                             random.uniform(min_width, max_width))
                     widths_train = [max_width, min_width] + widths_train
+                    # the class cost matrix is read off the classifier, which
+                    # keeps moving, so refresh it before the widths are run
+                    cost = None
+                    if needs_cost:
+                        cost = class_cost_matrix(
+                            get_classifier_weight(model),
+                            normalize=getattr(
+                                FLAGS, 'cost_normalize', True))
+                        if isinstance(soft_criterion, WassersteinLossSoft):
+                            soft_criterion.set_cost(cost)
+                        if pair_criterion is not None:
+                            pair_criterion.set_cost(cost)
+                    # with a horizontal term the graphs of two widths have to
+                    # be alive at the same time, so backward is deferred to
+                    # the end of the loop. Summing first and calling backward
+                    # once is arithmetically what the per-width backward did,
+                    # it only costs memory
+                    deferred = pair_criterion is not None
+                    losses = []
+                    mid_outputs = []
                     for width_mult in widths_train:
                         # the sandwich rule
                         if width_mult in [max_width, min_width]:
@@ -463,13 +500,33 @@ def run_one_epoch(
                                 return_soft_target=True)
                         else:
                             if getattr(FLAGS, 'inplace_distill', False):
-                                loss = forward_loss(
+                                loss, output = forward_loss(
                                     model, criterion, input, target, meter,
                                     soft_target=soft_target.detach(),
-                                    soft_criterion=soft_criterion)
+                                    soft_criterion=soft_criterion,
+                                    return_output=True)
                             else:
-                                loss = forward_loss(
-                                    model, criterion, input, target, meter)
+                                loss, output = forward_loss(
+                                    model, criterion, input, target, meter,
+                                    return_output=True)
+                            # the two middle widths are the pair with no
+                            # relation between them under the sandwich rule
+                            if deferred and width_mult != min_width:
+                                mid_outputs.append(output)
+                        if deferred:
+                            losses.append(loss)
+                        else:
+                            loss.backward()
+                    if deferred:
+                        pair_loss = torch.mean(pair_criterion(
+                            mid_outputs[0], mid_outputs[1]))
+                        losses.append(
+                            getattr(FLAGS, 'horizontal_weight', 1.0)
+                            * pair_loss)
+                        if is_master():
+                            meters[str(max_width)]['pair_loss'].cache(
+                                pair_loss.item())
+                        loss = sum(losses)
                         loss.backward()
                 else:
                     # slimmable model (s-nets)
@@ -631,9 +688,24 @@ def train_val_test():
     else:
         criterion = torch.nn.CrossEntropyLoss(reduction='none')
     if getattr(FLAGS, 'inplace_distill', False):
-        soft_criterion = CrossEntropyLossSoft(reduction='none')
+        soft_criterion = build_soft_criterion()
     else:
         soft_criterion = None
+    pair_criterion = build_pair_criterion()
+    if pair_criterion is not None:
+        if soft_criterion is None:
+            raise ValueError(
+                'horizontal_kd needs inplace_distill: the horizontal term is '
+                'an addition to the vertical one, not a replacement for it')
+        if not getattr(FLAGS, 'universally_slimmable_training', False):
+            raise ValueError(
+                'horizontal_kd is only wired into the us-net branch')
+        # the sandwich rule spends two of the samples on max and min width,
+        # so a pair of unrelated middle students needs at least four
+        if getattr(FLAGS, 'num_sample_training', 2) < 4:
+            raise ValueError(
+                'horizontal_kd needs num_sample_training >= 4, got {}'.format(
+                    getattr(FLAGS, 'num_sample_training', 2)))
 
     # check pretrained
     if getattr(FLAGS, 'pretrained', False):
@@ -726,7 +798,8 @@ def train_val_test():
         # train
         results = run_one_epoch(
             epoch, train_loader, model_wrapper, criterion, optimizer,
-            train_meters, phase='train', soft_criterion=soft_criterion)
+            train_meters, phase='train', soft_criterion=soft_criterion,
+            pair_criterion=pair_criterion)
 
         # val
         if val_meters is not None:
