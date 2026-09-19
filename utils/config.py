@@ -52,7 +52,7 @@ class AttrDict(dict):
             if isinstance(value, dict):
                 self.__dict__[key] = AttrDict(value)
             elif isinstance(value, list):
-                if isinstance(value[0], dict):
+                if value and isinstance(value[0], dict):
                     self.__dict__[key] = [AttrDict(item) for item in value]
                 else:
                     self.__dict__[key] = value

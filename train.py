@@ -439,6 +439,9 @@ def run_one_epoch(
         if phase == 'cal':
             if batch_idx == getattr(FLAGS, 'bn_cal_batch_num', -1):
                 break
+        # smoke testing: cut every phase short without touching the data
+        if batch_idx == getattr(FLAGS, 'max_iters_per_epoch', -1):
+            break
         target = target.cuda(non_blocking=True)
         if train:
             # change learning rate if necessary
@@ -864,7 +867,8 @@ def init_multiprocessing():
     # print(multiprocessing.get_start_method())
     try:
         multiprocessing.set_start_method('fork')
-    except RuntimeError:
+    except (RuntimeError, ValueError):
+        # already set, or a platform without fork such as Windows
         pass
 
 

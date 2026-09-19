@@ -1,3 +1,9 @@
 logs
-data
 .flake8
+
+# the data package holds pipeline code; only the downloaded sets are ignored
+data/*
+!data/*.py
+__pycache__/
+*.pyc
+.idea/
