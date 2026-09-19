@@ -562,6 +562,13 @@ def run_one_epoch(
             if (getattr(FLAGS, 'distributed', False)
                     and getattr(FLAGS, 'distributed_all_reduce', False)):
                 allreduce_grads(model)
+            # Four losses are summed into one step and the KD terms are not
+            # all bounded the way cross entropy is, so a single bad batch
+            # early on can take the weights somewhere they never come back
+            # from. Off by default, which is upstream behaviour.
+            clip = getattr(FLAGS, 'grad_clip', 0)
+            if clip:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
             optimizer.step()
             if is_master() and getattr(FLAGS, 'slimmable_training', False):
                 for width_mult in sorted(FLAGS.width_mult_list, reverse=True):
@@ -683,6 +690,11 @@ def train_val_test():
                 FLAGS.skip_training = True
         else:
             FLAGS.width_mult_list = FLAGS.width_mult_range
+
+    # Upstream never creates this; its job system did. Without it every run
+    # trains a full epoch and then dies on the first torch.save.
+    if is_master():
+        os.makedirs(FLAGS.log_dir, exist_ok=True)
 
     # model
     model, model_wrapper = get_model()

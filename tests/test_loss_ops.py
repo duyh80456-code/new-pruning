@@ -329,51 +329,101 @@ def test_cost_matrix_from_classifier():
     check('detached from the classifier', not cost.requires_grad)
 
 
-def test_alpha_reduces_to_kl():
-    logits = torch.randn(6, 9)
-    teacher = torch.softmax(torch.randn(6, 9), dim=1)
-    alpha = AlphaDivergenceLossSoft(alphas=(1.0,), clamp=1e9)
-    kl = CrossEntropyLossSoft(reduction='none')
-    # the soft cross entropy carries the teacher entropy term, KL does not
-    entropy = -(teacher * torch.log(teacher.clamp_min(1e-30))).sum(dim=1)
-    gap = (alpha(logits, teacher)
-           - (kl(logits, teacher).view(-1) - entropy)).abs().max().item()
-    check(
-        'alpha = 1 is forward KL',
-        gap < 1e-4,
-        'max gap = {:.2e}'.format(gap))
+def test_alpha_is_bounded():
+    """what the smoke run caught: an unbounded KD term destroys the weights
 
-
-def test_alpha_matches_direct_formula():
-    """guards the log-domain rewrite of sum_i p^a q^(1-a)
-
-    Mild distributions and a wide clamp so the closed form is safe to
-    evaluate directly for comparison.
+    A confident student against a confident teacher that disagrees is the
+    worst case, and it happens constantly on a freshly initialized supernet.
+    Written from the textbook formula this reached 1e6 here, next to a cross
+    entropy of about 4.6, and the weights were gone in three steps.
     """
-    teacher = torch.softmax(0.5 * torch.randn(4, 8), dim=1).double()
-    logits = 0.5 * torch.randn(4, 8).double()
-    student = torch.softmax(logits, dim=1)
-    for a in (-1.0, 0.5, 2.0, 3.0):
-        direct = ((teacher ** a * student ** (1.0 - a)).sum(dim=1) - 1.0)
-        direct = direct / (a * (a - 1.0))
-        got = AlphaDivergenceLossSoft(alphas=(a,), clamp=1e9)(logits, teacher)
-        gap = (got - direct).abs().max().item()
-        check(
-            'alpha = {} matches the closed form'.format(a),
-            gap < 1e-8,
-            'max gap = {:.2e}'.format(gap))
-
-
-def test_alpha_is_finite_under_mismatch():
-    """a confident student against a confident, disagreeing teacher"""
     logits = torch.tensor([[20.0, -20.0, -20.0]])
     teacher = torch.tensor([[1e-8, 1.0 - 2e-8, 1e-8]])
-    alpha = AlphaDivergenceLossSoft(alphas=(-1.0, 1.0), clamp=5.0)
-    value = alpha(logits, teacher)
+    value = AlphaDivergenceLossSoft()(logits, teacher)
     check(
-        'clamping keeps alpha-divergence finite',
+        'stays finite under total disagreement',
         torch.isfinite(value).all(),
-        'value = {:.4f}'.format(value.item()))
+        'value = {:.3f}'.format(value.item()))
+    check(
+        'and stays within an order of magnitude of cross entropy',
+        value.abs().item() < 100.0,
+        'value = {:.3f}'.format(value.item()))
+
+    # the realistic case: a random supernet against a random teacher
+    worst = 0.0
+    for scale in (1.0, 5.0, 20.0):
+        generator = torch.Generator().manual_seed(21)
+        logits = scale * torch.randn(64, 100, generator=generator)
+        teacher = torch.softmax(
+            scale * torch.randn(64, 100, generator=generator), dim=1)
+        worst = max(worst,
+                    AlphaDivergenceLossSoft()(logits, teacher).abs().max()
+                    .item())
+    check(
+        'bounded across logit scales',
+        worst < 100.0,
+        'worst = {:.3f}'.format(worst))
+
+
+def test_alpha_descends():
+    """the surrogate has detached weights, so check it still points right"""
+    teacher = torch.tensor([[0.8, 0.1, 0.1]])
+    logits = torch.zeros(1, 3, requires_grad=True)
+    loss_fn = AlphaDivergenceLossSoft()
+
+    def true_kl():
+        log_q = torch.nn.functional.log_softmax(logits, dim=1)
+        return (teacher * (torch.log(teacher) - log_q)).sum().item()
+
+    before = true_kl()
+    for _ in range(200):
+        loss = loss_fn(logits, teacher).mean()
+        if logits.grad is not None:
+            logits.grad.zero_()
+        loss.backward()
+        with torch.no_grad():
+            logits -= 0.5 * logits.grad
+    after = true_kl()
+    check(
+        'descending the surrogate lowers the true divergence',
+        after < before * 0.1,
+        'KL {:.4f} -> {:.4f}'.format(before, after))
+    check(
+        'and lands on the teacher argmax',
+        torch.softmax(logits, dim=1).argmax().item()
+        == teacher.argmax().item())
+
+
+def test_alpha_adapts():
+    """the pair of alphas must not collapse onto one of them
+
+    Student and teacher are two widths of one supernet, so they are close;
+    independent random logits are not the regime this operates in and there
+    alpha_min wins every sample. The sweep is printed because the point at
+    which the choice degenerates says how far apart the widths can drift
+    before the adaptivity stops doing anything.
+    """
+    loss_fn = AlphaDivergenceLossSoft()
+    generator = torch.Generator().manual_seed(3)
+    base = 2.0 * torch.randn(512, 100, generator=generator)
+    teacher = torch.softmax(base, dim=1)
+
+    print('      how often alpha_min is chosen, by student-teacher gap:')
+    share = None
+    for noise in (0.1, 0.3, 0.6, 1.0, 2.0, 4.0):
+        logits = base + noise * torch.randn(512, 100, generator=generator)
+        low, _ = loss_fn._divergence(logits, teacher, loss_fn.alpha_min)
+        high, _ = loss_fn._divergence(logits, teacher, loss_fn.alpha_max)
+        chosen = (low > high).float().mean().item()
+        print('        gap {:.1f} -> {:>4.0%}   div(min) {:.4f}  '
+              'div(max) {:.4f}'.format(
+                  noise, chosen, low.mean().item(), high.mean().item()))
+        if noise == 0.6:
+            share = chosen
+    check(
+        'both alphas win a share of samples at a realistic gap',
+        0.05 < share < 0.95,
+        'alpha_min wins on {:.0%} of samples'.format(share))
 
 
 def main():
@@ -389,9 +439,9 @@ def main():
     test_sinkhorn_converges_at_configured_settings()
     test_metric_survives_the_configured_eps()
     test_cost_matrix_from_classifier()
-    test_alpha_reduces_to_kl()
-    test_alpha_matches_direct_formula()
-    test_alpha_is_finite_under_mismatch()
+    test_alpha_is_bounded()
+    test_alpha_descends()
+    test_alpha_adapts()
     print()
     if FAILURES:
         print('{} failed: {}'.format(len(FAILURES), ', '.join(FAILURES)))

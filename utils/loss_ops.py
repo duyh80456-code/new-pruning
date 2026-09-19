@@ -169,39 +169,61 @@ class WassersteinPairLoss(WassersteinLossSoft):
 class AlphaDivergenceLossSoft(torch.nn.modules.loss._Loss):
     """adaptive alpha-divergence of AlphaNet, arXiv:2102.07954
 
-    The real baseline for any claim about replacing KL in supernet KD. Takes
-    the worst case over a set of alphas so that neither over- nor
-    under-estimation of the teacher's uncertainty goes unpenalized; the log
-    ratio is clamped because the divergence is unbounded as alpha moves away
-    from one.
+    The real baseline for any claim about replacing KL in supernet KD, so it
+    follows the reference implementation rather than the textbook formula.
+    Two departures, neither cosmetic:
+
+    The importance ratio is raised to alpha and then clipped. The plain
+    divergence is unbounded as alpha moves away from one; written out
+    directly it reaches 1e6 on a randomly initialized supernet and blows the
+    weights up within a handful of steps.
+
+    What is minimized is not the divergence but a surrogate whose weights
+    are detached, with the gradient carried only through log q. The two
+    alphas are compared by their true divergence per sample and the
+    surrogate belonging to the larger one is returned, which is what makes
+    the loss adaptive: neither over- nor under-estimating the teacher's
+    uncertainty goes unpenalized.
+
+    Worth checking against github.com/facebookresearch/AlphaNet before the
+    numbers go in a paper; this was written from the method, not copied.
     """
-    def __init__(self, alphas=(-1.0, 1.0), clamp=5.0, reduction='none'):
+    def __init__(self, alpha_min=-1.0, alpha_max=1.0, iw_clip=5.0,
+                 reduction='none'):
         super(AlphaDivergenceLossSoft, self).__init__(reduction=reduction)
-        self.alphas = alphas
-        self.clamp = clamp
+        self.alpha_min = alpha_min
+        self.alpha_max = alpha_max
+        self.iw_clip = iw_clip
+
+    def _divergence(self, output, target, alpha):
+        q_prob = torch.nn.functional.softmax(output, dim=1).detach()
+        p_prob = target.detach()
+        log_q = torch.nn.functional.log_softmax(output, dim=1)
+        ratio = (p_prob / q_prob.clamp_min(1e-12)).clamp(0.0, self.iw_clip)
+
+        if abs(alpha) < 1e-3:
+            log_ratio = torch.log(ratio.clamp_min(1e-12))
+            f = -log_ratio
+            f_base = 0.0
+            rho_f = log_ratio - 1.0
+        elif abs(alpha - 1.0) < 1e-3:
+            f = ratio * torch.log(ratio.clamp_min(1e-12))
+            f_base = 0.0
+            rho_f = ratio
+        else:
+            iw_alpha = torch.pow(ratio, alpha).clamp(0.0, self.iw_clip)
+            f = iw_alpha / alpha / (alpha - 1.0)
+            f_base = 1.0 / alpha / (alpha - 1.0)
+            rho_f = iw_alpha / alpha + f_base
+
+        divergence = torch.sum(q_prob * (f - f_base), dim=1)
+        surrogate = -torch.sum(q_prob * rho_f * log_q, dim=1)
+        return divergence, surrogate
 
     def forward(self, output, target):
-        log_q = torch.nn.functional.log_softmax(output, dim=1)
-        log_p = torch.log(target.clamp_min(1e-30))
-        ratio = (log_p - log_q).clamp(-self.clamp, self.clamp)
-        losses = []
-        for alpha in self.alphas:
-            if abs(alpha - 1.0) < 1e-6:
-                # forward KL, the degenerate end of the family
-                losses.append((target * ratio).sum(dim=1))
-                continue
-            if abs(alpha) < 1e-6:
-                # reverse KL, the other degenerate end
-                q = torch.nn.functional.softmax(output, dim=1)
-                losses.append(-(q * ratio).sum(dim=1))
-                continue
-            # sum_i p_i^alpha q_i^(1-alpha), in the log domain. Written
-            # through the ratio so the clamp is what bounds the exponent:
-            #   a log p + (1-a) log q = log p - (1-a) (log p - log q)
-            log_mix = torch.logsumexp(log_p - (1.0 - alpha) * ratio, dim=1)
-            losses.append(
-                (torch.exp(log_mix) - 1.0) / (alpha * (alpha - 1.0)))
-        return torch.stack(losses, dim=0).max(dim=0)[0]
+        low, surrogate_low = self._divergence(output, target, self.alpha_min)
+        high, surrogate_high = self._divergence(output, target, self.alpha_max)
+        return torch.where(low > high, surrogate_low, surrogate_high)
 
 
 def build_soft_criterion():
@@ -217,9 +239,9 @@ def build_soft_criterion():
         return CrossEntropyLossSoft(reduction='none')
     if kd_loss == 'alpha':
         return AlphaDivergenceLossSoft(
-            alphas=tuple(
-                getattr(FLAGS, 'alpha_divergence_alphas', [-1.0, 1.0])),
-            clamp=getattr(FLAGS, 'alpha_clamp', 5.0),
+            alpha_min=getattr(FLAGS, 'alpha_min', -1.0),
+            alpha_max=getattr(FLAGS, 'alpha_max', 1.0),
+            iw_clip=getattr(FLAGS, 'alpha_iw_clip', 5.0),
             reduction='none')
     if kd_loss == 'wasserstein':
         return WassersteinLossSoft(

@@ -30,6 +30,10 @@ momentum: 0.9
 weight_decay: 0.0005
 nesterov: True
 
+# Four losses are summed into one step and the KD terms are not bounded
+# the way cross entropy is, so one bad batch early can be unrecoverable.
+grad_clip: 5.0
+
 # lr
 lr: 0.2
 lr_scheduler: cosine_decaying
