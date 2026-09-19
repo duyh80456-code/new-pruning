@@ -1,9 +1,10 @@
 import json
 
 import numpy as np
+import pytest
 
 from rq2_fixed_dense_sw_gate import (
-    KAPPAS, decorrelated_control, freeze_policy, load_frozen_policy,
+    KAPPAS, decorrelated_control, find_completed_seed3_root, freeze_policy, load_frozen_policy,
     policy_summary, run_tau_probe, sha256, soft_sw_policy,
 )
 from rq2_pairwise_surrogate_regret import INTERIOR_WIDTHS, incidence_matrix
@@ -58,3 +59,21 @@ def test_probe_then_freeze_binds_common_checkpoint_and_uniform(tmp_path):
     frozen = freeze_policy(root, probe, 1.0)
     assert frozen == load_frozen_policy(root)
     assert frozen["accuracy_used_to_choose_kappa"] is False
+
+
+def test_duplicate_kaggle_roots_are_resolved_only_when_content_matches(tmp_path):
+    for folder in ("a", "b"):
+        root = tmp_path / folder / "e2e_pairwise_pilot_v2"
+        for name, content in (
+            ("common_warmup/epoch_010.pt", b"e10"),
+            ("uniform/checkpoints/epoch_100.pt", b"uniform"),
+            ("pure_sw/sw_policies/epoch_010.npz", b"sw"),
+            ("frozen_protocol.json", b"{}"),
+        ):
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+    assert find_completed_seed3_root(tmp_path) is not None
+    (tmp_path / "b/e2e_pairwise_pilot_v2/uniform/checkpoints/epoch_100.pt").write_bytes(b"different")
+    with pytest.raises(RuntimeError, match="content-distinct"):
+        find_completed_seed3_root(tmp_path)

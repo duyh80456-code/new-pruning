@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +20,51 @@ from rq2_pairwise_surrogate_regret import (
 KAPPAS = (0.1, 1.0, 10.0)
 METHODS = ("fixed_dense_sw", "fixed_dense_shuffled")
 PAIR_LOOKUP = {pair: index for index, pair in enumerate(PAIR_INDICES)}
+
+
+def find_completed_seed3_root(input_root: str | Path) -> Path | None:
+    """Resolve duplicate Kaggle attachments by content, never by arbitrary order."""
+    candidates = []
+    for checkpoint in Path(input_root).rglob("epoch_010.pt"):
+        if checkpoint.parent.name != "common_warmup":
+            continue
+        root = checkpoint.parent.parent
+        required = (
+            root / "uniform/checkpoints/epoch_100.pt",
+            root / "pure_sw/sw_policies/epoch_010.npz",
+            root / "frozen_protocol.json",
+        )
+        if all(path.is_file() for path in required):
+            candidates.append(root)
+    if not candidates:
+        return None
+    groups = {}
+    for root in candidates:
+        fingerprint = tuple(sha256(root / name) for name in (
+            "common_warmup/epoch_010.pt",
+            "uniform/checkpoints/epoch_100.pt",
+            "pure_sw/sw_policies/epoch_010.npz",
+        ))
+        groups.setdefault(fingerprint, []).append(root)
+    if len(groups) != 1:
+        raise RuntimeError(f"Multiple content-distinct seed-3 sources attached: {candidates}")
+    return sorted(next(iter(groups.values())), key=lambda path: (len(str(path)), str(path)))[0]
+
+
+def materialize_completed_seed3_root(input_root: str | Path, destination: str | Path) -> Path:
+    """Copy one unique direct source, or use the existing pilot ZIP resolver."""
+    source = find_completed_seed3_root(input_root)
+    destination = Path(destination)
+    if source is not None:
+        if destination.exists():
+            existing = find_completed_seed3_root(destination)
+            if existing is None or sha256(existing / "common_warmup/epoch_010.pt") != sha256(source / "common_warmup/epoch_010.pt"):
+                raise RuntimeError("Working destination contains another seed-3 source")
+        else:
+            shutil.copytree(source, destination)
+        return destination
+    from rq2_e2e_pairwise_pilot import materialize_progress
+    return materialize_progress(input_root, destination, destination.parent / "materialized-fixedsw-archive")
 
 
 def sha256(path: str | Path) -> str:
