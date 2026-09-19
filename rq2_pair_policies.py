@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
 import pandas as pd
-from scipy.optimize import linprog
+from scipy.optimize import linprog, minimize
 
 from rq2_pairwise_surrogate_regret import (
     INTERIOR_WIDTHS,
@@ -208,9 +208,139 @@ class ResourceGeoPairPolicy(PairPolicy):
         object.__setattr__(self, "diagnostics", diagnostics)
 
 
+def solve_temporal_sw_policy(
+    sw_matrix: np.ndarray,
+    previous_probabilities: np.ndarray,
+    continuity_strength_in_score_std: float = 1.0,
+    uniform_mixture: float = 0.0,
+    use_continuity: bool = True,
+) -> tuple[np.ndarray, dict]:
+    """Build a fixed-marginal SW policy with temporal continuity and annealing.
+
+    Continuity uses KL(q || q_previous).  Its coefficient is expressed in
+    units of the standard deviation of the current raw SW^2 pair scores, so
+    rescaling representations cannot silently change the regularization.
+    Uniform annealing is an explicit convex mixture after the geometry solve;
+    both operands have the same fixed marginals, hence the mixture does too.
+    """
+    sw = np.asarray(sw_matrix, dtype=np.float64)
+    if (
+        sw.shape != (14, 14) or np.any(sw < 0) or not np.isfinite(sw).all()
+        or not np.allclose(sw, sw.T, atol=1e-12, rtol=1e-12)
+    ):
+        raise ValueError("Temporal SW requires one finite nonnegative symmetric 14x14 matrix")
+    previous = validate_pair_probabilities(previous_probabilities)
+    alpha = float(uniform_mixture)
+    strength = float(continuity_strength_in_score_std)
+    if not 0.0 <= alpha < 1.0:
+        raise ValueError("uniform_mixture must lie in [0, 1)")
+    if strength <= 0:
+        raise ValueError("continuity_strength_in_score_std must be positive")
+
+    scores = np.asarray([sw[i, j] ** 2 for i, j in PAIR_INDICES], dtype=np.float64)
+    score_std = float(np.std(scores))
+    q_uniform = UniformPairPolicy().probabilities
+    if score_std <= 1e-15:
+        geometry_solution = previous.copy() if use_continuity else q_uniform.copy()
+        solver_status = "flat_scores"
+        iterations = 0
+        kl_coefficient = 0.0
+    elif use_continuity:
+        if np.any(previous <= 0):
+            raise ValueError("KL continuity requires a strictly positive previous policy")
+        kl_coefficient = strength * score_std
+        incidence = incidence_matrix()
+
+        def objective(q):
+            divergence = np.sum(q * np.log(q / previous) - q + previous)
+            return float(-scores @ q + kl_coefficient * divergence)
+
+        def gradient(q):
+            return -scores + kl_coefficient * np.log(q / previous)
+
+        result = minimize(
+            objective,
+            previous,
+            jac=gradient,
+            method="SLSQP",
+            bounds=[(1e-12, 1.0)] * NUM_PAIRS,
+            constraints={
+                "type": "eq",
+                "fun": lambda q: incidence @ q - UNIFORM_PI,
+                "jac": lambda q: incidence,
+            },
+            options={"maxiter": 2000, "ftol": 1e-12, "disp": False},
+        )
+        if not result.success:
+            raise RuntimeError(f"Temporal KL policy solve failed: {result.message}")
+        geometry_solution = validate_pair_probabilities(result.x)
+        solver_status = str(result.message)
+        iterations = int(result.nit)
+    else:
+        geometry_solution = SWPairPolicy(sw).probabilities
+        solver_status = "pure_sw_lp"
+        iterations = 0
+        kl_coefficient = 0.0
+
+    final = validate_pair_probabilities(
+        (1.0 - alpha) * geometry_solution + alpha * q_uniform
+    )
+    positive = final[final > 0]
+    def kl_divergence(q, reference):
+        positive = q > 0
+        if np.any(reference[positive] <= 0):
+            return float("inf")
+        return float(np.sum(q[positive] * np.log(q[positive] / reference[positive])))
+
+    diagnostics = {
+        "use_continuity": bool(use_continuity),
+        "continuity_strength_in_score_std": strength if use_continuity else 0.0,
+        "score_std": score_std,
+        "kl_coefficient": kl_coefficient,
+        "uniform_mixture": alpha,
+        "solver_status": solver_status,
+        "solver_iterations": iterations,
+        "geometry_score_previous": float(scores @ previous),
+        "geometry_score_solution": float(scores @ geometry_solution),
+        "geometry_score_final": float(scores @ final),
+        "geometry_score_uniform": float(scores @ q_uniform),
+        "kl_final_to_previous": kl_divergence(final, previous),
+        "l1_final_to_previous": float(np.abs(final - previous).sum()),
+        "l1_final_to_uniform": float(np.abs(final - q_uniform).sum()),
+        "entropy": float(-(positive * np.log(positive)).sum()),
+        "effective_support": float(1.0 / np.square(final).sum()),
+        "support_size": int(np.count_nonzero(final > 1e-8)),
+        "maximum_probability": float(final.max()),
+        "marginal_error": float(np.max(np.abs(incidence_matrix() @ final - UNIFORM_PI))),
+    }
+    return final, diagnostics
+
+
+class TemporalSWPairPolicy(PairPolicy):
+    def __init__(
+        self,
+        name: str,
+        sw_matrix: np.ndarray,
+        previous_probabilities: np.ndarray,
+        continuity_strength_in_score_std: float = 1.0,
+        uniform_mixture: float = 0.0,
+        use_continuity: bool = True,
+    ):
+        probabilities, diagnostics = solve_temporal_sw_policy(
+            sw_matrix,
+            previous_probabilities,
+            continuity_strength_in_score_std,
+            uniform_mixture,
+            use_continuity,
+        )
+        super().__init__(name, probabilities)
+        object.__setattr__(self, "diagnostics", diagnostics)
+
+
 __all__ = [
     "PairPolicy", "UniformPairPolicy", "ResourcePairPolicy", "SWPairPolicy",
-    "ResourceGeoPairPolicy", "resource_score_vector", "solve_resource_preserving_geo",
+    "ResourceGeoPairPolicy", "TemporalSWPairPolicy", "resource_score_vector",
+    "solve_resource_preserving_geo", "solve_temporal_sw_policy",
     "anti_monotone_resource_probabilities",
     "solve_fixed_marginal_lp", "sample_pair", "pair_table",
     "validate_pair_probabilities",

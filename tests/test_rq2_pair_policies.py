@@ -4,6 +4,7 @@ from rq2_pair_policies import (
     ResourceGeoPairPolicy,
     ResourcePairPolicy,
     SWPairPolicy,
+    TemporalSWPairPolicy,
     UniformPairPolicy,
     sample_pair,
     validate_pair_probabilities,
@@ -18,6 +19,7 @@ def test_all_pair_policies_have_exact_uniform_marginals():
     policies = [
         UniformPairPolicy(), ResourcePairPolicy(flops), SWPairPolicy(sw),
         ResourceGeoPairPolicy(flops, sw),
+        TemporalSWPairPolicy("temporal", sw, UniformPairPolicy().probabilities),
     ]
     for policy in policies:
         q = validate_pair_probabilities(policy.probabilities)
@@ -44,3 +46,25 @@ def test_rpgeo_preserves_resource_optimum_and_reports_refinement():
         rpgeo.diagnostics["l1_vs_resource"],
         np.abs(rpgeo.probabilities - resource.probabilities).sum(),
     )
+
+
+def test_temporal_sw_continuity_and_uniform_mixture_keep_fixed_marginals():
+    coordinates = np.asarray(INTERIOR_WIDTHS)
+    sw = np.abs(np.sin(11 * coordinates[:, None]) - np.sin(11 * coordinates[None, :]))
+    uniform = UniformPairPolicy().probabilities
+    continuity = TemporalSWPairPolicy(
+        "continuity", sw, uniform,
+        continuity_strength_in_score_std=1.0,
+        uniform_mixture=0.0,
+        use_continuity=True,
+    )
+    combined = TemporalSWPairPolicy(
+        "combined", sw, continuity.probabilities,
+        continuity_strength_in_score_std=1.0,
+        uniform_mixture=0.8,
+        use_continuity=True,
+    )
+    for policy in (continuity, combined):
+        assert np.max(np.abs(incidence_matrix() @ policy.probabilities - 1 / 7)) < 1e-8
+        assert policy.diagnostics["support_size"] == 91
+    assert combined.diagnostics["l1_final_to_uniform"] < continuity.diagnostics["l1_final_to_uniform"]
