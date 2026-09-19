@@ -68,16 +68,25 @@ def _sinkhorn_potentials(log_p, log_q, cost, eps, n_iters):
     cost with respect to a marginal is its own potential, so <f, p> + <g, q>
     with f, g constant already carries the right gradient. This keeps memory
     flat in n_iters instead of unrolling every iteration.
+
+    Both potentials are updated from the previous iterate rather than g from
+    the freshly written f. Swapping the two marginals then swaps f and g
+    exactly, at every iteration, so the divergence is symmetric by
+    construction instead of only at convergence. That matters here: symmetry
+    is the argument for using this on a pair of students, not a detail.
     """
     with torch.no_grad():
         cost_eps = cost.unsqueeze(0) / eps
         f = torch.zeros_like(log_p)
         g = torch.zeros_like(log_q)
         for _ in range(n_iters):
-            f = eps * (log_p - torch.logsumexp(
+            f_next = eps * (log_p - torch.logsumexp(
                 g.unsqueeze(1) / eps - cost_eps, dim=2))
-            g = eps * (log_q - torch.logsumexp(
+            g_next = eps * (log_q - torch.logsumexp(
                 f.unsqueeze(2) / eps - cost_eps, dim=1))
+            # damped, because a simultaneous update oscillates undamped
+            f = 0.5 * (f + f_next)
+            g = 0.5 * (g + g_next)
     return f, g
 
 
@@ -93,7 +102,7 @@ def _sinkhorn_symmetric_potential(log_p, cost, eps, n_iters):
     return a
 
 
-def sinkhorn_divergence(p, q, cost, eps=0.05, n_iters=50, debiased=True):
+def sinkhorn_divergence(p, q, cost, eps=0.2, n_iters=100, debiased=True):
     """entropic Wasserstein between two batches of distributions
 
     p, q: (batch, n_class) probability vectors. cost: (n_class, n_class).
@@ -122,7 +131,7 @@ class WassersteinLossSoft(torch.nn.modules.loss._Loss):
     cost matrix has to be refreshed from the classifier as it trains, so
     train.py calls set_cost() during the loop.
     """
-    def __init__(self, eps=0.05, n_iters=50, debiased=True, reduction='none'):
+    def __init__(self, eps=0.2, n_iters=100, debiased=True, reduction='none'):
         super(WassersteinLossSoft, self).__init__(reduction=reduction)
         self.eps = eps
         self.n_iters = n_iters
@@ -214,8 +223,8 @@ def build_soft_criterion():
             reduction='none')
     if kd_loss == 'wasserstein':
         return WassersteinLossSoft(
-            eps=getattr(FLAGS, 'sinkhorn_eps', 0.05),
-            n_iters=getattr(FLAGS, 'sinkhorn_iters', 50),
+            eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),
+            n_iters=getattr(FLAGS, 'sinkhorn_iters', 100),
             debiased=getattr(FLAGS, 'sinkhorn_debiased', True),
             reduction='none')
     raise ValueError('unknown kd_loss {}'.format(kd_loss))
@@ -226,7 +235,7 @@ def build_pair_criterion():
     if not getattr(FLAGS, 'horizontal_kd', False):
         return None
     return WassersteinPairLoss(
-        eps=getattr(FLAGS, 'sinkhorn_eps', 0.05),
-        n_iters=getattr(FLAGS, 'sinkhorn_iters', 50),
+        eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),
+        n_iters=getattr(FLAGS, 'sinkhorn_iters', 100),
         debiased=getattr(FLAGS, 'sinkhorn_debiased', True),
         reduction='none')

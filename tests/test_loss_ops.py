@@ -17,11 +17,11 @@ if not any(arg.startswith('app:') for arg in sys.argv):
 
 import torch
 
+from utils.config import FLAGS
 from utils.loss_ops import AlphaDivergenceLossSoft
 from utils.loss_ops import CrossEntropyLossSoft
 from utils.loss_ops import WassersteinLossSoft
 from utils.loss_ops import WassersteinPairLoss
-from utils.config import FLAGS
 from utils.loss_ops import _sinkhorn_potentials
 from utils.loss_ops import class_cost_matrix
 from utils.loss_ops import sinkhorn_divergence
@@ -209,24 +209,113 @@ def test_sinkhorn_converges_at_configured_settings():
     apps/kd_d before training anything.
     """
     n_class = 100
-    cost = class_cost_matrix(torch.randn(n_class, 128))
-    p = random_probs(32, n_class, seed=7)
-    q = random_probs(32, n_class, seed=8)
-    eps = getattr(FLAGS, 'sinkhorn_eps', 0.05)
-    n_iters = getattr(FLAGS, 'sinkhorn_iters', 50)
-    violation = marginal_violation(p, q, cost, eps, n_iters)
+    cost = class_cost_matrix(clustered_classifier(n_class))
+    eps = getattr(FLAGS, 'sinkhorn_eps', 0.2)
+    n_iters = getattr(FLAGS, 'sinkhorn_iters', 100)
+
+    # A trained supernet is confident, and a peaked distribution is the hard
+    # case for Sinkhorn: nearly all the mass sits on a few classes, so the
+    # scaling factors have much further to travel. Late training, not the
+    # mild random case, is what the settings have to survive.
+    regimes = [
+        ('diffuse, as at init', 1.0),
+        ('moderate', 4.0),
+        ('confident, as late in training', 12.0),
+    ]
+    grid_iters = (25, 50, 100, 200, 400)
+    worst = 0.0
+    for label, temperature in regimes:
+        generator = torch.Generator().manual_seed(7)
+        p = torch.softmax(
+            temperature * torch.randn(32, n_class, generator=generator),
+            dim=1)
+        q = torch.softmax(
+            temperature * torch.randn(32, n_class, generator=generator),
+            dim=1)
+        print('      marginal violation, {}'.format(label))
+        print('        {:>6}'.format('eps') + ''.join(
+            '{:>11d}'.format(i) for i in grid_iters))
+        for trial_eps in (0.05, 0.1, 0.15, 0.2, 0.3):
+            print('        {:>6.2f}'.format(trial_eps) + ''.join(
+                '{:>11.1e}'.format(
+                    marginal_violation(p, q, cost, trial_eps, i))
+                for i in grid_iters))
+        worst = max(worst, marginal_violation(p, q, cost, eps, n_iters))
     check(
-        'sinkhorn converged at eps={}, iters={}'.format(eps, n_iters),
-        violation < 1e-3,
-        'max marginal violation = {:.2e}'.format(violation))
-    print('      convergence sweep at eps = {}:'.format(eps))
-    for iters in (10, 25, 50, 100, 200, 400):
-        print('        {:4d} iters -> {:.2e}'.format(
-            iters, marginal_violation(p, q, cost, eps, iters)))
-    print('      sweep over eps at {} iters:'.format(n_iters))
-    for trial_eps in (0.01, 0.05, 0.1, 0.25, 0.5):
-        print('        eps {:.2f} -> {:.2e}'.format(
-            trial_eps, marginal_violation(p, q, cost, trial_eps, n_iters)))
+        'converged in every regime at eps={}, iters={}'.format(eps, n_iters),
+        worst < 1e-4,
+        'worst marginal violation = {:.2e}'.format(worst))
+
+
+def clustered_classifier(n_class=100, n_group=10, dim=128, spread=3.0,
+                         seed=11):
+    """class embeddings with real structure: groups of related classes
+
+    A random classifier is the wrong thing to test the metric on. In 128
+    dimensions random rows are all nearly equidistant, so the cost matrix is
+    almost flat and transport degenerates into a scaled total variation.
+    Structure has to be present for there to be anything to measure.
+    """
+    generator = torch.Generator().manual_seed(seed)
+    centers = spread * torch.randn(n_group, dim, generator=generator)
+    group = torch.arange(n_class) % n_group
+    return centers[group] + torch.randn(n_class, dim, generator=generator)
+
+
+def report_cost_spread(name, weight):
+    cost = class_cost_matrix(weight)
+    off = cost + torch.eye(cost.size(0)) * 1e9
+    nearest = off.min(dim=1)[0].mean().item()
+    farthest = cost.max(dim=1)[0].mean().item()
+    print('      {:22} nearest {:.3f}  farthest {:.3f}  ratio {:.2f}'.format(
+        name, nearest, farthest, farthest / nearest))
+    return cost, farthest / nearest
+
+
+def test_metric_survives_the_configured_eps():
+    """the other half of choosing eps: blur costs discrimination
+
+    Convergence alone would push eps up without limit. This measures what is
+    traded away, on a cost matrix that actually has structure: how much more
+    a far substitution costs than a near one. If the ratio collapses toward
+    one, transport has been smoothed into something KL-like and the reason
+    for using it is gone.
+    """
+    print('      cost matrix spread, averaged over rows:')
+    report_cost_spread('random classifier', torch.randn(100, 128))
+    cost, _ = report_cost_spread('clustered classifier',
+                                 clustered_classifier())
+
+    order = cost[0].argsort()
+    near_j, far_j = order[1].item(), order[-1].item()
+
+    def three_point(heavy):
+        v = torch.full((1, cost.size(0)), 1e-9)
+        v[0, 0] = 0.1
+        v[0, near_j] = 0.1
+        v[0, far_j] = 0.1
+        v[0, heavy] = 0.8
+        return v / v.sum()
+
+    teacher = three_point(0)
+    near, far = three_point(near_j), three_point(far_j)
+    eps = getattr(FLAGS, 'sinkhorn_eps', 0.2)
+    n_iters = getattr(FLAGS, 'sinkhorn_iters', 100)
+
+    def ratio(trial_eps, iters):
+        w_near = sinkhorn_divergence(near, teacher, cost, trial_eps, iters)
+        w_far = sinkhorn_divergence(far, teacher, cost, trial_eps, iters)
+        return w_far.item() / max(w_near.item(), 1e-12)
+
+    print('      far/near penalty ratio by eps at {} iterations:'.format(
+        n_iters))
+    for trial_eps in (0.02, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 1.0):
+        print('        eps {:.2f} -> {:.2f}'.format(
+            trial_eps, ratio(trial_eps, n_iters)))
+    check(
+        'the configured eps still separates near from far',
+        ratio(eps, n_iters) > 2.0,
+        'far/near = {:.2f}'.format(ratio(eps, n_iters)))
 
 
 def test_cost_matrix_from_classifier():
@@ -298,6 +387,7 @@ def main():
     test_vertical_loss_interface()
     test_gradient_points_the_right_way()
     test_sinkhorn_converges_at_configured_settings()
+    test_metric_survives_the_configured_eps()
     test_cost_matrix_from_classifier()
     test_alpha_reduces_to_kl()
     test_alpha_matches_direct_formula()

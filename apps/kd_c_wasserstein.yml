@@ -61,8 +61,8 @@ width_mult_range: [0.25, 1.0]
 # =========================== Distillation ===========================
 inplace_distill: True
 kd_loss: wasserstein
-sinkhorn_eps: 0.05
-sinkhorn_iters: 50
+sinkhorn_eps: 0.2
+sinkhorn_iters: 100
 sinkhorn_debiased: True
 cost_normalize: True
 horizontal_kd: False
