@@ -394,6 +394,65 @@ def test_alpha_descends():
         == teacher.argmax().item())
 
 
+def test_alpha_matches_alphanet():
+    """bit-for-bit against the reference, which is the point of branch B
+
+    B exists to be the baseline that a Wasserstein result has to clear, so
+    "close enough to AlphaNet" is not good enough: any gap becomes an
+    objection to the result. The reference takes teacher logits where
+    US-Net's loop hands over probabilities, which is the one adaptation.
+    """
+    from tests.reference import alphanet_loss_ops as reference
+
+    ours = AlphaDivergenceLossSoft(
+        alpha_min=-1.0, alpha_max=1.0, iw_clip=5.0)
+    theirs = reference.AdaptiveLossSoft(
+        alpha_min=-1.0, alpha_max=1.0, iw_clip=5.0)
+    theirs.reduction = 'none'
+
+    generator = torch.Generator().manual_seed(11)
+    base = 2.0 * torch.randn(256, 100, generator=generator)
+    cases = [
+        ('supernet gap {:.1f}'.format(noise),
+         base + noise * torch.randn(256, 100, generator=generator), base)
+        for noise in (0.1, 0.5, 1.0, 3.0)]
+    cases.append((
+        'independent logits',
+        2.0 * torch.randn(256, 100, generator=generator),
+        2.0 * torch.randn(256, 100, generator=generator)))
+    cases.append((
+        'near uniform',
+        0.01 * torch.randn(256, 100, generator=generator),
+        0.01 * torch.randn(256, 100, generator=generator)))
+    # the case that caught a floor on q_prob: q cancels against the ratio,
+    # so flooring it zeroes exactly the samples alpha = 1 punishes hardest
+    cases.append((
+        'confident disagreement',
+        torch.tensor([[20.0, -20.0, -20.0]]),
+        torch.tensor([[-20.0, 20.0, -20.0]])))
+
+    worst = 0.0
+    for name, student, teacher in cases:
+        gap = (ours(student, torch.softmax(teacher, dim=1))
+               - theirs(student, teacher)).abs().max().item()
+        worst = max(worst, gap)
+        if gap >= 1e-5:
+            print('        {:>24} gap {:.2e}'.format(name, gap))
+    check('values match AlphaNet', worst < 1e-5,
+          'worst gap = {:.2e}'.format(worst))
+
+    student = (2.0 * torch.randn(64, 100, generator=generator)
+               ).requires_grad_()
+    teacher = 2.0 * torch.randn(64, 100, generator=generator)
+    ours(student, torch.softmax(teacher, dim=1)).mean().backward()
+    grad_ours = student.grad.clone()
+    student.grad = None
+    theirs(student, teacher).mean().backward()
+    gap = (grad_ours - student.grad).abs().max().item()
+    check('gradients match AlphaNet', gap < 1e-6,
+          'max gap = {:.2e}'.format(gap))
+
+
 def test_alpha_adapts():
     """the pair of alphas must not collapse onto one of them
 
@@ -441,6 +500,7 @@ def main():
     test_cost_matrix_from_classifier()
     test_alpha_is_bounded()
     test_alpha_descends()
+    test_alpha_matches_alphanet()
     test_alpha_adapts()
     print()
     if FAILURES:

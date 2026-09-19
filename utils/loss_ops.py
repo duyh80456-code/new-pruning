@@ -185,8 +185,22 @@ class AlphaDivergenceLossSoft(torch.nn.modules.loss._Loss):
     the loss adaptive: neither over- nor under-estimating the teacher's
     uncertainty goes unpenalized.
 
-    Worth checking against github.com/facebookresearch/AlphaNet before the
-    numbers go in a paper; this was written from the method, not copied.
+    Checked line by line against AdaptiveLossSoft and f_divergence in
+    facebookresearch/AlphaNet. One adaptation and one safeguard:
+
+    The reference takes teacher logits and softmaxes them. US-Net hands its
+    sub-networks teacher probabilities, since forward_loss already took the
+    softmax at the widest width, so those are used directly.
+
+    q_prob is floored at 1e-12 before the division. The reference divides
+    straight through, which yields inf when the student has collapsed a
+    class to zero, and relies on the clip and on gradient clipping to
+    contain it.
+
+    That gradient clip is not optional. The reference says so in a comment
+    and alpha = 1, its own default upper alpha, is unclipped. The CIFAR
+    configs set grad_clip for every branch so that the optimizer is
+    identical across them and only the loss differs.
     """
     def __init__(self, alpha_min=-1.0, alpha_max=1.0, iw_clip=5.0,
                  reduction='none'):
@@ -199,19 +213,34 @@ class AlphaDivergenceLossSoft(torch.nn.modules.loss._Loss):
         q_prob = torch.nn.functional.softmax(output, dim=1).detach()
         p_prob = target.detach()
         log_q = torch.nn.functional.log_softmax(output, dim=1)
-        ratio = (p_prob / q_prob.clamp_min(1e-12)).clamp(0.0, self.iw_clip)
 
+        # Where the clip goes is the whole thing. It is applied to the ratio
+        # raised to alpha, not to the ratio, so a class the student is
+        # confident about and the teacher is not stays informative instead of
+        # being flattened. alpha = 1 is left unclipped, as upstream; the
+        # gradient clip in train.py is what bounds it, which is exactly what
+        # the reference implementation tells you to add.
+        # q cancels: q_prob * rho_f is p_prob again, which is what keeps the
+        # ratio usable at 1e17. Flooring q at anything a student can
+        # actually reach breaks that cancellation and silently zeroes the
+        # very samples this is meant to punish. Only the smallest
+        # representable number is held back, to turn a division by an
+        # underflowed zero into a large finite number instead of a nan.
+        importance_ratio = p_prob / q_prob.clamp_min(
+            torch.finfo(q_prob.dtype).tiny)
         if abs(alpha) < 1e-3:
-            log_ratio = torch.log(ratio.clamp_min(1e-12))
+            importance_ratio = importance_ratio.clamp(0, self.iw_clip)
+            log_ratio = importance_ratio.clamp_min(1e-12).log()
             f = -log_ratio
             f_base = 0.0
             rho_f = log_ratio - 1.0
         elif abs(alpha - 1.0) < 1e-3:
-            f = ratio * torch.log(ratio.clamp_min(1e-12))
+            f = importance_ratio * importance_ratio.clamp_min(1e-12).log()
             f_base = 0.0
-            rho_f = ratio
+            rho_f = importance_ratio
         else:
-            iw_alpha = torch.pow(ratio, alpha).clamp(0.0, self.iw_clip)
+            iw_alpha = torch.pow(importance_ratio, alpha)
+            iw_alpha = iw_alpha.clamp(0, self.iw_clip)
             f = iw_alpha / alpha / (alpha - 1.0)
             f_base = 1.0 / alpha / (alpha - 1.0)
             rho_f = iw_alpha / alpha + f_base
