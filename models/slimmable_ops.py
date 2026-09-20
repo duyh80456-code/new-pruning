@@ -167,14 +167,30 @@ class USBatchNorm2d(nn.BatchNorm2d):
         self.ratio = ratio
         self.width_mult = None
         self.ignore_model_profiling = True
+        # counted per width, because calibration walks every width on each
+        # batch and a single counter would advance len(width_mult_list)
+        # times per batch
+        self.calibration_batches = [0] * len(FLAGS.width_mult_list)
 
     def forward(self, input):
         weight = self.weight
         bias = self.bias
         c = make_divisible(
             self.num_features_max * self.width_mult / self.ratio) * self.ratio
+        momentum = self.momentum
         if self.width_mult in FLAGS.width_mult_list:
             idx = FLAGS.width_mult_list.index(self.width_mult)
+            if momentum is None:
+                if self.training:
+                    # cumulative moving average over the calibration
+                    # batches, which is what cumulative_bn_stats asks for
+                    self.calibration_batches[idx] += 1
+                    momentum = 1.0 / float(self.calibration_batches[idx])
+                else:
+                    # unused in eval, but batch_norm still wants a float
+                    momentum = 0.1
+            # these slices are views, so batch_norm writes the updated
+            # statistics straight back into self.bn[idx]
             y = nn.functional.batch_norm(
                 input,
                 self.bn[idx].running_mean[:c],
@@ -182,9 +198,11 @@ class USBatchNorm2d(nn.BatchNorm2d):
                 weight[:c],
                 bias[:c],
                 self.training,
-                self.momentum,
+                momentum,
                 self.eps)
         else:
+            # an arbitrary width during training: no statistics are kept for
+            # it, so this normalizes by the batch
             y = nn.functional.batch_norm(
                 input,
                 self.running_mean,
@@ -192,7 +210,7 @@ class USBatchNorm2d(nn.BatchNorm2d):
                 weight[:c],
                 bias[:c],
                 self.training,
-                self.momentum,
+                momentum if momentum is not None else 0.1,
                 self.eps)
         return y
 
@@ -203,6 +221,20 @@ def pop_channels(autoslim_channels):
 
 def bn_calibration_init(m):
     """ calculating post-statistics of batch normalization """
+    if isinstance(m, USBatchNorm2d):
+        # This module holds its statistics in m.bn[idx] and hands those
+        # buffers to batch_norm itself, using its own training flag. The
+        # branch below cannot reach it: track_running_stats is False on the
+        # outer module, so eval() leaves training False, batch_norm is told
+        # not to update, and the statistics the branch below has just reset
+        # are used as though they had been calibrated. Every width then
+        # reads back at chance, which is what a 100-epoch run produced:
+        # 75.4% at width 1.0 during training, 1.0% at every width after.
+        m.training = True
+        m.calibration_batches = [0] * len(FLAGS.width_mult_list)
+        if getattr(FLAGS, 'cumulative_bn_stats', False):
+            m.momentum = None
+        return
     if getattr(m, 'track_running_stats', False):
         # reset all values for post-statistics
         m.reset_running_stats()
