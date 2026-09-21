@@ -327,6 +327,18 @@ def get_meters(phase):
 def profiling(model, use_cuda):
     """profiling on either gpu or cpu"""
     print('Start model profiling, use_cuda: {}.'.format(use_cuda))
+    # model_profiling runs its own forward and wants a tensor back, so the
+    # feature taps have to be off for it. It counts multiply-accumulates
+    # and does not care what the forward returns.
+    taps = getattr(FLAGS, 'return_features', False)
+    FLAGS.return_features = False
+    try:
+        return _profiling(model, use_cuda)
+    finally:
+        FLAGS.return_features = taps
+
+
+def _profiling(model, use_cuda):
     if getattr(FLAGS, 'autoslim', False):
         flops, params = model_profiling(
             model, FLAGS.image_size, FLAGS.image_size, use_cuda=use_cuda,
