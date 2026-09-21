@@ -18,9 +18,11 @@ from utils.distributed import dist_all_reduce_tensor
 from utils.distributed import master_only_print as print
 from utils.distributed import AllReduceDistributedDataParallel, allreduce_grads
 from utils.loss_ops import CrossEntropyLossSoft, CrossEntropyLossSmooth
-from utils.loss_ops import WassersteinLossSoft
+from utils.loss_ops import WassersteinLossSoft, WassersteinPairLoss
 from utils.loss_ops import build_soft_criterion, build_pair_criterion
-from utils.loss_ops import get_classifier_weight, class_cost_matrix
+from utils.loss_ops import build_feature_criterion
+from utils.loss_ops import build_feature_pair_criterion
+from utils.loss_ops import build_confusion_embedding, build_cost_matrix
 from models.slimmable_ops import bn_calibration_init
 from utils.config import FLAGS
 from utils.meters import ScalarMeter, flush_scalar_meters
@@ -374,6 +376,9 @@ def forward_loss(
         return_output=False):
     """forward model and return loss"""
     output = model(input)
+    feature = None
+    if isinstance(output, tuple):
+        output, feature = output
     if soft_target is not None:
         loss = torch.mean(soft_criterion(output, soft_target))
     else:
@@ -401,17 +406,16 @@ def forward_loss(
     if meter is not None:
         meter['loss'].cache(tensor[0])
     if return_soft_target:
-        if return_output:
-            return loss, torch.nn.functional.softmax(output, dim=1), output
-        return loss, torch.nn.functional.softmax(output, dim=1)
+        return loss, torch.nn.functional.softmax(output, dim=1), feature
     if return_output:
-        return loss, output
+        return loss, output, feature
     return loss
 
 
 def run_one_epoch(
         epoch, loader, model, criterion, optimizer, meters, phase='train',
-        soft_criterion=None, pair_criterion=None):
+        soft_criterion=None, pair_criterion=None, feature_criterion=None,
+        feature_pair_criterion=None, confusion=None):
     """run one epoch for train/val/test/cal"""
     t_start = time.time()
     assert phase in ['train', 'val', 'test', 'cal'], 'Invalid phase.'
@@ -429,9 +433,8 @@ def run_one_epoch(
     elif getattr(FLAGS, 'slimmable_training', False):
         max_width = max(FLAGS.width_mult_list)
         min_width = min(FLAGS.width_mult_list)
-    needs_cost = (
-        isinstance(soft_criterion, WassersteinLossSoft)
-        or pair_criterion is not None)
+    needs_cost = (isinstance(soft_criterion, WassersteinLossSoft)
+                  or isinstance(pair_criterion, WassersteinPairLoss))
 
     if getattr(FLAGS, 'distributed', False):
         loader.sampler.set_epoch(epoch)
@@ -457,24 +460,23 @@ def run_one_epoch(
                     widths_train = [max_width, min_width] + widths_train
                     # the class cost matrix is read off the classifier, which
                     # keeps moving, so refresh it before the widths are run
-                    cost = None
                     if needs_cost:
-                        cost = class_cost_matrix(
-                            get_classifier_weight(model),
-                            normalize=getattr(
-                                FLAGS, 'cost_normalize', True))
+                        cost = build_cost_matrix(model, confusion)
                         if isinstance(soft_criterion, WassersteinLossSoft):
                             soft_criterion.set_cost(cost)
-                        if pair_criterion is not None:
+                        if isinstance(pair_criterion, WassersteinPairLoss):
                             pair_criterion.set_cost(cost)
                     # with a horizontal term the graphs of two widths have to
                     # be alive at the same time, so backward is deferred to
                     # the end of the loop. Summing first and calling backward
                     # once is arithmetically what the per-width backward did,
                     # it only costs memory
-                    deferred = pair_criterion is not None
+                    deferred = (pair_criterion is not None
+                                or feature_pair_criterion is not None)
                     losses = []
                     mid_outputs = []
+                    mid_features = []
+                    teacher_feature = None
                     for width_mult in widths_train:
                         # the sandwich rule
                         if width_mult in [max_width, min_width]:
@@ -498,31 +500,48 @@ def run_one_epoch(
 
                         # inplace distillation
                         if width_mult == max_width:
-                            loss, soft_target = forward_loss(
+                            loss, soft_target, teacher_feature = forward_loss(
                                 model, criterion, input, target, meter,
                                 return_soft_target=True)
+                            if confusion is not None:
+                                confusion.update(soft_target.detach(), target)
                         else:
                             if getattr(FLAGS, 'inplace_distill', False):
-                                loss, output = forward_loss(
+                                loss, output, feature = forward_loss(
                                     model, criterion, input, target, meter,
                                     soft_target=soft_target.detach(),
                                     soft_criterion=soft_criterion,
                                     return_output=True)
                             else:
-                                loss, output = forward_loss(
+                                loss, output, feature = forward_loss(
                                     model, criterion, input, target, meter,
                                     return_output=True)
+                            # vertical term at the feature level, alongside
+                            # whatever the logits are being matched with
+                            if (feature_criterion is not None
+                                    and teacher_feature is not None):
+                                loss = loss + (
+                                    getattr(FLAGS, 'feature_weight', 1.0)
+                                    * feature_criterion(
+                                        feature, teacher_feature.detach()))
                             # the two middle widths are the pair with no
                             # relation between them under the sandwich rule
                             if deferred and width_mult != min_width:
                                 mid_outputs.append(output)
+                                mid_features.append(feature)
                         if deferred:
                             losses.append(loss)
                         else:
                             loss.backward()
                     if deferred:
-                        pair_loss = torch.mean(pair_criterion(
-                            mid_outputs[0], mid_outputs[1]))
+                        pair_loss = 0.0
+                        if pair_criterion is not None:
+                            pair_loss = pair_loss + torch.mean(
+                                pair_criterion(
+                                    mid_outputs[0], mid_outputs[1]))
+                        if feature_pair_criterion is not None:
+                            pair_loss = pair_loss + feature_pair_criterion(
+                                mid_features[0], mid_features[1])
                         losses.append(
                             getattr(FLAGS, 'horizontal_weight', 1.0)
                             * pair_loss)
@@ -542,7 +561,7 @@ def run_one_epoch(
                         else:
                             meter = None
                         if width_mult == max_width:
-                            loss, soft_target = forward_loss(
+                            loss, soft_target, _ = forward_loss(
                                 model, criterion, input, target, meter,
                                 return_soft_target=True)
                         else:
@@ -707,20 +726,31 @@ def train_val_test():
     else:
         soft_criterion = None
     pair_criterion = build_pair_criterion()
-    if pair_criterion is not None:
+    feature_criterion = build_feature_criterion()
+    feature_pair_criterion = build_feature_pair_criterion()
+    confusion = build_confusion_embedding()
+    horizontal = pair_criterion is not None or (
+        feature_pair_criterion is not None)
+    if horizontal or feature_criterion is not None:
         if soft_criterion is None:
             raise ValueError(
-                'horizontal_kd needs inplace_distill: the horizontal term is '
-                'an addition to the vertical one, not a replacement for it')
+                'the extra terms need inplace_distill: they are additions '
+                'to the vertical logit term, not replacements for it')
         if not getattr(FLAGS, 'universally_slimmable_training', False):
             raise ValueError(
-                'horizontal_kd is only wired into the us-net branch')
+                'the extra terms are only wired into the us-net branch')
+    if horizontal:
         # the sandwich rule spends two of the samples on max and min width,
         # so a pair of unrelated middle students needs at least four
         if getattr(FLAGS, 'num_sample_training', 2) < 4:
             raise ValueError(
                 'horizontal_kd needs num_sample_training >= 4, got {}'.format(
                     getattr(FLAGS, 'num_sample_training', 2)))
+    # the model returns its pooled feature alongside the logits only when
+    # something asks for it, so val, calibration and profiling keep the
+    # plain signature everywhere else
+    FLAGS.return_features = (feature_criterion is not None
+                             or feature_pair_criterion is not None)
 
     # check pretrained
     if getattr(FLAGS, 'pretrained', False):
@@ -814,7 +844,10 @@ def train_val_test():
         results = run_one_epoch(
             epoch, train_loader, model_wrapper, criterion, optimizer,
             train_meters, phase='train', soft_criterion=soft_criterion,
-            pair_criterion=pair_criterion)
+            pair_criterion=pair_criterion,
+            feature_criterion=feature_criterion,
+            feature_pair_criterion=feature_pair_criterion,
+            confusion=confusion)
 
         # val
         if val_meters is not None:

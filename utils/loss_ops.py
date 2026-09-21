@@ -1,3 +1,5 @@
+import math
+
 import torch
 
 from utils.config import FLAGS
@@ -59,6 +61,205 @@ def class_cost_matrix(weight, normalize=True):
     if normalize:
         cost = cost / cost.mean().clamp_min(1e-12)
     return cost
+
+
+def identity_cost_matrix(num_classes, device=None, dtype=None):
+    """every pair of classes equally far apart
+
+    The control the measured spread asks for. With this cost, transport has
+    no geometry left to use and the divergence collapses to a scaled total
+    variation. If a run with it matches a run with the classifier cost,
+    then the classifier cost was contributing nothing and the case for
+    Wasserstein at the logit level is closed.
+    """
+    cost = 1.0 - torch.eye(num_classes, device=device, dtype=dtype)
+    return cost / cost.mean().clamp_min(1e-12)
+
+
+class ConfusionEmbedding(object):
+    """what the teacher confuses each class with, accumulated online
+
+    The classifier rows turned out to be nearly equidistant: on a trained
+    supernet the farthest class is only 1.32 times as far as the nearest,
+    against 3.79 for an embedding with real structure. Rows of a linear
+    layer in 512 dimensions are not where the semantics live.
+
+    Confusion is. Two classes are close here when the teacher spreads the
+    same mass over the same other classes, which is measured rather than
+    assumed, and is sparse enough not to concentrate.
+    """
+    def __init__(self, num_classes, momentum=0.01, warmup=50):
+        self.num_classes = num_classes
+        self.momentum = momentum
+        self.warmup = warmup
+        self.updates = 0
+        self.profile = None
+
+    def update(self, teacher_prob, target):
+        with torch.no_grad():
+            one_hot = torch.zeros_like(teacher_prob)
+            one_hot.scatter_(1, target.view(-1, 1), 1.0)
+            counts = one_hot.sum(dim=0)
+            batch = one_hot.t().mm(teacher_prob)
+            seen = counts > 0
+            batch[seen] = batch[seen] / counts[seen].unsqueeze(1)
+            if self.profile is None:
+                self.profile = torch.zeros_like(batch)
+                self.profile[seen] = batch[seen]
+            else:
+                self.profile[seen] = (
+                    (1.0 - self.momentum) * self.profile[seen]
+                    + self.momentum * batch[seen])
+            self.updates += 1
+
+    def ready(self):
+        return self.profile is not None and self.updates >= self.warmup
+
+    def embedding(self):
+        rows = self.profile.sum(dim=1, keepdim=True).clamp_min(1e-12)
+        return self.profile / rows
+
+
+def _uniform_log_marginal(n, reference):
+    return torch.full(
+        (1, n), -math.log(n),
+        device=reference.device, dtype=reference.dtype)
+
+
+def sinkhorn_plan(cost, eps=0.2, n_iters=100):
+    """optimal coupling for uniform marginals, detached
+
+    Used where the gradient has to come through the cost rather than the
+    marginals: at the feature level the two clouds carry equal mass by
+    construction, so nothing about the marginals is learnable and all the
+    signal is in the pairwise distances. With the plan held fixed, the
+    envelope theorem gives the same gradient as differentiating the solve.
+    """
+    with torch.no_grad():
+        log_p = _uniform_log_marginal(cost.size(0), cost)
+        log_q = _uniform_log_marginal(cost.size(1), cost)
+        f, g = _sinkhorn_potentials(log_p, log_q, cost, eps, n_iters)
+        plan = torch.exp(
+            (f.unsqueeze(2) + g.unsqueeze(1) - cost.unsqueeze(0)) / eps)
+    return plan.squeeze(0)
+
+
+def align_features(student, teacher, align='prefix'):
+    """put two widths into a space where they can be compared
+
+    They never share a dimension, which is the whole difficulty. Two ways,
+    and they are not the same claim:
+
+    prefix - a narrow subnet uses the leading channels of the wide one, so
+    the wide features truncated to the narrow width are the same
+    coordinates. This is the feature-level version of the argument that
+    made the classifier cost intrinsic, and it exists only because the
+    widths are nested.
+
+    gram - compare which samples each width considers similar, not where it
+    places them. Dimension free, and the standard way relational
+    distillation sidesteps this, so it is what the literature compares
+    against.
+    """
+    if align == 'prefix':
+        width = min(student.size(1), teacher.size(1))
+        return student[:, :width], teacher[:, :width]
+    if align == 'gram':
+        left = torch.nn.functional.normalize(student, dim=1)
+        right = torch.nn.functional.normalize(teacher, dim=1)
+        return left.mm(left.t()), right.mm(right.t())
+    raise ValueError('unknown feature_align {}'.format(align))
+
+
+def _feature_scale(left, right):
+    """a yardstick that does not move when the clouds do
+
+    Dividing the cost by its own mean, the obvious thing, is wrong here.
+    At the logit level the cost is a detached metric and normalizing only
+    fixes the loss scale. Here the cost *is* the objective: a student cloud
+    sliding toward the teacher shrinks every pairwise distance by the same
+    factor, so a self-normalized cost is invariant to exactly the movement
+    it is supposed to reward, and the gradient vanishes.
+
+    The spread within each cloud is the scale instead. Detached, so it
+    cannot be gamed, and symmetric in the two arguments, which the
+    horizontal use needs.
+    """
+    with torch.no_grad():
+        spread = 0.5 * (torch.cdist(left, left).mean()
+                        + torch.cdist(right, right).mean())
+    return spread.clamp_min(1e-12)
+
+
+def feature_cost(student, teacher, align='prefix'):
+    """scaled pairwise distance between two batches of features"""
+    left, right = align_features(student, teacher, align)
+    return torch.cdist(left, right) / _feature_scale(left, right)
+
+
+class FeatureWassersteinLoss(torch.nn.modules.loss._Loss):
+    """transport between the feature clouds of two widths
+
+    One number for the batch, not one per sample: the clouds are matched as
+    distributions, so a sample may be explained by a different sample of
+    the other width. This is the tier RQ1 measured, where the geometry
+    demonstrably carries information, rather than the logit tier where the
+    cost matrix turned out flat.
+
+    Debiased for the same reason the logit version is. Entropic transport
+    between a cloud and itself is not zero, so without the correction a
+    width already matching the teacher is still charged, and the horizontal
+    use is not minimized at agreement.
+    """
+    def __init__(self, eps=0.2, n_iters=100, align='prefix', debiased=True,
+                 reduction='mean'):
+        super(FeatureWassersteinLoss, self).__init__(reduction=reduction)
+        self.eps = eps
+        self.n_iters = n_iters
+        self.align = align
+        self.debiased = debiased
+
+    def _transport(self, left, right, scale):
+        cost = torch.cdist(left, right) / scale
+        plan = sinkhorn_plan(cost.detach(), self.eps, self.n_iters)
+        return (plan * cost).sum()
+
+    def forward(self, student, teacher):
+        left, right = align_features(student, teacher, self.align)
+        scale = _feature_scale(left, right)
+        value = self._transport(left, right, scale)
+        if self.debiased:
+            value = value - 0.5 * self._transport(left, left, scale)
+            value = value - 0.5 * self._transport(right, right, scale)
+        return value
+
+
+class KLPairLoss(torch.nn.modules.loss._Loss):
+    """asymmetric KL between two students, the control for the claim
+
+    The argument for Wasserstein between two co-sampled widths is that they
+    stand in no teacher-student relation, so an asymmetric divergence is
+    wrong in principle. That argument predicts this loss does worse. If it
+    does not, the symmetry was not what was doing the work.
+    """
+    def forward(self, output_a, output_b):
+        log_a = torch.nn.functional.log_softmax(output_a, dim=1)
+        log_b = torch.nn.functional.log_softmax(output_b, dim=1)
+        return (log_b.exp() * (log_b - log_a)).sum(dim=1)
+
+
+class JeffreysPairLoss(torch.nn.modules.loss._Loss):
+    """symmetrized KL, the other half of the control
+
+    Symmetric like the transport cost, but with no metric between classes.
+    Sitting between KLPairLoss and WassersteinPairLoss, it separates what
+    symmetry buys from what the geometry buys.
+    """
+    def forward(self, output_a, output_b):
+        log_a = torch.nn.functional.log_softmax(output_a, dim=1)
+        log_b = torch.nn.functional.log_softmax(output_b, dim=1)
+        difference = log_a - log_b
+        return 0.5 * ((log_a.exp() - log_b.exp()) * difference).sum(dim=1)
 
 
 def _sinkhorn_potentials(log_p, log_q, cost, eps, n_iters):
@@ -282,11 +483,86 @@ def build_soft_criterion():
 
 
 def build_pair_criterion():
-    """horizontal criterion, or None when the branch does not use one"""
+    """horizontal criterion at the logit level, or None
+
+    horizontal_loss picks what the two co-sampled widths are pulled
+    together with. The three settings are a decomposition, not a menu:
+    wasserstein is symmetric and metric aware, jeffreys is symmetric only,
+    kl is neither. Which pair of them differ says which property mattered.
+    """
     if not getattr(FLAGS, 'horizontal_kd', False):
         return None
-    return WassersteinPairLoss(
+    if getattr(FLAGS, 'horizontal_where', 'logit') == 'feature':
+        return None
+    horizontal_loss = getattr(FLAGS, 'horizontal_loss', 'wasserstein')
+    if horizontal_loss == 'kl':
+        return KLPairLoss(reduction='none')
+    if horizontal_loss == 'jeffreys':
+        return JeffreysPairLoss(reduction='none')
+    if horizontal_loss == 'wasserstein':
+        return WassersteinPairLoss(
+            eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),
+            n_iters=getattr(FLAGS, 'sinkhorn_iters', 100),
+            debiased=getattr(FLAGS, 'sinkhorn_debiased', True),
+            reduction='none')
+    raise ValueError('unknown horizontal_loss {}'.format(horizontal_loss))
+
+
+def build_feature_criterion():
+    """vertical feature term, or None when the branch does not use one"""
+    if not getattr(FLAGS, 'feature_kd', False):
+        return None
+    return FeatureWassersteinLoss(
         eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),
         n_iters=getattr(FLAGS, 'sinkhorn_iters', 100),
-        debiased=getattr(FLAGS, 'sinkhorn_debiased', True),
-        reduction='none')
+        align=getattr(FLAGS, 'feature_align', 'prefix'))
+
+
+def build_feature_pair_criterion():
+    """horizontal feature term, or None
+
+    The combination the two roles were meant to meet in: geometry where
+    RQ1 measured it, between the pair of widths that nothing else relates.
+    """
+    if not getattr(FLAGS, 'horizontal_kd', False):
+        return None
+    if getattr(FLAGS, 'horizontal_where', 'logit') == 'logit':
+        return None
+    return FeatureWassersteinLoss(
+        eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),
+        n_iters=getattr(FLAGS, 'sinkhorn_iters', 100),
+        align=getattr(FLAGS, 'feature_align', 'prefix'))
+
+
+def build_confusion_embedding():
+    """accumulator for cost_source 'confusion', or None"""
+    if getattr(FLAGS, 'cost_source', 'fc') != 'confusion':
+        return None
+    return ConfusionEmbedding(
+        FLAGS.num_classes,
+        momentum=getattr(FLAGS, 'confusion_momentum', 0.01),
+        warmup=getattr(FLAGS, 'confusion_warmup', 50))
+
+
+def build_cost_matrix(model, confusion=None):
+    """the class metric the logit-level transport is measured against
+
+    fc         rows of the shared classifier. Intrinsic to the model, and
+               measured at a spread of 1.32 on a trained supernet, which is
+               nearly flat.
+    confusion  what the teacher mixes each class up with. Has to warm up,
+               so it falls back to fc until it has.
+    identity   no geometry at all, the control.
+    """
+    source = getattr(FLAGS, 'cost_source', 'fc')
+    normalize = getattr(FLAGS, 'cost_normalize', True)
+    if source == 'identity':
+        weight = get_classifier_weight(model)
+        return identity_cost_matrix(
+            weight.size(0), weight.device, weight.dtype)
+    if source == 'confusion' and confusion is not None and confusion.ready():
+        return class_cost_matrix(confusion.embedding(), normalize=normalize)
+    if source not in ('fc', 'confusion'):
+        raise ValueError('unknown cost_source {}'.format(source))
+    return class_cost_matrix(
+        get_classifier_weight(model), normalize=normalize)

@@ -88,8 +88,13 @@ class Model(nn.Module):
         x = self.features(x)
         last_dim = x.size()[1]
         x = x.view(-1, last_dim)
-        x = self.classifier(x)
-        return x
+        logits = self.classifier(x)
+        if getattr(FLAGS, 'return_features', False):
+            # the pooled feature, before the classifier. Its width moves
+            # with width_mult, so anything comparing two widths here has to
+            # say how it handles that; see feature_cost in utils/loss_ops.
+            return logits, x
+        return logits
 
     def reset_parameters(self):
         for m in self.modules():
