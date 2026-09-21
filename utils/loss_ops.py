@@ -808,6 +808,10 @@ def build_pair_criterion():
         return None
     if getattr(FLAGS, 'horizontal_where', 'logit') == 'feature':
         return None
+    # 'both' keeps this one and the feature one at the same time. The two
+    # tiers are the only places anything has reached the published method,
+    # by different mechanisms - the logit pair moves calibration, the
+    # feature pair moves accuracy - and nothing has asked whether they add.
     horizontal_loss = getattr(FLAGS, 'horizontal_loss', 'wasserstein')
     if horizontal_loss == 'kl':
         return KLPairLoss(reduction='none')
@@ -903,6 +907,34 @@ def build_feature_pair_criterion():
     if getattr(FLAGS, 'horizontal_where', 'logit') == 'logit':
         return None
     return _feature_loss()
+
+
+def horizontal_pairs(widths):
+    """which co-sampled widths get pulled together
+
+    'middle' is what every finished run used: the sandwich rule spends two
+    of its samples on the widest and narrowest, and the pair left over is
+    the two in between. That leaves most of the available couplings on the
+    floor. With four samples the narrowest is also a student with no
+    teacher-student relation to either middle, so there are three pairs
+    available and one was being used.
+
+    'all' takes every pair among them. The horizontal term is where K's
+    gain came from, +0.61 of its +0.75, so how much of it there is may
+    matter more than which distance it is measured with.
+
+    widths is the list of co-sampled widths excluding the teacher, in the
+    order they were run, with the narrowest first.
+    """
+    count = len(widths)
+    if getattr(FLAGS, 'horizontal_pairs', 'middle') == 'all':
+        return [(i, j)
+                for i in range(count) for j in range(i + 1, count)]
+    # the middles are everything but the narrowest, which came first
+    middles = list(range(1, count))
+    return [(middles[i], middles[j])
+            for i in range(len(middles))
+            for j in range(i + 1, len(middles))]
 
 
 def build_confusion_embedding():

@@ -35,6 +35,7 @@ from utils.loss_ops import MultiTierFeatureLoss
 from utils.loss_ops import WassersteinPairLoss
 from utils.loss_ops import class_cost_matrix
 from utils.loss_ops import feature_cost
+from utils.loss_ops import horizontal_pairs
 from utils.loss_ops import identity_cost_matrix
 from utils.loss_ops import sinkhorn_plan
 from utils.loss_ops import width_gate
@@ -503,6 +504,43 @@ def test_sliced_ranks_clouds_like_the_full_transport():
     check('sliced and full transport order the gaps alike', ordered)
 
 
+def test_horizontal_pairs_keeps_the_old_default():
+    """the rewrite that let more pairs in must not move the finished runs
+
+    Every result in RESULTS.md was produced with exactly one pair, the two
+    middle widths. The loop now collects every co-sampled width instead of
+    dropping the narrowest, so the default has to pick out that same pair
+    or the table stops being comparable to anything run after it.
+
+    widths arrive as the sandwich rule draws them: narrowest first, then
+    the middles.
+    """
+    widths = [0.25, 0.55, 0.80]  # min, then two middles
+    previous = getattr(FLAGS, 'horizontal_pairs', 'middle')
+    try:
+        FLAGS.horizontal_pairs = 'middle'
+        pairs = horizontal_pairs(widths)
+        check('the default is the one pair the finished runs used',
+              pairs == [(1, 2)], '{}'.format(pairs))
+
+        FLAGS.horizontal_pairs = 'all'
+        pairs = horizontal_pairs(widths)
+        check('all takes every pair among the students',
+              sorted(pairs) == [(0, 1), (0, 2), (1, 2)], '{}'.format(pairs))
+        check('and never pairs a width with itself',
+              all(left != right for left, right in pairs))
+
+        five = [0.25, 0.4, 0.6, 0.8]
+        FLAGS.horizontal_pairs = 'all'
+        check('four students give six pairs',
+              len(horizontal_pairs(five)) == 6)
+        FLAGS.horizontal_pairs = 'middle'
+        check('and the default still gives three of them',
+              len(horizontal_pairs(five)) == 3)
+    finally:
+        FLAGS.horizontal_pairs = previous
+
+
 def test_unbalanced_stays_monotone_at_the_shipped_tau():
     """the setting below which this term stops being a distance
 
@@ -610,6 +648,7 @@ def main():
     test_every_feature_loss_descends()
     test_no_feature_loss_reads_the_dimension()
     test_sliced_ranks_clouds_like_the_full_transport()
+    test_horizontal_pairs_keeps_the_old_default()
     test_unbalanced_stays_monotone_at_the_shipped_tau()
     test_cosine_ground_behaves_like_a_cost()
     test_gromov_is_invariant_to_what_it_claims()

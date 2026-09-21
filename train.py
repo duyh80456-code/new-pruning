@@ -22,6 +22,7 @@ from utils.loss_ops import WassersteinLossSoft, WassersteinPairLoss
 from utils.loss_ops import build_soft_criterion, build_pair_criterion
 from utils.loss_ops import build_feature_criterion
 from utils.loss_ops import build_feature_pair_criterion
+from utils.loss_ops import horizontal_pairs
 from utils.loss_ops import build_confusion_embedding, build_cost_matrix
 from utils.loss_ops import width_gate
 from models.slimmable_ops import bn_calibration_init
@@ -553,9 +554,12 @@ def run_one_epoch(
                                         feature,
                                         tuple(t.detach()
                                               for t in teacher_feature)))
-                            # the two middle widths are the pair with no
-                            # relation between them under the sandwich rule
-                            if deferred and width_mult != min_width:
+                            # every width but the teacher is a peer of
+                            # every other: none of them stands in a
+                            # teacher-student relation to another, which is
+                            # the whole argument for coupling them. Which
+                            # pairs are actually used is horizontal_pairs.
+                            if deferred:
                                 mid_outputs.append(output)
                                 mid_features.append(feature)
                                 mid_widths.append(width_mult)
@@ -565,24 +569,32 @@ def run_one_epoch(
                             loss.backward()
                     if deferred:
                         pair_loss = 0.0
-                        if pair_criterion is not None:
-                            # the same temperature, on both sides: two
-                            # students that have each memorized the data
-                            # have as little to say to each other as a
-                            # memorized teacher has to say to either
-                            hot = getattr(FLAGS, 'kd_temperature', 1.0)
-                            pair_loss = pair_loss + (hot * hot) * torch.mean(
-                                pair_criterion(
-                                    mid_outputs[0] / hot,
-                                    mid_outputs[1] / hot))
-                        if feature_pair_criterion is not None:
-                            pair_loss = pair_loss + feature_pair_criterion(
-                                mid_features[0], mid_features[1])
-                        # the pair spans two widths, so the schedule reads
-                        # the middle of them
+                        pairs = horizontal_pairs(mid_widths)
+                        for left, right in pairs:
+                            here = 0.0
+                            if pair_criterion is not None:
+                                # the same temperature, on both sides: two
+                                # students that have each memorized the data
+                                # have as little to say to each other as a
+                                # memorized teacher has to say to either
+                                hot = getattr(FLAGS, 'kd_temperature', 1.0)
+                                here = here + (hot * hot) * torch.mean(
+                                    pair_criterion(
+                                        mid_outputs[left] / hot,
+                                        mid_outputs[right] / hot))
+                            if feature_pair_criterion is not None:
+                                here = here + feature_pair_criterion(
+                                    mid_features[left], mid_features[right])
+                            # each pair spans two widths, so the schedule
+                            # reads the middle of that pair, not of the set
+                            pair_loss = pair_loss + width_gate(
+                                0.5 * (mid_widths[left]
+                                       + mid_widths[right])) * here
+                        # averaged, so horizontal_weight keeps its meaning
+                        # when the number of pairs changes
+                        pair_loss = pair_loss / max(len(pairs), 1)
                         losses.append(
                             getattr(FLAGS, 'horizontal_weight', 1.0)
-                            * width_gate(sum(mid_widths) / len(mid_widths))
                             * pair_loss)
                         if is_master():
                             meters[str(max_width)]['pair_loss'].cache(
