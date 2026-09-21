@@ -234,6 +234,107 @@ class FeatureWassersteinLoss(torch.nn.modules.loss._Loss):
         return value
 
 
+class FeatureMSELoss(torch.nn.modules.loss._Loss):
+    """squared distance, each sample against its own counterpart
+
+    The control the transport losses have to clear, and the cheapest thing
+    anyone would try first. It pairs sample i of one width with sample i of
+    the other and nothing else, so it asks whether the freedom to rematch
+    samples is what transport buys, or whether pulling the two clouds
+    together by any means would have done.
+
+    Scaled by the same spread as the others, so feature_weight means the
+    same thing across the axis and the branches stay comparable.
+    """
+    def __init__(self, align='prefix', reduction='mean'):
+        super(FeatureMSELoss, self).__init__(reduction=reduction)
+        self.align = align
+
+    def forward(self, student, teacher):
+        left, right = align_features(student, teacher, self.align)
+        scale = _feature_scale(left, right)
+        return ((left - right) / scale).pow(2).sum(dim=1).mean()
+
+
+class FeatureMMDLoss(torch.nn.modules.loss._Loss):
+    """maximum mean discrepancy between the two clouds
+
+    The control that matters most to the claim. Transport was chosen here
+    because two feature clouds have no common support and an f-divergence
+    needs one. But MMD does not need one either, and it needs no transport
+    plan and no fixed point iteration. If MMD matches Sinkhorn then what
+    works is matching the clouds as distributions, and optimal transport in
+    particular is not load bearing.
+
+    Gaussian kernel on clouds already divided by their spread, so the
+    bandwidth is dimensionless and one setting serves every width. The
+    biased estimator is exactly zero when the two clouds coincide, so
+    unlike entropic transport this needs no debiasing correction.
+    """
+    def __init__(self, align='prefix', bandwidth=1.0, reduction='mean'):
+        super(FeatureMMDLoss, self).__init__(reduction=reduction)
+        self.align = align
+        self.bandwidth = bandwidth
+
+    def forward(self, student, teacher):
+        left, right = align_features(student, teacher, self.align)
+        scale = _feature_scale(left, right)
+        left, right = left / scale, right / scale
+        gamma = 1.0 / (2.0 * self.bandwidth * self.bandwidth)
+        within_left = torch.exp(-gamma * torch.cdist(left, left).pow(2))
+        within_right = torch.exp(-gamma * torch.cdist(right, right).pow(2))
+        across = torch.exp(-gamma * torch.cdist(left, right).pow(2))
+        return within_left.mean() + within_right.mean() - 2.0 * across.mean()
+
+
+class FeatureSlicedWassersteinLoss(torch.nn.modules.loss._Loss):
+    """transport along random one dimensional projections
+
+    The same geometry as the entropic version at a fraction of the price: a
+    projection and a sort, no fixed point iteration. That is worth knowing
+    because the Sinkhorn branch costs 299 minutes against 165 for the
+    baseline, close enough to the session limit to constrain what else can
+    be run.
+
+    It is also the quantity this project's earlier work was built on, so a
+    result here connects to that history rather than starting beside it.
+
+    Exact at equality and symmetric in its two arguments by construction,
+    so no debiasing correction either. The projections are redrawn every
+    call, which adds gradient noise and is how sliced transport is normally
+    used.
+    """
+    def __init__(self, align='prefix', n_projections=128, reduction='mean'):
+        super(FeatureSlicedWassersteinLoss, self).__init__(
+            reduction=reduction)
+        self.align = align
+        self.n_projections = n_projections
+
+    def forward(self, student, teacher):
+        left, right = align_features(student, teacher, self.align)
+        if left.size(0) != right.size(0):
+            raise ValueError(
+                'sliced transport sorts the two sides against each other, '
+                'so they must hold the same number of samples')
+        scale = _feature_scale(left, right)
+        directions = torch.randn(
+            left.size(1), self.n_projections,
+            device=left.device, dtype=left.dtype)
+        directions = directions / directions.norm(dim=0, keepdim=True)
+        projected_left = (left / scale).mm(directions).sort(dim=0)[0]
+        projected_right = (right / scale).mm(directions).sort(dim=0)[0]
+        # Times the dimension, which is not cosmetic. Projecting onto a
+        # random unit direction shrinks a squared distance by exactly the
+        # dimension in expectation, and the feature dimension here moves
+        # with the width: 128 channels at 0.25 against 512 at 1.00. Without
+        # the factor the same feature_weight would apply this term four
+        # times more weakly at the wide end than the narrow one, which is a
+        # width schedule nobody chose. With it the value sits on the scale
+        # of the squared distance the full transport reports.
+        return left.size(1) * (
+            projected_left - projected_right).pow(2).mean()
+
+
 class MultiTierFeatureLoss(torch.nn.modules.loss._Loss):
     """the same transport applied at several depths at once
 
@@ -246,9 +347,12 @@ class MultiTierFeatureLoss(torch.nn.modules.loss._Loss):
     interchangeable. Equal weights is the honest default, not a claim.
     """
     def __init__(self, eps=0.2, n_iters=100, align='prefix', debiased=True,
-                 tier_weights=None, reduction='mean'):
+                 tier_weights=None, inner=None, reduction='mean'):
         super(MultiTierFeatureLoss, self).__init__(reduction=reduction)
-        self.inner = FeatureWassersteinLoss(
+        # inner is what compares one pair of taps. It defaults to entropic
+        # transport, which is what every finished feature run used, so a
+        # caller that does not name one gets the published behaviour.
+        self.inner = inner or FeatureWassersteinLoss(
             eps=eps, n_iters=n_iters, align=align, debiased=debiased)
         self.tier_weights = tier_weights
 
@@ -563,11 +667,50 @@ def build_pair_criterion():
     raise ValueError('unknown horizontal_loss {}'.format(horizontal_loss))
 
 
+def _inner_feature_loss(align):
+    """what compares one pair of taps, chosen by feature_loss
+
+    Four settings, and like horizontal_loss at the logit level they are a
+    decomposition rather than a menu:
+
+      mse          pairs sample i with sample i, no distribution matching
+      mmd          matches the clouds, no transport plan
+      sliced       transport, along random one dimensional projections
+      wasserstein  entropic transport with a full plan
+
+    mse against mmd says whether rematching samples is needed at all. mmd
+    against either transport setting says whether optimal transport in
+    particular is doing the work or any distribution distance would.
+    sliced against wasserstein is a question about cost at fixed geometry.
+
+    The feature tier is the only place anything has beaten the published
+    method, and it was run with one of these four and no controls. That
+    asymmetry against the logit tier, which got a three way decomposition
+    and lost, is the first thing a reader will pick at.
+    """
+    name = getattr(FLAGS, 'feature_loss', 'wasserstein')
+    if name == 'mse':
+        return FeatureMSELoss(align=align)
+    if name == 'mmd':
+        return FeatureMMDLoss(
+            align=align, bandwidth=getattr(FLAGS, 'mmd_bandwidth', 1.0))
+    if name == 'sliced':
+        return FeatureSlicedWassersteinLoss(
+            align=align,
+            n_projections=getattr(FLAGS, 'sliced_projections', 128))
+    if name == 'wasserstein':
+        return FeatureWassersteinLoss(
+            eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),
+            n_iters=getattr(FLAGS, 'sinkhorn_iters', 100),
+            align=align,
+            debiased=getattr(FLAGS, 'sinkhorn_debiased', True))
+    raise ValueError('unknown feature_loss {}'.format(name))
+
+
 def _feature_loss():
+    align = getattr(FLAGS, 'feature_align', 'prefix')
     return MultiTierFeatureLoss(
-        eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),
-        n_iters=getattr(FLAGS, 'sinkhorn_iters', 100),
-        align=getattr(FLAGS, 'feature_align', 'prefix'),
+        inner=_inner_feature_loss(align),
         tier_weights=getattr(FLAGS, 'tier_weights', None))
 
 

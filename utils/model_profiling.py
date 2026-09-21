@@ -39,10 +39,18 @@ def get_params(self):
 
 
 def run_forward(self, input):
+    # The synchronize is what makes the timing mean anything, since a cuda
+    # forward returns before it has run. Upstream called it unconditionally,
+    # which is fine on the machine it was written for and raises on a cpu
+    # only install, so tests/test_all_branches.py could not profile anywhere
+    # but a gpu box. Profiling on cpu needs no barrier and reports the same
+    # multiply-accumulates either way.
+    synchronize = torch.cuda.is_available()
     with Timer() as t:
         for _ in range(num_forwards):
             self.forward(*input)
-            torch.cuda.synchronize()
+            if synchronize:
+                torch.cuda.synchronize()
     return int(t.time * 1e9 / num_forwards)
 
 

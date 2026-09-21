@@ -5,6 +5,7 @@ doing anything:
 
   cost_source        fc | confusion | identity
   horizontal_loss    wasserstein | jeffreys | kl
+  feature_loss       wasserstein | sliced | mmd | mse
   tier               logit | feature, prefix or gram alignment
 
 Runs on the CPU in a few seconds.
@@ -22,6 +23,9 @@ import torch
 from utils.config import FLAGS
 
 from utils.loss_ops import ConfusionEmbedding
+from utils.loss_ops import FeatureMMDLoss
+from utils.loss_ops import FeatureMSELoss
+from utils.loss_ops import FeatureSlicedWassersteinLoss
 from utils.loss_ops import FeatureWassersteinLoss
 from utils.loss_ops import JeffreysPairLoss
 from utils.loss_ops import KLPairLoss
@@ -328,6 +332,175 @@ def test_all_controls_reach_the_gradient():
               and b.grad.abs().sum().item() > 0)
 
 
+def feature_losses():
+    """the feature_loss axis, in the order the decomposition reads"""
+    return [
+        ('mse', FeatureMSELoss(align='prefix')),
+        ('mmd', FeatureMMDLoss(align='prefix')),
+        ('sliced', FeatureSlicedWassersteinLoss(align='prefix')),
+        ('wasserstein', FeatureWassersteinLoss(align='prefix')),
+    ]
+
+
+def test_every_feature_loss_is_zero_at_agreement():
+    """whatever else they disagree about, all four must agree here
+
+    A width that already matches must be charged nothing, or the term
+    pushes a run away from the thing it is asking for. Entropic transport
+    needs an explicit correction to manage it; the other three get it for
+    free, which is worth knowing when reading their numbers.
+    """
+    generator = torch.Generator().manual_seed(31)
+    teacher = torch.randn(24, 64, generator=generator)
+    nudge = teacher + 0.15 * torch.randn(24, 64, generator=generator)
+    far = teacher + 1.5
+    for name, loss_fn in feature_losses():
+        torch.manual_seed(5)
+        same = loss_fn(teacher.clone(), teacher).item()
+        torch.manual_seed(5)
+        near = loss_fn(nudge, teacher).item()
+        torch.manual_seed(5)
+        away = loss_fn(far, teacher).item()
+        check('{:11} is zero at agreement'.format(name), abs(same) < 1e-5,
+              'value {:.2e}'.format(same))
+        check('{:11} grows with the gap'.format(name), same < near < away,
+              '{:.4f} < {:.4f} < {:.4f}'.format(same, near, away))
+
+
+def test_every_feature_loss_is_symmetric():
+    """the horizontal slot has no teacher, so the term cannot have one"""
+    generator = torch.Generator().manual_seed(32)
+    left = torch.randn(24, 64, generator=generator)
+    right = 0.4 + torch.randn(24, 64, generator=generator)
+    for name, loss_fn in feature_losses():
+        torch.manual_seed(6)
+        forward = loss_fn(left, right).item()
+        torch.manual_seed(6)
+        backward = loss_fn(right, left).item()
+        check('{:11} is symmetric'.format(name),
+              abs(forward - backward) < 1e-5,
+              '{:.6f} against {:.6f}'.format(forward, backward))
+
+
+def test_only_mse_cares_which_sample_is_which():
+    """the property the axis exists to separate
+
+    Shuffling one cloud changes nothing about it as a distribution. mse
+    reads the shuffle as a large disagreement because it compares sample i
+    with sample i; the other three are set functions and cannot see it at
+    all. If a branch on this axis moves, this is the difference it moved
+    on.
+    """
+    generator = torch.Generator().manual_seed(33)
+    teacher = torch.randn(24, 64, generator=generator)
+    student = teacher + 0.3 * torch.randn(24, 64, generator=generator)
+    order = torch.randperm(24, generator=generator)
+    for name, loss_fn in feature_losses():
+        torch.manual_seed(7)
+        plain = loss_fn(student, teacher).item()
+        torch.manual_seed(7)
+        shuffled = loss_fn(student[order], teacher[order]).item()
+        drift = abs(plain - shuffled)
+        if name == 'mse':
+            # both sides permuted the same way, so mse is unchanged too;
+            # permuting one side is what separates them
+            torch.manual_seed(7)
+            one_side = loss_fn(student[order], teacher).item()
+            check('mse         sees a one sided shuffle',
+                  one_side > 2.0 * plain,
+                  'paired {:.4f}, shuffled {:.4f}'.format(plain, one_side))
+            continue
+        torch.manual_seed(7)
+        one_side = loss_fn(student[order], teacher).item()
+        check('{:11} ignores a one sided shuffle'.format(name),
+              abs(one_side - plain) < 1e-4,
+              'paired {:.6f}, shuffled {:.6f}'.format(plain, one_side))
+        check('{:11} ignores a paired shuffle'.format(name), drift < 1e-4,
+              'drift {:.2e}'.format(drift))
+
+
+def test_every_feature_loss_descends():
+    """each one has to move a cloud it is pointed at
+
+    The step sizes differ by two orders of magnitude across the axis, which
+    is the thing to remember when setting feature_weight: these read on
+    comparable scales but their gradients do not.
+    """
+    for name, loss_fn in feature_losses():
+        generator = torch.Generator().manual_seed(34)
+        teacher = torch.randn(24, 32, generator=generator)
+        student = (teacher + 1.0).clone().requires_grad_()
+        torch.manual_seed(8)
+        before = loss_fn(student, teacher).item()
+        for _ in range(200):
+            loss = loss_fn(student, teacher)
+            if student.grad is not None:
+                student.grad.zero_()
+            loss.backward()
+            with torch.no_grad():
+                student -= 5.0 * student.grad
+        torch.manual_seed(8)
+        after = loss_fn(student, teacher).item()
+        check('{:11} closes the gap'.format(name), after < 0.5 * before,
+              '{:.4f} -> {:.4f}'.format(before, after))
+
+
+def test_no_feature_loss_reads_the_dimension():
+    """one weight has to mean the same thing at every width
+
+    The feature dimension moves with the width, 128 channels at 0.25
+    against 512 at 1.00, and feature_weight is a single number shared by
+    all of them. A loss whose value tracks the dimension is therefore
+    applying a width schedule nobody wrote down, and the branch would be
+    measuring that schedule rather than the loss.
+
+    The sliced version failed this when it was first written, by exactly
+    the factor of the dimension that random projection removes.
+    """
+    for name, loss_fn in feature_losses():
+        values = []
+        for dim in (64, 256):
+            generator = torch.Generator().manual_seed(36)
+            teacher = torch.randn(32, dim, generator=generator)
+            student = teacher + 0.5 * torch.randn(
+                32, dim, generator=generator)
+            torch.manual_seed(10)
+            values.append(loss_fn(student, teacher).item())
+        ratio = values[1] / max(values[0], 1e-12)
+        check('{:11} is the same at 64 and 256 channels'.format(name),
+              0.5 < ratio < 2.0,
+              '{:.4f} and {:.4f}, ratio {:.2f}'.format(
+                  values[0], values[1], ratio))
+
+
+def test_sliced_ranks_clouds_like_the_full_transport():
+    """the cost argument for sliced only holds if it measures the same thing
+
+    Sliced transport is cheap because it replaces the plan with a sort
+    along random directions. That is only a saving if it orders pairs of
+    clouds the way the full version does, so this compares them over a
+    range of displacements rather than trusting the name.
+    """
+    generator = torch.Generator().manual_seed(35)
+    teacher = torch.randn(32, 48, generator=generator)
+    sliced = FeatureSlicedWassersteinLoss(align='prefix', n_projections=256)
+    full = FeatureWassersteinLoss(align='prefix')
+    rows = []
+    for gap in (0.1, 0.3, 0.6, 1.0, 2.0):
+        student = teacher + gap * torch.randn(
+            32, 48, generator=generator)
+        torch.manual_seed(9)
+        rows.append((gap, sliced(student, teacher).item(),
+                     full(student, teacher).item()))
+    print('        gap      sliced   wasserstein')
+    for gap, left, right in rows:
+        print('        {:.1f}   {:9.4f}   {:9.4f}'.format(gap, left, right))
+    ordered = all(
+        rows[i][1] < rows[i + 1][1] and rows[i][2] < rows[i + 1][2]
+        for i in range(len(rows) - 1))
+    check('sliced and full transport order the gaps alike', ordered)
+
+
 def main():
     print('torch', torch.__version__)
     print()
@@ -344,6 +517,12 @@ def main():
     test_transport_plan_is_a_coupling()
     test_horizontal_controls_separate_the_claims()
     test_all_controls_reach_the_gradient()
+    test_every_feature_loss_is_zero_at_agreement()
+    test_every_feature_loss_is_symmetric()
+    test_only_mse_cares_which_sample_is_which()
+    test_every_feature_loss_descends()
+    test_no_feature_loss_reads_the_dimension()
+    test_sliced_ranks_clouds_like_the_full_transport()
     print()
     if FAILURES:
         print('{} failed: {}'.format(len(FAILURES), ', '.join(FAILURES)))
