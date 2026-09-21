@@ -25,6 +25,7 @@ took.
 | 13 | `kaggle_kd_13_ab_x.ipynb` | `ab_no_debias`, `x_eps_010` | Is the debiasing correction load bearing |
 | 14 | `kaggle_kd_14_t_u.ipynb` | `t_sliced_32`, `u_sliced_512` | How many directions stand in for a plan |
 | 15 | `kaggle_kd_15_aa_r.ipynb` | `aa_cosine_ground`, `r_feature_mmd` | Direction instead of distance, and a control outside transport |
+| 16 | `kaggle_kd_16_aq.ipynb` | `aq_classwise` | Transport between class positions rather than samples |
 
 Nothing in a notebook needs editing. Set the accelerator to
 GPU T4 x2, attach the CIFAR-100 dataset, and use Save & Run All

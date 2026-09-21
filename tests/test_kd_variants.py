@@ -22,6 +22,7 @@ import torch
 
 from utils.config import FLAGS
 
+from utils.loss_ops import ClasswiseFeatureLoss
 from utils.loss_ops import ConfusionEmbedding
 from utils.loss_ops import FeatureMMDLoss
 from utils.loss_ops import FeatureMSELoss
@@ -504,6 +505,76 @@ def test_sliced_ranks_clouds_like_the_full_transport():
     check('sliced and full transport order the gaps alike', ordered)
 
 
+def test_classwise_is_coarser_rather_than_class_aware():
+    """what the classwise form actually buys, which is not what it promised
+
+    It was built to answer an objection: the batch is one unlabelled cloud
+    everywhere else, so a narrow width's cat may be explained by the
+    teacher's dog and nothing in the objective minds. Two measurements say
+    it does not answer that.
+
+    Forbidding cross class matches outright is ruled out by arithmetic.
+    Batch 256 over 100 classes is under three images a class, and
+    transport between two or three points is a fixed pairing, so the
+    masked form would be branch Q by a longer route.
+
+    Transporting between class centroids instead, which is what this does,
+    does not forbid it either: ninety odd centroids are still free to
+    match a cat's to a dog's. And the labels turn out to matter little.
+    Student and teacher are the same batch, so shuffling the labels
+    regroups both sides identically and the centroid clouds stay in
+    correspondence. The loss moves by the fraction printed below, not by a
+    factor.
+
+    What is left is real but smaller than advertised: transport at class
+    granularity rather than sample granularity, which drops the within
+    class spread from the objective and asks only that the two widths
+    place the classes alike.
+    """
+    generator = torch.Generator().manual_seed(61)
+    count, classes = 256, 100
+    labels = torch.randint(0, classes, (count,), generator=generator)
+    present = labels.unique().numel()
+    print('      {} images, {} classes present, {:.2f} per class'.format(
+        count, present, float(count) / present))
+    check('too few samples a class to transport within one',
+          float(count) / present < 4.0)
+
+    centres = 3.0 * torch.randn(classes, 96, generator=generator)
+    teacher = centres[labels] + torch.randn(count, 96, generator=generator)
+    student = teacher[:, :32] + 0.4 * torch.randn(
+        count, 32, generator=generator)
+
+    plain = FeatureWassersteinLoss(align='prefix')
+    classwise = ClasswiseFeatureLoss(inner=FeatureWassersteinLoss(
+        align='prefix'))
+
+    classwise.set_target(labels)
+    before = classwise(student, teacher).item()
+    plain_before = plain(student, teacher).item()
+
+    shuffled = labels[torch.randperm(count, generator=generator)]
+    classwise.set_target(shuffled)
+    after = classwise(student, teacher).item()
+    plain_after = plain(student, teacher).item()
+
+    check('the unlabelled loss cannot see a label shuffle',
+          abs(plain_before - plain_after) < 1e-6,
+          '{:.4f} and {:.4f}'.format(plain_before, plain_after))
+    check('the classwise one barely can, which is the finding',
+          1.0 < after / before < 1.6,
+          'labels right {:.4f}, shuffled {:.4f}, ratio {:.2f}'.format(
+              before, after, after / before))
+    coarse = classwise(student, teacher).item()
+    check('and it is not the sample level loss under another name',
+          abs(coarse - plain_before) > 0.2 * plain_before,
+          'centroids {:.4f}, samples {:.4f}'.format(coarse, plain_before))
+
+    classwise.set_target(labels)
+    check('and it is zero when the two widths agree',
+          abs(classwise(teacher.clone(), teacher).item()) < 1e-5)
+
+
 def test_horizontal_pairs_keeps_the_old_default():
     """the rewrite that let more pairs in must not move the finished runs
 
@@ -648,6 +719,7 @@ def main():
     test_every_feature_loss_descends()
     test_no_feature_loss_reads_the_dimension()
     test_sliced_ranks_clouds_like_the_full_transport()
+    test_classwise_is_coarser_rather_than_class_aware()
     test_horizontal_pairs_keeps_the_old_default()
     test_unbalanced_stays_monotone_at_the_shipped_tau()
     test_cosine_ground_behaves_like_a_cost()

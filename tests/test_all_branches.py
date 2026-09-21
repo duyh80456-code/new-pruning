@@ -37,6 +37,7 @@ def check_single():
     from utils.config import FLAGS
     from utils.loss_ops import build_confusion_embedding
     from utils.loss_ops import build_cost_matrix
+    from utils.loss_ops import ClasswiseFeatureLoss
     from utils.loss_ops import build_feature_criterion
     from utils.loss_ops import build_feature_pair_criterion
     from utils.loss_ops import build_pair_criterion
@@ -76,6 +77,12 @@ def check_single():
     for _ in range(2):
         data = torch.randn(batch, 3, FLAGS.image_size, FLAGS.image_size)
         target = torch.randint(0, FLAGS.num_classes, (batch,))
+        # the classwise feature term needs this batch's labels, set once a
+        # step. run_one_epoch does the same; this harness exists to catch
+        # the case where it does not, so it has to follow it here
+        for term in (feature, feature_pair):
+            if isinstance(term, ClasswiseFeatureLoss):
+                term.set_target(target)
         optimizer.zero_grad()
 
         widths = [high, low] + [

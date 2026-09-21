@@ -22,7 +22,7 @@ from utils.loss_ops import WassersteinLossSoft, WassersteinPairLoss
 from utils.loss_ops import build_soft_criterion, build_pair_criterion
 from utils.loss_ops import build_feature_criterion
 from utils.loss_ops import build_feature_pair_criterion
-from utils.loss_ops import horizontal_pairs
+from utils.loss_ops import horizontal_pairs, ClasswiseFeatureLoss
 from utils.loss_ops import build_confusion_embedding, build_cost_matrix
 from utils.loss_ops import build_spread_criterion, get_classifier_weight
 from utils.loss_ops import width_gate
@@ -501,6 +501,11 @@ def run_one_epoch(
                     # it only costs memory
                     deferred = (pair_criterion is not None
                                 or feature_pair_criterion is not None)
+                    # the classwise form needs this batch's labels, set
+                    # once a step the way the class cost matrix is
+                    for term in (feature_criterion, feature_pair_criterion):
+                        if isinstance(term, ClasswiseFeatureLoss):
+                            term.set_target(target)
                     losses = []
                     mid_outputs = []
                     mid_features = []

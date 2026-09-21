@@ -34,6 +34,7 @@ from utils.loss_ops import FeatureMSELoss  # noqa: E402
 from utils.loss_ops import FeatureSlicedWassersteinLoss  # noqa: E402
 from utils.loss_ops import FeatureUnbalancedWassersteinLoss  # noqa: E402
 from utils.loss_ops import FeatureBuresLoss  # noqa: E402
+from utils.loss_ops import ClasswiseFeatureLoss  # noqa: E402
 from utils.loss_ops import FeatureChannelLoss  # noqa: E402
 from utils.loss_ops import FeatureWassersteinLoss  # noqa: E402
 
@@ -86,6 +87,8 @@ def losses():
             align='prefix', reduce='max')),
         ('sliced p1', FeatureSlicedWassersteinLoss(
             align='prefix', p=1.0)),
+        ('classwise', ClasswiseFeatureLoss(
+            inner=FeatureWassersteinLoss(align='prefix'))),
         ('wasserstein', FeatureWassersteinLoss(
             eps=getattr(FLAGS, 'sinkhorn_eps', 0.2), **entropic)),
     ]
@@ -107,7 +110,10 @@ def main():
     totals = {name: [0.0, 0.0] for name, _ in losses()}
     for step in range(BATCHES):
         batch = torch.randn(BATCH, 3, FLAGS.image_size, FLAGS.image_size)
+        labels = torch.randint(0, FLAGS.num_classes, (BATCH,))
         for name, loss_fn in losses():
+            if isinstance(loss_fn, ClasswiseFeatureLoss):
+                loss_fn.set_target(labels)
             model.zero_grad(set_to_none=True)
             clouds = {w: cloud_at(model, batch, w) for w in WIDTHS}
             # the same seed on both sides so the sliced projections do not

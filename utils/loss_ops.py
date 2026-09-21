@@ -596,6 +596,61 @@ class FeatureBuresLoss(torch.nn.modules.loss._Loss):
                 - 2.0 * cross.trace()).clamp_min(0.0)
 
 
+class ClasswiseFeatureLoss(torch.nn.modules.loss._Loss):
+    """transport between the two widths' class positions, not their samples
+
+    Everywhere else the batch is one unlabelled cloud, so a narrow width's
+    picture of a cat is free to be explained by the teacher's picture of a
+    dog if the two happen to land near each other. Nothing in the
+    objective says that is wrong.
+
+    Matching inside each class is the obvious repair and the arithmetic
+    rules it out: 256 images over 100 classes is about two and a half per
+    class, and transport between two points is a fixed pairing, which is
+    branch Q by a longer route.
+
+    So the clouds are the class positions themselves. Each class present
+    in the batch contributes its mean, and transport runs between those,
+    asking whether the two widths arrange the classes the same way rather
+    than whether they place each image the same way. That is the geometry
+    the logit tier went looking for in the classifier rows and did not
+    find, measured instead where the project has evidence geometry exists.
+
+    The labels are set once a step, the way the class cost matrix is, and
+    the loss is unusable without them.
+    """
+    def __init__(self, inner, min_count=1, reduction='mean'):
+        super(ClasswiseFeatureLoss, self).__init__(reduction=reduction)
+        self.inner = inner
+        self.min_count = min_count
+        self.target = None
+
+    def set_target(self, target):
+        self.target = target
+
+    def _centroids(self, cloud, labels, present):
+        return torch.stack([
+            cloud[labels == label].mean(dim=0) for label in present])
+
+    def forward(self, student, teacher):
+        if self.target is None:
+            raise RuntimeError('set_target must be called before forward')
+        labels = self.target
+        counts = torch.bincount(labels)
+        present = (counts >= self.min_count).nonzero().flatten()
+        if present.numel() < 2:
+            return student[0].sum() * 0.0 if isinstance(
+                student, (tuple, list)) else student.sum() * 0.0
+        if not isinstance(student, (tuple, list)):
+            student, teacher = (student,), (teacher,)
+        total = 0.0
+        for left, right in zip(student, teacher):
+            total = total + self.inner(
+                self._centroids(left, labels, present),
+                self._centroids(right, labels, present))
+        return total / len(student)
+
+
 class ClassifierSpreadLoss(torch.nn.modules.loss._Loss):
     """push the classifier rows apart, rather than pull anything together
 
@@ -1033,6 +1088,12 @@ def _inner_feature_loss(align):
 
 def _feature_loss():
     align = getattr(FLAGS, 'feature_align', 'prefix')
+    if getattr(FLAGS, 'feature_classwise', False):
+        # the tiers are handled inside, since the centroids have to be
+        # taken per tap before anything is transported
+        return ClasswiseFeatureLoss(
+            inner=_inner_feature_loss(align),
+            min_count=getattr(FLAGS, 'classwise_min_count', 1))
     return MultiTierFeatureLoss(
         inner=_inner_feature_loss(align),
         tier_weights=getattr(FLAGS, 'tier_weights', None))
