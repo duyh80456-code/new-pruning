@@ -23,6 +23,7 @@ from utils.loss_ops import build_soft_criterion, build_pair_criterion
 from utils.loss_ops import build_feature_criterion
 from utils.loss_ops import build_feature_pair_criterion
 from utils.loss_ops import build_confusion_embedding, build_cost_matrix
+from utils.loss_ops import width_gate
 from models.slimmable_ops import bn_calibration_init
 from utils.config import FLAGS
 from utils.meters import ScalarMeter, flush_scalar_meters
@@ -476,6 +477,7 @@ def run_one_epoch(
                     losses = []
                     mid_outputs = []
                     mid_features = []
+                    mid_widths = []
                     teacher_feature = None
                     for width_mult in widths_train:
                         # the sandwich rule
@@ -522,13 +524,17 @@ def run_one_epoch(
                                     and teacher_feature is not None):
                                 loss = loss + (
                                     getattr(FLAGS, 'feature_weight', 1.0)
+                                    * width_gate(width_mult)
                                     * feature_criterion(
-                                        feature, teacher_feature.detach()))
+                                        feature,
+                                        tuple(t.detach()
+                                              for t in teacher_feature)))
                             # the two middle widths are the pair with no
                             # relation between them under the sandwich rule
                             if deferred and width_mult != min_width:
                                 mid_outputs.append(output)
                                 mid_features.append(feature)
+                                mid_widths.append(width_mult)
                         if deferred:
                             losses.append(loss)
                         else:
@@ -542,8 +548,11 @@ def run_one_epoch(
                         if feature_pair_criterion is not None:
                             pair_loss = pair_loss + feature_pair_criterion(
                                 mid_features[0], mid_features[1])
+                        # the pair spans two widths, so the schedule reads
+                        # the middle of them
                         losses.append(
                             getattr(FLAGS, 'horizontal_weight', 1.0)
+                            * width_gate(sum(mid_widths) / len(mid_widths))
                             * pair_loss)
                         if is_master():
                             meters[str(max_width)]['pair_loss'].cache(

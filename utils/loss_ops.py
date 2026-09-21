@@ -234,6 +234,61 @@ class FeatureWassersteinLoss(torch.nn.modules.loss._Loss):
         return value
 
 
+class MultiTierFeatureLoss(torch.nn.modules.loss._Loss):
+    """the same transport applied at several depths at once
+
+    A supernet can disagree with itself anywhere, not only at the end. The
+    final pooled feature is one tap among several; the stage outputs are
+    averaged over space so that a single cost works at every depth.
+
+    Deeper tiers are more specific to the task and shallower ones more
+    generic, so tier_weights exists to say that they are not
+    interchangeable. Equal weights is the honest default, not a claim.
+    """
+    def __init__(self, eps=0.2, n_iters=100, align='prefix', debiased=True,
+                 tier_weights=None, reduction='mean'):
+        super(MultiTierFeatureLoss, self).__init__(reduction=reduction)
+        self.inner = FeatureWassersteinLoss(
+            eps=eps, n_iters=n_iters, align=align, debiased=debiased)
+        self.tier_weights = tier_weights
+
+    def forward(self, student, teacher):
+        if not isinstance(student, (tuple, list)):
+            student, teacher = (student,), (teacher,)
+        if len(student) != len(teacher):
+            raise ValueError('a tap is missing on one side')
+        weights = self.tier_weights or [1.0] * len(student)
+        total = 0.0
+        for weight, left, right in zip(weights, student, teacher):
+            total = total + weight * self.inner(left, right)
+        return total / max(sum(weights), 1e-12)
+
+
+def width_gate(width_mult):
+    """how strongly an extra term applies at this width
+
+    Measured five times in this project and three more in the literature:
+    every intervention in supernet training helps the narrow widths and
+    costs something at the wide ones. Against plain KL the horizontal term
+    ran from +0.5 at width 0.30 to -0.8 at 1.00.
+
+    A term that is known to change sign across the range should not be
+    applied at one strength across the range. 'narrow' turns it off where
+    it was measured to hurt.
+    """
+    schedule = getattr(FLAGS, 'weight_schedule', 'constant')
+    if schedule == 'constant':
+        return 1.0
+    low, high = FLAGS.width_mult_range[0], FLAGS.width_mult_range[-1]
+    position = (width_mult - low) / max(high - low, 1e-12)
+    position = min(max(position, 0.0), 1.0)
+    if schedule == 'narrow':
+        return 1.0 - position
+    if schedule == 'wide':
+        return position
+    raise ValueError('unknown weight_schedule {}'.format(schedule))
+
+
 class KLPairLoss(torch.nn.modules.loss._Loss):
     """asymmetric KL between two students, the control for the claim
 
@@ -508,14 +563,19 @@ def build_pair_criterion():
     raise ValueError('unknown horizontal_loss {}'.format(horizontal_loss))
 
 
+def _feature_loss():
+    return MultiTierFeatureLoss(
+        eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),
+        n_iters=getattr(FLAGS, 'sinkhorn_iters', 100),
+        align=getattr(FLAGS, 'feature_align', 'prefix'),
+        tier_weights=getattr(FLAGS, 'tier_weights', None))
+
+
 def build_feature_criterion():
     """vertical feature term, or None when the branch does not use one"""
     if not getattr(FLAGS, 'feature_kd', False):
         return None
-    return FeatureWassersteinLoss(
-        eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),
-        n_iters=getattr(FLAGS, 'sinkhorn_iters', 100),
-        align=getattr(FLAGS, 'feature_align', 'prefix'))
+    return _feature_loss()
 
 
 def build_feature_pair_criterion():
@@ -528,10 +588,7 @@ def build_feature_pair_criterion():
         return None
     if getattr(FLAGS, 'horizontal_where', 'logit') == 'logit':
         return None
-    return FeatureWassersteinLoss(
-        eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),
-        n_iters=getattr(FLAGS, 'sinkhorn_iters', 100),
-        align=getattr(FLAGS, 'feature_align', 'prefix'))
+    return _feature_loss()
 
 
 def build_confusion_embedding():

@@ -74,6 +74,16 @@ class Model(nn.Module):
         features.append(nn.AdaptiveAvgPool2d(1))
         self.features = nn.Sequential(*features)
 
+        # Where each stage ends, as an index into self.features. Taps are
+        # read by walking that Sequential rather than by splitting it into
+        # submodules, so the state dict is unchanged and checkpoints from
+        # before any of this still load.
+        self.stage_ends = {}
+        index = 0
+        for stage, (_, count, _) in enumerate(self.block_setting):
+            index += count
+            self.stage_ends['stage{}'.format(stage + 1)] = index
+
         # us=[True, False]: the input side slims with the width, the number
         # of classes does not. Teacher and student therefore share these
         # rows, which is what the class cost matrix in utils/loss_ops.py
@@ -85,16 +95,25 @@ class Model(nn.Module):
             self.reset_parameters()
 
     def forward(self, x):
-        x = self.features(x)
-        last_dim = x.size()[1]
-        x = x.view(-1, last_dim)
-        logits = self.classifier(x)
-        if getattr(FLAGS, 'return_features', False):
-            # the pooled feature, before the classifier. Its width moves
-            # with width_mult, so anything comparing two widths here has to
-            # say how it handles that; see feature_cost in utils/loss_ops.
-            return logits, x
-        return logits
+        if not getattr(FLAGS, 'return_features', False):
+            x = self.features(x)
+            return self.classifier(x.view(-1, x.size()[1]))
+
+        # A tap is a stage name or 'final'. Everything but 'final' is a
+        # spatial map, averaged over space so that one transport cost
+        # serves every tier. The channel count differs by tier and by
+        # width, which is why feature_cost has to be told how to align.
+        taps = tuple(getattr(FLAGS, 'feature_layers', ['final']))
+        wanted = {self.stage_ends[name]: name
+                  for name in taps if name != 'final'}
+        collected = {}
+        for index, layer in enumerate(self.features):
+            x = layer(x)
+            if index in wanted:
+                collected[wanted[index]] = x.mean(dim=(2, 3))
+        x = x.view(-1, x.size()[1])
+        collected['final'] = x
+        return self.classifier(x), tuple(collected[name] for name in taps)
 
     def reset_parameters(self):
         for m in self.modules():

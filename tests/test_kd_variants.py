@@ -19,15 +19,19 @@ if not any(arg.startswith('app:') for arg in sys.argv):
 
 import torch
 
+from utils.config import FLAGS
+
 from utils.loss_ops import ConfusionEmbedding
 from utils.loss_ops import FeatureWassersteinLoss
 from utils.loss_ops import JeffreysPairLoss
 from utils.loss_ops import KLPairLoss
+from utils.loss_ops import MultiTierFeatureLoss
 from utils.loss_ops import WassersteinPairLoss
 from utils.loss_ops import class_cost_matrix
 from utils.loss_ops import feature_cost
 from utils.loss_ops import identity_cost_matrix
 from utils.loss_ops import sinkhorn_plan
+from utils.loss_ops import width_gate
 
 
 FAILURES = []
@@ -176,6 +180,78 @@ def test_feature_loss_pulls_the_cloud():
           '{:.3f} -> {:.3f}'.format(before, after))
 
 
+def test_multi_tier_matches_single_when_there_is_one_tap():
+    """adding tiers must not quietly rescale the one-tier case"""
+    generator = torch.Generator().manual_seed(12)
+    student = torch.randn(16, 24, generator=generator)
+    teacher = torch.randn(16, 64, generator=generator)
+    single = FeatureWassersteinLoss(align='prefix')(student, teacher)
+    multi = MultiTierFeatureLoss(align='prefix')((student,), (teacher,))
+    check('one tap through the multi-tier wrapper is unchanged',
+          abs(single.item() - multi.item()) < 1e-6,
+          '{:.4f} against {:.4f}'.format(single.item(), multi.item()))
+
+
+def test_multi_tier_averages_and_weights():
+    generator = torch.Generator().manual_seed(13)
+    shallow = (torch.randn(16, 32, generator=generator),
+               torch.randn(16, 128, generator=generator))
+    deep = (torch.randn(16, 24, generator=generator),
+            torch.randn(16, 64, generator=generator))
+    students, teachers = (shallow[0], deep[0]), (shallow[1], deep[1])
+
+    each = [FeatureWassersteinLoss(align='prefix')(s, t).item()
+            for s, t in zip(students, teachers)]
+    equal = MultiTierFeatureLoss(align='prefix')(students, teachers).item()
+    check('equal weights average the tiers',
+          abs(equal - sum(each) / 2) < 1e-6,
+          'tiers {:.4f} and {:.4f}, combined {:.4f}'.format(
+              each[0], each[1], equal))
+
+    only_deep = MultiTierFeatureLoss(
+        align='prefix', tier_weights=[0.0, 1.0])(students, teachers).item()
+    check('a zero weight removes a tier',
+          abs(only_deep - each[1]) < 1e-6,
+          '{:.4f} against {:.4f}'.format(only_deep, each[1]))
+
+
+def test_width_gate_turns_the_term_off_where_it_hurt():
+    """the measured shape, made into a schedule
+
+    Against plain KL the horizontal term ran from about +0.5 at width 0.30
+    to -0.8 at 1.00. 'narrow' is full strength at the bottom of the range
+    and zero at the top, so the part that lost is not applied.
+    """
+    low, high = FLAGS.width_mult_range[0], FLAGS.width_mult_range[-1]
+    middle = 0.5 * (low + high)
+
+    FLAGS.weight_schedule = 'constant'
+    check('constant is flat',
+          width_gate(low) == 1.0 and width_gate(high) == 1.0)
+
+    FLAGS.weight_schedule = 'narrow'
+    check('narrow is full at the smallest width',
+          abs(width_gate(low) - 1.0) < 1e-9,
+          'value {:.3f}'.format(width_gate(low)))
+    check('and off at the largest',
+          abs(width_gate(high)) < 1e-9,
+          'value {:.3f}'.format(width_gate(high)))
+    check('and monotone between',
+          width_gate(low) > width_gate(middle) > width_gate(high),
+          'middle {:.3f}'.format(width_gate(middle)))
+
+    FLAGS.weight_schedule = 'wide'
+    check('wide is the mirror image',
+          abs(width_gate(high) - 1.0) < 1e-9
+          and abs(width_gate(low)) < 1e-9)
+
+    FLAGS.weight_schedule = 'narrow'
+    check('a width outside the range is clamped, not extrapolated',
+          0.0 <= width_gate(high + 1.0) <= 1.0
+          and 0.0 <= width_gate(low - 1.0) <= 1.0)
+    FLAGS.weight_schedule = 'constant'
+
+
 def test_transport_plan_is_a_coupling():
     """on the cost the feature loss actually hands it, which is scaled
 
@@ -262,6 +338,9 @@ def main():
     test_feature_loss_is_zero_on_a_copy()
     test_prefix_alignment_ignores_dropped_channels()
     test_feature_loss_pulls_the_cloud()
+    test_multi_tier_matches_single_when_there_is_one_tap()
+    test_multi_tier_averages_and_weights()
+    test_width_gate_turns_the_term_off_where_it_hurt()
     test_transport_plan_is_a_coupling()
     test_horizontal_controls_separate_the_claims()
     test_all_controls_reach_the_gradient()
