@@ -381,7 +381,16 @@ def forward_loss(
     if isinstance(output, tuple):
         output, feature = output
     if soft_target is not None:
-        loss = torch.mean(soft_criterion(output, soft_target))
+        # Inplace distillation runs at temperature 1 upstream, and by the
+        # time the widest width has memorized the training set its soft
+        # target is one-hot in all but name. Every divergence agrees on a
+        # one-hot target, which is why six branches here landed inside 0.8
+        # points of each other. Temperature is what leaves the teacher a
+        # distribution for them to disagree about; the squared factor keeps
+        # the gradient magnitude comparable across settings.
+        temperature = getattr(FLAGS, 'kd_temperature', 1.0)
+        loss = (temperature * temperature) * torch.mean(
+            soft_criterion(output / temperature, soft_target))
     else:
         loss = torch.mean(criterion(output, target))
     # topk
@@ -407,7 +416,10 @@ def forward_loss(
     if meter is not None:
         meter['loss'].cache(tensor[0])
     if return_soft_target:
-        return loss, torch.nn.functional.softmax(output, dim=1), feature
+        temperature = getattr(FLAGS, 'kd_temperature', 1.0)
+        return (loss,
+                torch.nn.functional.softmax(output / temperature, dim=1),
+                feature)
     if return_output:
         return loss, output, feature
     return loss
@@ -542,9 +554,15 @@ def run_one_epoch(
                     if deferred:
                         pair_loss = 0.0
                         if pair_criterion is not None:
-                            pair_loss = pair_loss + torch.mean(
+                            # the same temperature, on both sides: two
+                            # students that have each memorized the data
+                            # have as little to say to each other as a
+                            # memorized teacher has to say to either
+                            hot = getattr(FLAGS, 'kd_temperature', 1.0)
+                            pair_loss = pair_loss + (hot * hot) * torch.mean(
                                 pair_criterion(
-                                    mid_outputs[0], mid_outputs[1]))
+                                    mid_outputs[0] / hot,
+                                    mid_outputs[1] / hot))
                         if feature_pair_criterion is not None:
                             pair_loss = pair_loss + feature_pair_criterion(
                                 mid_features[0], mid_features[1])
@@ -624,13 +642,13 @@ def run_one_epoch(
             print('{:.1f}s\t{}\t{}\t{}/{}: '.format(
                 time.time() - t_start, phase, str(width_mult), epoch,
                 FLAGS.num_epochs) + ', '.join(
-                    '{}: {:.3f}'.format(k, v) for k, v in results.items()))
+                    '{}: {:.4f}'.format(k, v) for k, v in results.items()))
     elif is_master():
         results = flush_scalar_meters(meters)
         print(
             '{:.1f}s\t{}\t{}/{}: '.format(
                 time.time() - t_start, phase, epoch, FLAGS.num_epochs) +
-            ', '.join('{}: {:.3f}'.format(k, v) for k, v in results.items()))
+            ', '.join('{}: {:.4f}'.format(k, v) for k, v in results.items()))
     else:
         results = None
     return results
@@ -872,7 +890,7 @@ def train_val_test():
                     'model': model_wrapper.state_dict(),
                 },
                 os.path.join(FLAGS.log_dir, 'best_model.pt'))
-            print('New best validation top1 error: {:.3f}'.format(best_val))
+            print('New best validation top1 error: {:.4f}'.format(best_val))
         # save latest checkpoint
         if is_master():
             torch.save(
