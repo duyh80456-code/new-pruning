@@ -32,6 +32,7 @@ from utils.config import FLAGS  # noqa: E402
 from utils.loss_ops import FeatureMMDLoss  # noqa: E402
 from utils.loss_ops import FeatureMSELoss  # noqa: E402
 from utils.loss_ops import FeatureSlicedWassersteinLoss  # noqa: E402
+from utils.loss_ops import FeatureUnbalancedWassersteinLoss  # noqa: E402
 from utils.loss_ops import FeatureWassersteinLoss  # noqa: E402
 
 REFERENCE = 'wasserstein'
@@ -42,18 +43,41 @@ WIDTHS = [1.0, 0.25, 0.55, 0.8]
 
 
 def losses():
+    """every setting of the axis that has a branch, plus the two controls
+
+    The eps rows are deliberately not calibrated away in the configs. Blur
+    is the variable those branches study and part of what it does is
+    change the size of the term, so rescaling each one back would remove
+    half of the effect being measured. They run at weight 1.0 and this
+    table is what says by how much they differ.
+    """
+    entropic = dict(align='prefix',
+                    n_iters=getattr(FLAGS, 'sinkhorn_iters', 100))
     return [
         ('mse', FeatureMSELoss(align='prefix')),
         ('mmd', FeatureMMDLoss(
             align='prefix',
             bandwidth=getattr(FLAGS, 'mmd_bandwidth', 1.0))),
-        ('sliced', FeatureSlicedWassersteinLoss(
-            align='prefix',
-            n_projections=getattr(FLAGS, 'sliced_projections', 128))),
+        ('sliced 32', FeatureSlicedWassersteinLoss(
+            align='prefix', n_projections=32)),
+        ('sliced 128', FeatureSlicedWassersteinLoss(
+            align='prefix', n_projections=128)),
+        ('sliced 512', FeatureSlicedWassersteinLoss(
+            align='prefix', n_projections=512)),
+        ('unbalanced tau 1', FeatureUnbalancedWassersteinLoss(
+            tau=1.0, eps=0.2, **entropic)),
+        ('unbalanced tau 3', FeatureUnbalancedWassersteinLoss(
+            tau=3.0, eps=0.2, **entropic)),
+        ('cosine ground', FeatureWassersteinLoss(
+            eps=0.2, ground='cosine', **entropic)),
+        ('no debias', FeatureWassersteinLoss(
+            eps=0.2, debiased=False, **entropic)),
+        ('eps 0.02', FeatureWassersteinLoss(eps=0.02, **entropic)),
+        ('eps 0.10', FeatureWassersteinLoss(eps=0.10, **entropic)),
+        ('eps 0.50', FeatureWassersteinLoss(eps=0.50, **entropic)),
+        ('eps 1.00', FeatureWassersteinLoss(eps=1.00, **entropic)),
         ('wasserstein', FeatureWassersteinLoss(
-            align='prefix',
-            eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),
-            n_iters=getattr(FLAGS, 'sinkhorn_iters', 100))),
+            eps=getattr(FLAGS, 'sinkhorn_eps', 0.2), **entropic)),
     ]
 
 

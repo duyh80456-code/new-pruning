@@ -25,7 +25,9 @@ from utils.config import FLAGS
 from utils.loss_ops import ConfusionEmbedding
 from utils.loss_ops import FeatureMMDLoss
 from utils.loss_ops import FeatureMSELoss
+from utils.loss_ops import FeatureGromovLoss
 from utils.loss_ops import FeatureSlicedWassersteinLoss
+from utils.loss_ops import FeatureUnbalancedWassersteinLoss
 from utils.loss_ops import FeatureWassersteinLoss
 from utils.loss_ops import JeffreysPairLoss
 from utils.loss_ops import KLPairLoss
@@ -501,6 +503,91 @@ def test_sliced_ranks_clouds_like_the_full_transport():
     check('sliced and full transport order the gaps alike', ordered)
 
 
+def test_unbalanced_stays_monotone_at_the_shipped_tau():
+    """the setting below which this term stops being a distance
+
+    Unbalanced transport is debiased the same way the balanced one is, and
+    that correction is only valid while the plan still carries most of the
+    mass. At small tau it does not: the cross term shrinks faster than the
+    self terms it is measured against and the value goes negative on the
+    clouds that disagree most, which is the opposite of what the term is
+    for. tau 1.0 is the shipped value and the lowest that survives this.
+    """
+    generator = torch.Generator().manual_seed(37)
+    teacher = torch.randn(48, 128, generator=generator)
+    base = teacher[:, :32].clone()
+    gaps = [0.0, 0.4, 1.2, 3.0]
+    print('      value by gap, by tau:')
+    for tau in (0.1, 0.5, 1.0, 3.0):
+        loss_fn = FeatureUnbalancedWassersteinLoss(tau=tau, align='prefix')
+        values = []
+        for gap in gaps:
+            student = base + gap * torch.randn(
+                48, 32, generator=torch.Generator().manual_seed(38))
+            values.append(loss_fn(student, teacher).item())
+        print('        tau {:<5.1f}'.format(tau) + ''.join(
+            '{:>10.4f}'.format(v) for v in values))
+        if tau < 1.0:
+            continue
+        rising = all(values[i] < values[i + 1] for i in range(len(gaps) - 1))
+        check('tau {} rises with the gap'.format(tau), rising)
+        check('tau {} is zero at agreement'.format(tau),
+              abs(values[0]) < 1e-5, 'value {:.2e}'.format(values[0]))
+
+
+def test_cosine_ground_behaves_like_a_cost():
+    """the other ground metric has to satisfy the same three things"""
+    generator = torch.Generator().manual_seed(39)
+    teacher = torch.randn(32, 96, generator=generator)
+    base = teacher[:, :48].clone()
+    loss_fn = FeatureWassersteinLoss(align='prefix', ground='cosine')
+    same = loss_fn(teacher.clone(), teacher).item()
+    near = loss_fn(
+        base + 0.3 * torch.randn(32, 48, generator=generator),
+        teacher).item()
+    far = loss_fn(
+        base + 2.0 * torch.randn(32, 48, generator=generator),
+        teacher).item()
+    check('cosine ground is zero at agreement', abs(same) < 1e-5,
+          'value {:.2e}'.format(same))
+    check('cosine ground rises with the gap', same < near < far,
+          '{:.4f} < {:.4f} < {:.4f}'.format(same, near, far))
+    left = torch.randn(32, 48, generator=generator)
+    check('cosine ground is symmetric',
+          abs(loss_fn(left, teacher).item()
+              - loss_fn(teacher, left).item()) < 1e-5)
+
+
+def test_gromov_is_invariant_to_what_it_claims():
+    """kept for the record: it does what it says and measures almost nothing
+
+    Gromov transport compares the clouds' internal distances, so it is
+    blind to anything that leaves those alone. This holds it to that, and
+    to the reason no branch runs it: on these clouds the two internal
+    structures are nearly identical after each is scaled by its own
+    spread, so the value sits near zero however far apart the clouds are,
+    and it does not even rank the gaps in order.
+    """
+    generator = torch.Generator().manual_seed(43)
+    teacher = torch.randn(48, 96, generator=generator)
+    base = teacher[:, :32].clone()
+    loss_fn = FeatureGromovLoss()
+    check('gromov is zero at agreement',
+          abs(loss_fn(teacher.clone(), teacher).item()) < 1e-5)
+    plain = loss_fn(base, teacher).item()
+    check('gromov ignores a translation',
+          abs(loss_fn(base + 3.0, teacher).item() - plain) < 1e-5)
+    order = torch.randperm(32, generator=generator)
+    check('gromov ignores a channel permutation',
+          abs(loss_fn(base[:, order], teacher).item() - plain) < 1e-5)
+    far = loss_fn(
+        base + 3.0 * torch.randn(48, 32, generator=generator), teacher).item()
+    check('and it is too small to use, which is why no branch does',
+          abs(far) < 0.01,
+          'largest gap reads {:.5f}, against about 0.4 for transport'.format(
+              far))
+
+
 def main():
     print('torch', torch.__version__)
     print()
@@ -523,6 +610,9 @@ def main():
     test_every_feature_loss_descends()
     test_no_feature_loss_reads_the_dimension()
     test_sliced_ranks_clouds_like_the_full_transport()
+    test_unbalanced_stays_monotone_at_the_shipped_tau()
+    test_cosine_ground_behaves_like_a_cost()
+    test_gromov_is_invariant_to_what_it_claims()
     print()
     if FAILURES:
         print('{} failed: {}'.format(len(FAILURES), ', '.join(FAILURES)))

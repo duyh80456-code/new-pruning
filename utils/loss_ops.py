@@ -144,6 +144,39 @@ def sinkhorn_plan(cost, eps=0.2, n_iters=100):
     return plan.squeeze(0)
 
 
+def unbalanced_sinkhorn_plan(cost, eps=0.2, n_iters=100, tau=1.0):
+    """coupling that may fall short of its marginals, detached
+
+    The balanced solve enforces the marginals exactly. Here they are
+    penalized instead, by a KL term of strength tau, which turns the hard
+    constraint into a price: mass that is expensive to move can be left
+    where it is. The scaling steps are the balanced ones shrunk by
+    tau / (tau + eps), so tau large recovers the balanced plan and tau
+    small lets most of the mass stay put.
+
+    Damped and simultaneous for the same reason the balanced version is:
+    swapping the two sides has to swap the two potentials exactly, since
+    this is used between two widths that stand in no order.
+    """
+    with torch.no_grad():
+        log_p = _uniform_log_marginal(cost.size(0), cost)
+        log_q = _uniform_log_marginal(cost.size(1), cost)
+        cost_eps = cost.unsqueeze(0) / eps
+        damping = tau / (tau + eps)
+        f = torch.zeros_like(log_p)
+        g = torch.zeros_like(log_q)
+        for _ in range(n_iters):
+            f_next = damping * eps * (log_p - torch.logsumexp(
+                g.unsqueeze(1) / eps - cost_eps, dim=2))
+            g_next = damping * eps * (log_q - torch.logsumexp(
+                f.unsqueeze(2) / eps - cost_eps, dim=1))
+            f = 0.5 * (f + f_next)
+            g = 0.5 * (g + g_next)
+        plan = torch.exp(
+            (f.unsqueeze(2) + g.unsqueeze(1) - cost.unsqueeze(0)) / eps)
+    return plan.squeeze(0)
+
+
 def align_features(student, teacher, align='prefix'):
     """put two widths into a space where they can be compared
 
@@ -191,10 +224,30 @@ def _feature_scale(left, right):
     return spread.clamp_min(1e-12)
 
 
-def feature_cost(student, teacher, align='prefix'):
+def ground_cost(left, right, ground='euclidean', scale=None):
+    """the distance transport is charged per unit of mass moved
+
+    euclidean is the distance the clouds live in, divided by their spread
+    so one eps serves every width. cosine asks only about direction, which
+    drops the magnitude a wider subnet can put into a channel and is
+    already bounded, so it needs no scaling. Which of the two is right is
+    not obvious and is why there is a branch for it.
+    """
+    if ground == 'euclidean':
+        if scale is None:
+            scale = _feature_scale(left, right)
+        return torch.cdist(left, right) / scale
+    if ground == 'cosine':
+        left = torch.nn.functional.normalize(left, dim=1)
+        right = torch.nn.functional.normalize(right, dim=1)
+        return 1.0 - left.mm(right.t())
+    raise ValueError('unknown feature_ground {}'.format(ground))
+
+
+def feature_cost(student, teacher, align='prefix', ground='euclidean'):
     """scaled pairwise distance between two batches of features"""
     left, right = align_features(student, teacher, align)
-    return torch.cdist(left, right) / _feature_scale(left, right)
+    return ground_cost(left, right, ground)
 
 
 class FeatureWassersteinLoss(torch.nn.modules.loss._Loss):
@@ -212,15 +265,16 @@ class FeatureWassersteinLoss(torch.nn.modules.loss._Loss):
     use is not minimized at agreement.
     """
     def __init__(self, eps=0.2, n_iters=100, align='prefix', debiased=True,
-                 reduction='mean'):
+                 ground='euclidean', reduction='mean'):
         super(FeatureWassersteinLoss, self).__init__(reduction=reduction)
         self.eps = eps
         self.n_iters = n_iters
         self.align = align
         self.debiased = debiased
+        self.ground = ground
 
     def _transport(self, left, right, scale):
-        cost = torch.cdist(left, right) / scale
+        cost = ground_cost(left, right, self.ground, scale)
         plan = sinkhorn_plan(cost.detach(), self.eps, self.n_iters)
         return (plan * cost).sum()
 
@@ -231,6 +285,107 @@ class FeatureWassersteinLoss(torch.nn.modules.loss._Loss):
         if self.debiased:
             value = value - 0.5 * self._transport(left, left, scale)
             value = value - 0.5 * self._transport(right, right, scale)
+        return value
+
+
+class FeatureUnbalancedWassersteinLoss(FeatureWassersteinLoss):
+    """transport that may leave mass behind, for a price
+
+    Balanced transport insists every sample of one width is explained by
+    the samples of the other. Two widths of one supernet do not have to
+    agree that completely: a narrow subnet can simply fail on part of the
+    batch, and forcing its failures to be matched somewhere spends the
+    term on the samples it can do least about.
+
+    tau is what leaving mass unmatched costs. Large tau is the balanced
+    problem back again, small tau matches only the easy part of the batch,
+    so this is a knob on how much of the disagreement the term is asked to
+    carry.
+    """
+    def __init__(self, tau=1.0, **kwargs):
+        super(FeatureUnbalancedWassersteinLoss, self).__init__(**kwargs)
+        self.tau = tau
+
+    def _transport(self, left, right, scale):
+        cost = ground_cost(left, right, self.ground, scale)
+        plan = unbalanced_sinkhorn_plan(
+            cost.detach(), self.eps, self.n_iters, self.tau)
+        return (plan * cost).sum()
+
+
+class FeatureGromovLoss(torch.nn.modules.loss._Loss):
+    """transport between the two clouds' own distance structures
+
+    Every other feature loss here has to answer a question it should not
+    have to: the two widths live in spaces of different dimension, so
+    something must say how a coordinate of one corresponds to a coordinate
+    of the other. prefix answers by truncation and gram by dropping
+    coordinates entirely, and both are assumptions the result then rests
+    on.
+
+    Gromov transport does not ask. It compares how far sample i is from
+    sample k inside one cloud against how far their partners are inside
+    the other, so the two spaces are never put in correspondence at all,
+    only their internal geometry. That is the one formulation whose claim
+    survives whatever the channel ordering turns out to mean.
+
+    Entropic, following the squared loss factorization of Peyre, Cuturi
+    and Solomon 2016: the objective is quadratic in the plan, so each
+    outer step freezes the plan to build a linear cost and solves that
+    with Sinkhorn. outer_iters is small because the plan stops moving
+    quickly and every step costs a full solve.
+
+    Invariant to anything that leaves a cloud's internal distances alone,
+    a translation among them. That is the formulation working as defined,
+    not a hole in it: what it asks is whether the two widths organize the
+    batch the same way, never whether they put it in the same place. A
+    term that also wants them in the same place is what prefix alignment
+    is for, and the two branches are how one finds out which matters.
+
+    Debiased like the others. Entropic blur makes the objective positive
+    even between a cloud and itself, and a horizontal term has to be
+    minimized at agreement.
+    """
+    def __init__(self, eps=0.2, n_iters=50, outer_iters=5, align=None,
+                 ground='euclidean', debiased=True, reduction='mean'):
+        super(FeatureGromovLoss, self).__init__(reduction=reduction)
+        self.eps = eps
+        self.n_iters = n_iters
+        self.outer_iters = outer_iters
+        self.ground = ground
+        self.debiased = debiased
+
+    def _within(self, cloud):
+        """distances inside one cloud, in that cloud's own space"""
+        return ground_cost(cloud, cloud, self.ground,
+                           _feature_scale(cloud, cloud))
+
+    def _gromov(self, left, right):
+        n, m = left.size(0), right.size(0)
+        weight_left = torch.full((n, 1), 1.0 / n, device=left.device,
+                                 dtype=left.dtype)
+        weight_right = torch.full((m, 1), 1.0 / m, device=right.device,
+                                  dtype=right.dtype)
+        # the part of the quadratic objective that does not move with the
+        # plan, so it is built once
+        constant = (left.pow(2).mm(weight_left).expand(n, m)
+                    + weight_right.t().mm(right.pow(2).t()).expand(n, m))
+        with torch.no_grad():
+            plan = weight_left.mm(weight_right.t())
+            for _ in range(self.outer_iters):
+                linear = constant - 2.0 * left.mm(plan).mm(right.t())
+                plan = sinkhorn_plan(linear, self.eps, self.n_iters)
+        linear = constant - 2.0 * left.mm(plan).mm(right.t())
+        return (plan * linear).sum()
+
+    def forward(self, student, teacher):
+        # no align_features: not needing it is the point
+        left = self._within(student)
+        right = self._within(teacher)
+        value = self._gromov(left, right)
+        if self.debiased:
+            value = value - 0.5 * self._gromov(left, left)
+            value = value - 0.5 * self._gromov(right, right)
         return value
 
 
@@ -689,6 +844,7 @@ def _inner_feature_loss(align):
     and lost, is the first thing a reader will pick at.
     """
     name = getattr(FLAGS, 'feature_loss', 'wasserstein')
+    ground = getattr(FLAGS, 'feature_ground', 'euclidean')
     if name == 'mse':
         return FeatureMSELoss(align=align)
     if name == 'mmd':
@@ -698,12 +854,27 @@ def _inner_feature_loss(align):
         return FeatureSlicedWassersteinLoss(
             align=align,
             n_projections=getattr(FLAGS, 'sliced_projections', 128))
+    if name == 'gromov':
+        return FeatureGromovLoss(
+            eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),
+            n_iters=getattr(FLAGS, 'gromov_inner_iters', 50),
+            outer_iters=getattr(FLAGS, 'gromov_outer_iters', 5),
+            ground=ground)
+    if name == 'unbalanced':
+        return FeatureUnbalancedWassersteinLoss(
+            tau=getattr(FLAGS, 'unbalanced_tau', 1.0),
+            eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),
+            n_iters=getattr(FLAGS, 'sinkhorn_iters', 100),
+            align=align,
+            debiased=getattr(FLAGS, 'sinkhorn_debiased', True),
+            ground=ground)
     if name == 'wasserstein':
         return FeatureWassersteinLoss(
             eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),
             n_iters=getattr(FLAGS, 'sinkhorn_iters', 100),
             align=align,
-            debiased=getattr(FLAGS, 'sinkhorn_debiased', True))
+            debiased=getattr(FLAGS, 'sinkhorn_debiased', True),
+            ground=ground)
     raise ValueError('unknown feature_loss {}'.format(name))
 
 
