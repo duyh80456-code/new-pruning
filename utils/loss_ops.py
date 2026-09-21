@@ -458,12 +458,25 @@ class FeatureSlicedWassersteinLoss(torch.nn.modules.loss._Loss):
     so no debiasing correction either. The projections are redrawn every
     call, which adds gradient noise and is how sliced transport is normally
     used.
+
+    reduce 'max' keeps the worst direction instead of the average, which
+    is the max-sliced distance. Averaging dilutes a disagreement confined
+    to a few directions among all the ones where the widths already agree,
+    and in a 512 channel space most directions are the second kind.
+
+    p is the exponent on the one dimensional gaps. Squared is the usual
+    choice and weights the outlying samples heavily; p = 1 does not, and
+    on clouds where a narrow subnet fails on part of the batch that is a
+    different quantity rather than a softer one.
     """
-    def __init__(self, align='prefix', n_projections=128, reduction='mean'):
+    def __init__(self, align='prefix', n_projections=128, reduce='mean',
+                 p=2.0, reduction='mean'):
         super(FeatureSlicedWassersteinLoss, self).__init__(
             reduction=reduction)
         self.align = align
         self.n_projections = n_projections
+        self.reduce = reduce
+        self.p = p
 
     def forward(self, student, teacher):
         left, right = align_features(student, teacher, self.align)
@@ -486,8 +499,136 @@ class FeatureSlicedWassersteinLoss(torch.nn.modules.loss._Loss):
         # times more weakly at the wide end than the narrow one, which is a
         # width schedule nobody chose. With it the value sits on the scale
         # of the squared distance the full transport reports.
-        return left.size(1) * (
-            projected_left - projected_right).pow(2).mean()
+        gaps = (projected_left - projected_right).abs().pow(self.p)
+        if self.reduce == 'max':
+            # the worst direction, averaged over the samples along it
+            return left.size(1) * gaps.mean(dim=0).max()
+        if self.reduce == 'mean':
+            return left.size(1) * gaps.mean()
+        raise ValueError('unknown sliced_reduce {}'.format(self.reduce))
+
+
+class FeatureChannelLoss(torch.nn.modules.loss._Loss):
+    """one dimensional transport along each shared channel
+
+    Sliced transport projects onto random directions because in general no
+    direction means anything. Here they do. A narrow subnet uses the
+    leading channels of the wide one, the same channels with the same
+    weights, so channel j is one coordinate both widths possess and the
+    projection onto it is the question of whether they use it the same
+    way.
+
+    Exact, not approximated: transport in one dimension is a sort and a
+    difference, with no plan to solve and no blur to choose. Cheaper than
+    Sinkhorn and cheaper than sliced, because the directions do not have
+    to be drawn or multiplied through.
+
+    What this cannot see is any disagreement that lives between channels,
+    which is what the full transport is for. The pair says whether the
+    coordinates carry it.
+    """
+    def __init__(self, align='prefix', p=2.0, reduction='mean'):
+        super(FeatureChannelLoss, self).__init__(reduction=reduction)
+        self.align = align
+        self.p = p
+
+    def forward(self, student, teacher):
+        left, right = align_features(student, teacher, self.align)
+        scale = _feature_scale(left, right)
+        left = (left / scale).sort(dim=0)[0]
+        right = (right / scale).sort(dim=0)[0]
+        return (left - right).abs().pow(self.p).mean() * left.size(1)
+
+
+class FeatureBuresLoss(torch.nn.modules.loss._Loss):
+    """the closed form transport between two Gaussians fitted to the clouds
+
+        W2^2 = ||m1 - m2||^2 + tr(C1 + C2 - 2 (C1^.5 C2 C1^.5)^.5)
+
+    No plan, no iteration, no blur. Where the entropic version estimates
+    transport from 256 points and pays a fixed point solve for it, this
+    assumes the clouds are Gaussian and then is exact, which trades one
+    approximation for a different one rather than for none.
+
+    It is the only loss here that sees the shape of a cloud. Transport
+    over a finite sample matches where the points are; the covariance term
+    matches how they are spread and in which directions, which is the part
+    a batch of 256 in 512 dimensions estimates worst.
+
+    full needs two symmetric eigendecompositions per call, so a diagonal
+    mode keeps the means and the per channel variances and drops the cross
+    terms. That is nearly free and still matches more than a plain
+    distance does.
+    """
+    def __init__(self, align='prefix', diagonal=False, reduction='mean'):
+        super(FeatureBuresLoss, self).__init__(reduction=reduction)
+        self.align = align
+        self.diagonal = diagonal
+
+    @staticmethod
+    def _sqrt_psd(matrix):
+        values, vectors = torch.linalg.eigh(matrix)
+        values = values.clamp_min(0.0).sqrt()
+        return (vectors * values.unsqueeze(0)).mm(vectors.t())
+
+    def forward(self, student, teacher):
+        left, right = align_features(student, teacher, self.align)
+        scale = _feature_scale(left, right)
+        left, right = left / scale, right / scale
+        mean_gap = (left.mean(dim=0) - right.mean(dim=0)).pow(2).sum()
+        if self.diagonal:
+            # the Bures distance between diagonal Gaussians is the squared
+            # difference of the standard deviations, channel by channel
+            spread_gap = (left.std(dim=0) - right.std(dim=0)).pow(2).sum()
+            return mean_gap + spread_gap
+        left = left - left.mean(dim=0, keepdim=True)
+        right = right - right.mean(dim=0, keepdim=True)
+        count = max(left.size(0) - 1, 1)
+        cov_left = left.t().mm(left) / count
+        cov_right = right.t().mm(right) / count
+        root = self._sqrt_psd(cov_left)
+        cross = self._sqrt_psd(root.mm(cov_right).mm(root))
+        # the trace identity is exact and the eigendecompositions are not,
+        # so two identical clouds come out a shade below zero. Left alone
+        # that is a term rewarding a width for matching its partner and
+        # then pushing past it.
+        return (mean_gap + cov_left.trace() + cov_right.trace()
+                - 2.0 * cross.trace()).clamp_min(0.0)
+
+
+class ClassifierSpreadLoss(torch.nn.modules.loss._Loss):
+    """push the classifier rows apart, rather than pull anything together
+
+    Every other term here is a pull: two distributions are compared and
+    the gap is charged. This is the opposite, and it exists because of a
+    measurement. The class cost matrix on a trained supernet has a spread
+    of 1.32 between its nearest and farthest pairs, against 3.79 for an
+    embedding with real structure, so transport over it had almost no
+    geometry to use and six branches at that tier failed.
+
+    Rather than move to a tier where geometry exists, this tries to put
+    geometry where it was missing: a repulsion on the rows of the shared
+    classifier, so that classes the network has no reason to separate stop
+    sitting on top of each other.
+
+    Negative by construction, since it rewards spread. The pairs already
+    far apart are the ones with nothing left to gain, so the penalty is on
+    the closest neighbours only, which is what keeps it from simply
+    inflating every row.
+    """
+    def __init__(self, neighbours=5, reduction='mean'):
+        super(ClassifierSpreadLoss, self).__init__(reduction=reduction)
+        self.neighbours = neighbours
+
+    def forward(self, weight):
+        rows = torch.nn.functional.normalize(weight, dim=1)
+        distance = torch.cdist(rows, rows)
+        distance = distance + torch.eye(
+            rows.size(0), device=rows.device, dtype=rows.dtype) * 1e9
+        nearest = distance.topk(
+            min(self.neighbours, rows.size(0) - 1),
+            dim=1, largest=False)[0]
+        return -nearest.mean()
 
 
 class MultiTierFeatureLoss(torch.nn.modules.loss._Loss):
@@ -857,7 +998,15 @@ def _inner_feature_loss(align):
     if name == 'sliced':
         return FeatureSlicedWassersteinLoss(
             align=align,
-            n_projections=getattr(FLAGS, 'sliced_projections', 128))
+            n_projections=getattr(FLAGS, 'sliced_projections', 128),
+            reduce=getattr(FLAGS, 'sliced_reduce', 'mean'),
+            p=getattr(FLAGS, 'wasserstein_p', 2.0))
+    if name == 'channel':
+        return FeatureChannelLoss(
+            align=align, p=getattr(FLAGS, 'wasserstein_p', 2.0))
+    if name == 'bures':
+        return FeatureBuresLoss(
+            align=align, diagonal=getattr(FLAGS, 'bures_diagonal', False))
     if name == 'gromov':
         return FeatureGromovLoss(
             eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),
@@ -935,6 +1084,18 @@ def horizontal_pairs(widths):
     return [(middles[i], middles[j])
             for i in range(len(middles))
             for j in range(i + 1, len(middles))]
+
+
+def build_spread_criterion():
+    """repulsion on the classifier rows, or None when unused
+
+    Off unless spread_weight is set, because it changes the objective for
+    every width at once rather than adding a term between two of them.
+    """
+    if not getattr(FLAGS, 'spread_weight', 0):
+        return None
+    return ClassifierSpreadLoss(
+        neighbours=getattr(FLAGS, 'spread_neighbours', 5))
 
 
 def build_confusion_embedding():

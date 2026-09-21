@@ -24,6 +24,7 @@ from utils.loss_ops import build_feature_criterion
 from utils.loss_ops import build_feature_pair_criterion
 from utils.loss_ops import horizontal_pairs
 from utils.loss_ops import build_confusion_embedding, build_cost_matrix
+from utils.loss_ops import build_spread_criterion, get_classifier_weight
 from utils.loss_ops import width_gate
 from models.slimmable_ops import bn_calibration_init
 from utils.config import FLAGS
@@ -441,7 +442,8 @@ def forward_loss(
 def run_one_epoch(
         epoch, loader, model, criterion, optimizer, meters, phase='train',
         soft_criterion=None, pair_criterion=None, feature_criterion=None,
-        feature_pair_criterion=None, confusion=None):
+        feature_pair_criterion=None, confusion=None,
+        spread_criterion=None):
     """run one epoch for train/val/test/cal"""
     t_start = time.time()
     assert phase in ['train', 'val', 'test', 'cal'], 'Invalid phase.'
@@ -532,6 +534,14 @@ def run_one_epoch(
                                 return_soft_target=True)
                             if confusion is not None:
                                 confusion.update(soft_target.detach(), target)
+                            # once a step, not once a width: the rows are
+                            # shared by every width, so charging it four
+                            # times would only rescale it
+                            if spread_criterion is not None:
+                                loss = loss + (
+                                    getattr(FLAGS, 'spread_weight', 0.0)
+                                    * spread_criterion(
+                                        get_classifier_weight(model)))
                         else:
                             if getattr(FLAGS, 'inplace_distill', False):
                                 loss, output, feature = forward_loss(
@@ -780,6 +790,7 @@ def train_val_test():
     feature_criterion = build_feature_criterion()
     feature_pair_criterion = build_feature_pair_criterion()
     confusion = build_confusion_embedding()
+    spread_criterion = build_spread_criterion()
     horizontal = pair_criterion is not None or (
         feature_pair_criterion is not None)
     if horizontal or feature_criterion is not None:
@@ -898,7 +909,7 @@ def train_val_test():
             pair_criterion=pair_criterion,
             feature_criterion=feature_criterion,
             feature_pair_criterion=feature_pair_criterion,
-            confusion=confusion)
+            confusion=confusion, spread_criterion=spread_criterion)
 
         # val
         if val_meters is not None:

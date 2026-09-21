@@ -33,6 +33,8 @@ from utils.loss_ops import FeatureMMDLoss  # noqa: E402
 from utils.loss_ops import FeatureMSELoss  # noqa: E402
 from utils.loss_ops import FeatureSlicedWassersteinLoss  # noqa: E402
 from utils.loss_ops import FeatureUnbalancedWassersteinLoss  # noqa: E402
+from utils.loss_ops import FeatureBuresLoss  # noqa: E402
+from utils.loss_ops import FeatureChannelLoss  # noqa: E402
 from utils.loss_ops import FeatureWassersteinLoss  # noqa: E402
 
 REFERENCE = 'wasserstein'
@@ -76,6 +78,14 @@ def losses():
         ('eps 0.10', FeatureWassersteinLoss(eps=0.10, **entropic)),
         ('eps 0.50', FeatureWassersteinLoss(eps=0.50, **entropic)),
         ('eps 1.00', FeatureWassersteinLoss(eps=1.00, **entropic)),
+        ('channel p2', FeatureChannelLoss(align='prefix')),
+        ('channel p1', FeatureChannelLoss(align='prefix', p=1.0)),
+        ('bures', FeatureBuresLoss(align='prefix')),
+        ('bures diag', FeatureBuresLoss(align='prefix', diagonal=True)),
+        ('sliced max', FeatureSlicedWassersteinLoss(
+            align='prefix', reduce='max')),
+        ('sliced p1', FeatureSlicedWassersteinLoss(
+            align='prefix', p=1.0)),
         ('wasserstein', FeatureWassersteinLoss(
             eps=getattr(FLAGS, 'sinkhorn_eps', 0.2), **entropic)),
     ]
