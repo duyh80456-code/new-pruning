@@ -540,13 +540,31 @@ def render():
       'include both ends of the range and the 1.00 against 0.25 pair '
       'is the one with the most room to disagree.')
     w('')
-    w('So the sandwich rule sorts the channels, and the reason is the '
-      'objective: the prefix trains at every sampled width and at '
-      '0.25 has to classify alone. Six per cent of the available '
-      'sorting is left at width 1.00 and three at 0.50, and no '
-      'criterion tried here finds more. This section said closed, '
-      'then open, then closed again, and the middle reading rested on '
-      'the single measure that the other seven contradict.')
+    w('Nothing here is sorted, and saying the sandwich rule sorts the '
+      'channels gets the mechanism backwards. The index mapping is '
+      'fixed before the first step and never moves: width 0.25 is '
+      'channels 0 to 127 at the start and at the end. What changes is '
+      'what those positions learn. A channel in the prefix runs at '
+      'every sampled width, and at 0.25 the prefix has to classify '
+      'with nothing else, while a channel at index 400 is only ever '
+      'alive above width 0.78 and is never asked to stand alone. The '
+      'prefix does not collect the important channels. It grows them.')
+    w('')
+    w('Which is why the idea inverts here and not at Once-for-All. '
+      'There, width is the last axis to be made elastic, so until '
+      'that stage every channel lives at every step and no position is '
+      'asked for anything the others are not. The ordering really is '
+      'arbitrary, the shuffled floor of 25 per cent is what it looks '
+      'like, and a permutation has to supply what training did not. '
+      'Here there is nothing to move, and moving anyway would take a '
+      'channel that grew up in the tail, trained only at wide widths, '
+      'and ask it to work inside a subnet it has never run in.')
+    w('')
+    w('Six per cent of the available ordering is left at width 1.00 '
+      'and three at 0.50, and no criterion tried here finds more. '
+      'This section said closed, then open, then closed again, and '
+      'the middle reading rested on the single measure that the other '
+      'seven contradict.')
     w('')
 
     w('## Not settled')
