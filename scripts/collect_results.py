@@ -476,41 +476,54 @@ def render():
       'are identical and only the order is destroyed. Read on K, at '
       'width 0.25:')
     w('')
-    w('| importance | shuffled | as trained | best possible | recovered |')
+    w('| criterion | shuffled | as trained | best possible | recovered |')
     w('|---|---|---|---|---|')
-    w('| L1 of the conv filter | 0.250 | 0.468 | 0.472 | 98% |')
-    w('| absolute batch-norm scale | 0.254 | 0.303 | 0.357 | 48% |')
-    w('| Taylor, gamma times dL/dgamma | 0.250 | 0.599 | 0.623 | 94% |')
+    w('| L1 of the conv filter | 0.247 | 0.468 | 0.472 | 99% |')
+    w('| L2 of the conv filter | 0.247 | 0.520 | 0.522 | 99% |')
+    w('| absolute batch-norm gain | 0.248 | 0.303 | 0.357 | 51% |')
+    w('| read by the next layer | 0.247 | 0.474 | 0.475 | 100% |')
+    w('| distance from the other filters | 0.249 | 0.388 | 0.389 | 99% |')
+    w('| Fisher at width 1.00 | 0.250 | 0.798 | 0.835 | 94% |')
+    w('| Taylor at width 1.00 | 0.259 | 0.603 | 0.626 | 94% |')
+    w('| Taylor at width 0.50 | 0.248 | 0.753 | 0.770 | 97% |')
     w('')
-    w('Three criteria, three answers, and the third is the one to '
-      'read. The L1 of a conv filter measures nothing durable in a '
-      'network with batch norm: scale a filter by c, divide the gain '
-      'of that channel by c, and the function is unchanged because '
-      'the normalisation removes the scale. The gain alone is not '
-      'much better, because it says how far a channel is turned up '
-      'and nothing about whether the next layer uses it. The Taylor '
-      'score is the first-order estimate of what zeroing the channel '
-      'would cost the loss, which is the quantity the sorting idea is '
-      'about. Measured over sixteen batches, the first quarter of the '
-      'channels carries 0.599 of it against 0.25 for a shuffled '
-      'order, and 0.623 is the most any quarter could carry.')
+    w('Seven of the eight say the sorting is done. The one that does '
+      'not is the batch-norm gain, and it is also the one that agrees '
+      'least with the others: ranked against the Taylor score, every '
+      'other criterion correlates between 0.89 and 0.95 and the gain '
+      'manages 0.603, falling to 0.127 in one layer. Being both the '
+      'outlier in the answer and the outlier in the ordering is what a '
+      'bad measure looks like, not a revealing one.')
     w('')
-    w('The widths also agree on the order, which was the objection '
+    w('The row above it says why. The gain records how far a channel '
+      'is turned up and nothing about whether anything downstream '
+      'reads it; how much the next layer reads each channel is a '
+      'separate quantity, and that one is sorted to 100%. A channel '
+      'can be quiet and still matter. The Taylor score multiplies the '
+      'gain by the gradient reaching it and so carries both halves, '
+      'which is why it lands with the majority.')
+    w('')
+    w('One of the eight is not asking about importance at all. '
+      'Distance from the other filters is the FPGM criterion, which '
+      'ranks a channel by how much of a duplicate it is, and the '
+      'sandwich rule presses directly for a prefix that is good and '
+      'only indirectly for one that is varied. It was the likeliest '
+      'place to find headroom and it reads 99%.')
+    w('')
+    w('The widths agree on the order too, which was the objection '
       'that would have closed the idea for every criterion at once. '
-      'Nesting admits one global permutation and sixteen widths have '
-      'to live with it, so a channel earning its place at 1.00 and '
-      'not at 0.25 would have sunk it. Rank correlation between the '
-      'orderings comes out at 0.905 between widths 1.00 and 0.50, '
-      '0.882 between 1.00 and 0.25, and 0.981 between 0.50 and 0.25, '
-      'with no layer below 0.74. They are one ordering.')
+      'Rank correlation between the Taylor orderings is 0.905 between '
+      'widths 1.00 and 0.50, 0.882 between 1.00 and 0.25, and 0.981 '
+      'between 0.50 and 0.25, with no layer below 0.74. Sixteen '
+      'widths, one ordering.')
     w('')
     w('So the sandwich rule sorts the channels, and the reason is the '
       'objective: the prefix trains at every sampled width and at '
       '0.25 has to classify alone. Six per cent of the available '
-      'sorting is left at width 1.00 and three at 0.50. This section '
-      'has said closed, then open, then closed again - on L1, then on '
-      'the gain, then on the score that estimates the thing itself - '
-      'and the middle reading was the one to distrust.')
+      'sorting is left at width 1.00 and three at 0.50, and no '
+      'criterion tried here finds more. This section said closed, '
+      'then open, then closed again, and the middle reading rested on '
+      'the single measure that the other seven contradict.')
     w('')
 
     w('## Not settled')
