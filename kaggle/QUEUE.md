@@ -1,0 +1,88 @@
+# The queue
+
+Every notebook in this directory runs two branches, one per card, in a
+session of roughly three to five hours. Take a row, run the file as it
+is, and say which number you took.
+
+Rows 1 to 12 all ask the same question - can a different transport term
+beat K - and the answer has settled at no. Rows 13 to 15 leave that
+axis: they change where the sandwich rule samples, which samples KD
+attends to, and which width teaches which. None of them touches the
+transport term, so they compose with K rather than competing with it.
+
+K stands at 74.26 against 73.52 for A, ahead at all sixteen widths.
+That is the number to pass. The result column carries each branch's
+mean accuracy once it has come back, so take a row with a free slot.
+`ak_bures` crashed three minutes into its session on a numerical bug
+that is now fixed, so it has never actually been tried. It is queued
+in row 15, not row 3.
+
+## How to run one
+
+Upload the `.ipynb` to Kaggle, then:
+
+1. Accelerator **GPU T4 x2**, Internet **On**
+2. Add the CIFAR-100 dataset as an input
+3. **Save Version -> Save & Run All (Commit)**, not the interactive
+   run, which ends when the browser closes
+
+Nothing in a notebook needs editing. Each one clones this repo when it
+starts, so it always picks up the current code.
+
+Do not skip the smoke step. The branch suite at the top mimics the
+training loop rather than running it, so anything that lives only in
+`train.py` is inert there; the smoke run is what exercises it.
+
+| # | notebook | branches | what it asks | result |
+|---|---|---|---|---|
+| 1 | `kaggle_kd_01_af_ae.ipynb` | `af_all_pairs`, `ae_k_plus_f` | Couple every pair of students, and put K and F together | 74.03 / 73.42 |
+| 2 | `kaggle_kd_02_ah_ag.ipynb` | `ah_everything`, `ag_five_widths` | All of it at once, and more students to pair | 73.53 / 67.70 |
+| 3 | `kaggle_kd_03_ai_ak.ipynb` | `ai_channel`, `ak_bures` | Transport along the shared channels, and the Gaussian closed form | 73.24 / moved to 15 |
+| 4 | `kaggle_kd_04_ao_ar.ipynb` | `ao_spread`, `ar_k_temp4` | Give the metric some geometry, and the teacher something to say | 74.14 / 73.38 |
+| 5 | `kaggle_kd_05_m_aq.ipynb` | `m_all_stages`, `aq_classwise` | Transport at every depth, and between class positions | 73.53 / 74.10 |
+| 6 | `kaggle_kd_06_al_am.ipynb` | `al_bures_diag`, `am_sliced_max` | Variances without directions, and the worst projection | 73.52 / 73.64 |
+| 7 | `kaggle_kd_07_aj_an.ipynb` | `aj_channel_p1`, `an_sliced_p1` | An absolute gap instead of a squared one, on both | 37.47 / 20.27 |
+| 8 | `kaggle_kd_08_v_s.ipynb` | `v_unbalanced`, `s_feature_sliced` | Let mass go unmatched, and solve it the cheap way | 74.18 / 73.22 |
+| 9 | `kaggle_kd_09_ac_ad.ipynb` | `ac_weight_half`, `ad_weight_double` | Is K on a plateau or on a peak | free / free |
+| 10 | `kaggle_kd_10_y_w.ipynb` | `y_eps_050`, `w_eps_002` | Blurrier and nearly hard, the two ends of the axis | 73.28 / 73.74 |
+| 11 | `kaggle_kd_11_x_aa.ipynb` | `x_eps_010`, `aa_cosine_ground` | One step of blur, and direction instead of distance | 74.24 / 73.75 |
+| 12 | `kaggle_kd_12_t_u.ipynb` | `t_sliced_32`, `u_sliced_512` | How many directions stand in for a plan | 73.19 / 72.99 |
+| 13 | `kaggle_kd_13_as_at.ipynb` | `as_log_widths`, `at_macs_widths` | Where the sandwich rule spends its free samples | free / free |
+| 14 | `kaggle_kd_14_au_av.ipynb` | `au_entropy_kd`, `av_confidence_kd` | Which samples the teacher still has something to say about | free / free |
+| 15 | `kaggle_kd_15_aw_ak.ipynb` | `aw_teacher_chain`, `ak_bures` | A chain of teachers, and the Gaussian form that never ran | free / **rerun** |
+
+## Held back
+
+These have configs in `apps/` and are not queued. Any of them runs
+from a notebook by editing `BRANCHES`.
+
+* `k_seed2, a_seed3` - seeds. Six branches now sit within a quarter point of each other at the top and sigma is still unmeasured, so these have stopped being defensive and started being the thing that decides the order.
+* `z_eps_100, q_feature_mse` - controls for K. They are built to lose: blur the plan away, or forbid rematching, and see what is left. Y at eps 0.5 has since made most of z_eps_100's point for a quarter of the cost.
+* `r_feature_mmd` - a control from outside transport.
+* `j_feature_gram` - a control for whether nesting is what makes K work.
+* `ab_no_debias` - a control for whether the debiasing correction is load bearing.
+* `ap_logit_spread` - a test of the flatness diagnosis on branch C, which came last of twelve and is not going to reach K.
+
+## Dropped on evidence
+
+* `n_jeffreys_narrow` - L was the same reasoning applied to D. It projected to 73.58 and landed at 72.74, below the branch it was built from. Weighting a term by width does not keep the half of a per-width table that looked good.
+* `o_temp4, p_jeffreys_temp4` - temperature was a diagnosis for six branches landing inside 0.8 points of each other. K then cleared A by 0.75 without it. AR has since tested the diagnosis directly on top of K and come out at 73.38, below A, so the remedy is ruled out at this tier rather than merely set aside.
+
+## Two that were dropped and should not have been
+
+`e_kl_pair` and `g_flat_cost` had already run. The reasoning for
+dropping them was wrong anyway, and they turned out to be the two runs
+that made the logit-tier story legible.
+
+The mistake was to judge a control by its gap to A. E lands at 73.27, a
+quarter point below A, which is why it looked like there was nothing
+left to attribute. But a control is read against the branch it controls
+for, not against the reference: E equals D exactly, and F sits 0.27
+above both, which is what separates symmetry from the metric. Nothing
+else in the set could have separated them.
+
+G is the sharper case. It was dropped as a formality that would confirm
+the classifier cost contributes nothing. It beats C by 0.51 instead: a
+cost matrix with no geometry at all does better than the model's own.
+The prediction was "contributes nothing" and the answer was "actively
+hurts", which is a different claim and a stronger one.
