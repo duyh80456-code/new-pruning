@@ -523,8 +523,10 @@ def render():
       'that would have closed the idea for every criterion at once. '
       'Rank correlation between the Taylor orderings is 0.905 between '
       'widths 1.00 and 0.50, 0.882 between 1.00 and 0.25, and 0.981 '
-      'between 0.50 and 0.25, with no layer below 0.74. Sixteen '
-      'widths, one ordering.')
+      'between 0.50 and 0.25, with no layer below 0.74. That is three '
+      'of the sixteen widths, not all of them, though the three '
+      'include both ends of the range and the 1.00 against 0.25 pair '
+      'is the one with the most room to disagree.')
     w('')
     w('So the sandwich rule sorts the channels, and the reason is the '
       'objective: the prefix trains at every sampled width and at '

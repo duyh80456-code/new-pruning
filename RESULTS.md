@@ -445,7 +445,7 @@ The row above it says the rest. The gain records how far a channel is turned up 
 
 One of the eight is not asking about importance at all. Distance from the other filters is the FPGM criterion, which ranks a channel by how much of a duplicate it is, and the sandwich rule presses directly for a prefix that is good and only indirectly for one that is varied. It was the likeliest place to find headroom and it reads 99%.
 
-The widths agree on the order too, which was the objection that would have closed the idea for every criterion at once. Rank correlation between the Taylor orderings is 0.905 between widths 1.00 and 0.50, 0.882 between 1.00 and 0.25, and 0.981 between 0.50 and 0.25, with no layer below 0.74. Sixteen widths, one ordering.
+The widths agree on the order too, which was the objection that would have closed the idea for every criterion at once. Rank correlation between the Taylor orderings is 0.905 between widths 1.00 and 0.50, 0.882 between 1.00 and 0.25, and 0.981 between 0.50 and 0.25, with no layer below 0.74. That is three of the sixteen widths, not all of them, though the three include both ends of the range and the 1.00 against 0.25 pair is the one with the most room to disagree.
 
 So the sandwich rule sorts the channels, and the reason is the objective: the prefix trains at every sampled width and at 0.25 has to classify alone. Six per cent of the available sorting is left at width 1.00 and three at 0.50, and no criterion tried here finds more. This section said closed, then open, then closed again, and the middle reading rested on the single measure that the other seven contradict.
 
