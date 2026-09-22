@@ -258,7 +258,9 @@ def channel_weights(left, right, mode, estimate=None):
     contains this term, so using this step's value would weight a term
     by its own gradient. The estimate passed in is an average over the
     steps already taken, detached, and is therefore a constant to the
-    graph being built now. Stale by design; the alternative is circular.
+    graph being built now. Not a one step lag: at momentum 0.05 it is an
+    average over roughly the last twenty firings, so what it assumes is
+    that the ordering drifts slowly, not that it is fixed.
 
     Normalised to mean one every way, so this moves what the cost
     attends to and not how large it is.

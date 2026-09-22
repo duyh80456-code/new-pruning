@@ -14,8 +14,10 @@
 # does not exist while this step is being built. The loss keeps a
 # running average over the steps already taken and uses that, detached,
 # which makes it a constant to the current graph rather than a circular
-# reference. Stale by one step, which is the price; the alternative is
-# a second backward pass for every width.
+# reference. At momentum 0.05 that average spans roughly the last
+# twenty firings, so the assumption it rests on is that the ordering
+# drifts slowly, not that it is fixed. The alternative within a single
+# run is a second backward pass for every width.
 #
 # For the first fifty updates there is no estimate and the branch is K
 # exactly, not K with an arbitrary weight. tests/test_kd_variants.py
