@@ -16,6 +16,18 @@
 # measures both on the real model and reports the ratio; 1.6 is
 # that ratio rounded. One measurement on an untrained model, so it
 # is a starting point chosen by measurement, not a schedule.
+#
+# Measured since this was written, and it changes what running S is worth.
+# The same term on 32 projections came out at 73.19 and on 512 at 72.99,
+# against 74.26 for the entropic plan and 73.52 for the published method.
+# Sliced transport does not stand in for the plan: it loses the whole of
+# K's margin and then some, while costing 174 and 161 minutes against
+# K's 299, so the saving is real and buys nothing.
+#
+# S sits between those two in both projections and weight, which makes it
+# the middle point of a curve whose ends are known. It is still the only
+# one of the three at the calibrated 128, but it is no longer a question
+# whose answer could surprise anyone.
 
 # machine
 num_gpus_per_job: 1
