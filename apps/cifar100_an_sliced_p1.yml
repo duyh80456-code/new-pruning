@@ -5,6 +5,15 @@
 # The pair says whether the exponent moves things in the same direction on
 # both, which is what separates a property of the exponent from a property
 # of the projection.
+#
+# It collapsed, and AJ did too. Dead at width 0.75 and below, degraded
+# from 0.80 up, mean 20.27. Read against AJ, which is dead at 0.60 and
+# below, the exponent moves both forms the same way and the projection
+# changes only how far up the range the damage reaches. That is the
+# question the pair was built to ask, answered, at the cost of both
+# branches. The reasoning in AJ's banner covers this one.
+#
+# Kept for the record. Nothing else in the queue uses p = 1.
 # machine
 num_gpus_per_job: 1
 num_cpus_per_job: 4

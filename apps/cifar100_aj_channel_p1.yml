@@ -6,6 +6,20 @@
 # magnitude, so it keeps pulling late in training where the squared
 # version has nothing left to say. Measured at twenty times the gradient
 # at equal weight, which is why feature_weight is 0.05.
+#
+# It collapsed. The narrow widths sit at ln(100) = 4.6052 from the second
+# epoch onward, an output gone uniform and never recovered, and the
+# finished table reads 1.00 at every width from 0.60 down. Mean 37.47.
+# The wide end is unharmed and slightly ahead of A, +0.75 at width 1.00,
+# so the term is not simply broken: it is fatal exactly where the width
+# has the least capacity to absorb a gradient that never decays. The
+# argument above is what caused it. A constant magnitude gradient keeps
+# pulling after the squared form has gone quiet, and that is the same
+# sentence read twice, once as a feature and once as the failure.
+#
+# Kept, not deleted. AN is the same exponent on the sliced form and died
+# the same way, which is what makes this a property of the exponent
+# rather than of the per channel cost.
 # machine
 num_gpus_per_job: 1
 num_cpus_per_job: 4
