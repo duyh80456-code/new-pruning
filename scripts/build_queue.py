@@ -49,6 +49,8 @@ QUEUE = [
      'Which samples the teacher still has something to say about'),
     ('aw_teacher_chain', 'ak_bures',
      'A chain of teachers, and the Gaussian form that never ran'),
+    ('ax_var_ground', 'ay_inverse_ground',
+     'Charge the channels for what they carry'),
 ]
 
 # ak_bures died in linalg.eigh three minutes in and the fix landed after,

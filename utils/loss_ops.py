@@ -225,7 +225,47 @@ def _feature_scale(left, right):
     return spread.clamp_min(1e-12)
 
 
-def ground_cost(left, right, ground='euclidean', scale=None):
+def channel_weights(left, right, mode):
+    """how much each channel counts toward the distance
+
+    The cost charges every channel the same, and the channels are not
+    the same. Measured on K at the pooled tap, at the middle widths the
+    feature term actually runs between, the top half of the channels
+    carries 81 to 87 per cent of the Taylor score and only 44 to 66 per
+    cent of them are effective at all.
+
+    variance is the free stand-in for that score. A channel that does
+    not vary across the batch says nothing about which sample is which,
+    so distance along it is distance spent on nothing. It needs no
+    gradient, which matters because the Taylor score needs the gradient
+    of a loss that contains this term, and weighting a term by its own
+    gradient is circular. Measured against Taylor it ranks the channels
+    the same way to 0.78 at width 0.6, 0.84 at 0.5 and 0.83 at 0.4.
+
+    inverse is the control, and it is built from ranks rather than from
+    1/v. Branch AV reversed a weighting by subtracting it from a batch
+    maximum that drifts to zero, and what came back was a collapse
+    nobody could diagnose. A reversal that permutes the same weights
+    cannot leave the range they already occupy.
+
+    Normalised to mean one either way, so this moves what the cost
+    attends to and not how large it is.
+    """
+    if mode in (None, 'none'):
+        return None
+    spread = 0.5 * (left.var(dim=0) + right.var(dim=0))
+    if mode == 'variance':
+        weight = spread
+    elif mode == 'inverse':
+        order = spread.argsort()
+        weight = torch.empty_like(spread)
+        weight[order] = spread.sort(descending=True).values
+    else:
+        raise ValueError('unknown feature_weighting {}'.format(mode))
+    return weight / weight.mean().clamp_min(1e-12)
+
+
+def ground_cost(left, right, ground='euclidean', scale=None, weight=None):
     """the distance transport is charged per unit of mass moved
 
     euclidean is the distance the clouds live in, divided by their spread
@@ -233,7 +273,13 @@ def ground_cost(left, right, ground='euclidean', scale=None):
     drops the magnitude a wider subnet can put into a channel and is
     already bounded, so it needs no scaling. Which of the two is right is
     not obvious and is why there is a branch for it.
+
+    weight, when given, scales each channel before the distance is taken,
+    which makes it a diagonal metric rather than a plain euclidean one.
     """
+    if weight is not None:
+        root = weight.clamp_min(0.0).sqrt()
+        left, right = left * root, right * root
     if ground == 'euclidean':
         if scale is None:
             scale = _feature_scale(left, right)
@@ -266,26 +312,32 @@ class FeatureWassersteinLoss(torch.nn.modules.loss._Loss):
     use is not minimized at agreement.
     """
     def __init__(self, eps=0.2, n_iters=100, align='prefix', debiased=True,
-                 ground='euclidean', reduction='mean'):
+                 ground='euclidean', weighting='none', reduction='mean'):
         super(FeatureWassersteinLoss, self).__init__(reduction=reduction)
         self.eps = eps
         self.n_iters = n_iters
         self.align = align
         self.debiased = debiased
         self.ground = ground
+        self.weighting = weighting
 
-    def _transport(self, left, right, scale):
-        cost = ground_cost(left, right, self.ground, scale)
+    def _transport(self, left, right, scale, weight=None):
+        cost = ground_cost(left, right, self.ground, scale, weight)
         plan = sinkhorn_plan(cost.detach(), self.eps, self.n_iters)
         return (plan * cost).sum()
 
     def forward(self, student, teacher):
         left, right = align_features(student, teacher, self.align)
         scale = _feature_scale(left, right)
-        value = self._transport(left, right, scale)
+        # one metric for all three terms. A weight recomputed inside each
+        # would make the self-transports use a different geometry from the
+        # cross term, and the debiasing would stop landing on zero.
+        weight = channel_weights(left.detach(), right.detach(),
+                                 self.weighting)
+        value = self._transport(left, right, scale, weight)
         if self.debiased:
-            value = value - 0.5 * self._transport(left, left, scale)
-            value = value - 0.5 * self._transport(right, right, scale)
+            value = value - 0.5 * self._transport(left, left, scale, weight)
+            value = value - 0.5 * self._transport(right, right, scale, weight)
         return value
 
 
@@ -307,8 +359,8 @@ class FeatureUnbalancedWassersteinLoss(FeatureWassersteinLoss):
         super(FeatureUnbalancedWassersteinLoss, self).__init__(**kwargs)
         self.tau = tau
 
-    def _transport(self, left, right, scale):
-        cost = ground_cost(left, right, self.ground, scale)
+    def _transport(self, left, right, scale, weight=None):
+        cost = ground_cost(left, right, self.ground, scale, weight)
         plan = unbalanced_sinkhorn_plan(
             cost.detach(), self.eps, self.n_iters, self.tau)
         return (plan * cost).sum()
@@ -1120,6 +1172,7 @@ def _inner_feature_loss(align):
     """
     name = getattr(FLAGS, 'feature_loss', 'wasserstein')
     ground = getattr(FLAGS, 'feature_ground', 'euclidean')
+    weighting = getattr(FLAGS, 'feature_weighting', 'none')
     if name == 'mse':
         return FeatureMSELoss(align=align)
     if name == 'mmd':
@@ -1150,14 +1203,14 @@ def _inner_feature_loss(align):
             n_iters=getattr(FLAGS, 'sinkhorn_iters', 100),
             align=align,
             debiased=getattr(FLAGS, 'sinkhorn_debiased', True),
-            ground=ground)
+            ground=ground, weighting=weighting)
     if name == 'wasserstein':
         return FeatureWassersteinLoss(
             eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),
             n_iters=getattr(FLAGS, 'sinkhorn_iters', 100),
             align=align,
             debiased=getattr(FLAGS, 'sinkhorn_debiased', True),
-            ground=ground)
+            ground=ground, weighting=weighting)
     raise ValueError('unknown feature_loss {}'.format(name))
 
 

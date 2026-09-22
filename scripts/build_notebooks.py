@@ -24,13 +24,37 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KAGGLE = os.path.join(ROOT, 'kaggle')
 HEADER_BAR = re.compile(r'^#\s*=+\s*Branch\s+\w+\s*=+\s*$')
 
+OFF_AXIS = """K stands at 74.26 against 73.52 for **A**, US-Net as published.
+Thirty three runs have not passed it, and the five closest are all K with
+one knob moved: a different blur, different marginals, a different thing
+transported, more pairs. That axis has been answered.
+
+These branches are not on it. None of them changes the transport term,
+so they compose with K rather than competing with it, and they sit on
+choices US-Net made without arguing for them.
+"""
+
+ON_AXIS = """Forty one runs. **AW** leads at 74.32 and **K** is at 74.26, which is a
+tie rather than an order: AW is ahead at eight widths of sixteen and
+behind at eight. **A**, US-Net as published, is 73.52.
+
+These two do change the transport term, which the twelve notebooks
+before them all failed to improve. They change something else about it.
+Every one of those tried a different distance or a different solver and
+kept charging all 512 channels the same. Measured at the pooled tap, at
+the middle widths this term runs between, the top half of the channels
+carries 81 to 87 per cent of the Taylor score and only 44 to 66 per cent
+are effective at all. So the cost being minimised is mostly distance
+along channels that carry nothing, and that is the part nothing has
+touched yet.
+"""
+
 QUEUE = [
-    (13, 'as_log_widths', 'at_macs_widths',
-     'Where the sandwich rule spends its free samples'),
-    (14, 'au_entropy_kd', 'av_confidence_kd',
-     'Which samples the teacher still has something to say about'),
-    (15, 'aw_teacher_chain', 'ak_bures',
-     'A chain of teachers, and the Gaussian form that never ran'),
+    # 13 to 15 have come back; regenerating them would rewrite files
+    # whose results are already recorded. OFF_AXIS is kept because it is
+    # what they say.
+    (16, 'ax_var_ground', 'ay_inverse_ground',
+     'Charge the channels for what they carry', ON_AXIS),
 ]
 
 HEADER = """# {number}. {title}
@@ -38,15 +62,7 @@ HEADER = """# {number}. {title}
 Two branches, one per card, in a single session of roughly three to five
 hours. Nothing in this notebook needs editing: run it as it is.
 
-K stands at 74.26 against 73.52 for **A**, US-Net as published. Thirty
-three runs have not passed it, and the five closest are all K with one
-knob moved: a different blur, different marginals, a different thing
-transported, more pairs. That axis has been answered.
-
-These branches are not on it. None of them changes the transport term,
-so they compose with K rather than competing with it, and they sit on
-choices US-Net made without arguing for them.
-
+{preamble}
 """
 
 FOOTER = """
@@ -72,7 +88,7 @@ checkpoint, so at most one is lost.
 Send back the final table. Pasting the output of the last cell is enough.
 """
 
-CONFIG = """# Fixed for this notebook. Notebook {number} of 15.
+CONFIG = """# Fixed for this notebook. Notebook {number} of 16.
 BRANCHES = {branches!r}
 
 SMOKE_FIRST = True
@@ -126,9 +142,10 @@ template_path = sorted(glob.glob(
 with io.open(template_path, encoding='utf-8') as handle:
     template = json.load(handle)
 
-for number, left, right, title in QUEUE:
+for number, left, right, title, preamble in QUEUE:
     nb = json.loads(json.dumps(template))
-    body = HEADER.format(number=number, title=title)
+    body = HEADER.format(number=number, title=title,
+                         preamble=preamble)
     for branch in (left, right):
         body += '## `{}`\n\n{}\n\n'.format(branch, banner(branch))
     nb['cells'][0]['source'] = source(body + FOOTER)

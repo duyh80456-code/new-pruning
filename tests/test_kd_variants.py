@@ -22,6 +22,7 @@ import torch
 
 from utils.config import FLAGS
 
+from utils.loss_ops import channel_weights
 from utils.loss_ops import ClasswiseFeatureLoss
 from utils.loss_ops import _feature_scale
 from utils.loss_ops import ConfusionEmbedding
@@ -836,6 +837,64 @@ def test_the_chain_does_not_move_which_widths_get_coupled():
           0.25 not in picked and 0.25 not in picked_after)
 
 
+def test_a_weighted_ground_cost_keeps_what_it_is_supposed_to():
+    """AX charges the channels unequally, and three things must survive
+
+    The weight is a diagonal metric folded into the distance, so it can
+    break the debiasing: if the cross term and the two self terms do not
+    see the same metric, transport from a cloud to itself stops reading
+    zero and a width already matching its partner is charged anyway.
+
+    The reversal is the other risk. AV reversed a weighting by
+    subtracting it from a batch maximum that drifts toward zero, and the
+    run collapsed with no mechanism anyone could name. This one permutes
+    the weights instead, so the reversed set is the original set and
+    cannot leave the range it started in.
+    """
+    torch.manual_seed(1995)
+    left = torch.randn(24, 16)
+    right = torch.randn(24, 16)
+    # one channel carries nothing: constant across the batch
+    left[:, 3] = 2.0
+    right[:, 3] = 2.0
+
+    plain = channel_weights(left, right, 'none')
+    check('none means no weighting at all', plain is None)
+
+    weight = channel_weights(left, right, 'variance')
+    check('the weights average to one',
+          abs(float(weight.mean()) - 1.0) < 1e-5,
+          'mean {:.6f}'.format(float(weight.mean())))
+    check('a channel that never varies is charged almost nothing',
+          float(weight[3]) < 1e-3,
+          'weight {:.2e}'.format(float(weight[3])))
+
+    flipped = channel_weights(left, right, 'inverse')
+    check('the reversal is a permutation of the same weights',
+          torch.allclose(flipped.sort().values, weight.sort().values,
+                         atol=1e-5))
+    check('and it puts the largest weight where the smallest was',
+          int(flipped.argmax()) == int(weight.argmin()),
+          '{} against {}'.format(int(flipped.argmax()),
+                                 int(weight.argmin())))
+
+    for mode in ('none', 'variance', 'inverse'):
+        loss = FeatureWassersteinLoss(eps=0.2, n_iters=100, align='prefix',
+                                      debiased=True, weighting=mode)
+        same = float(loss(left, left))
+        check('{}: a cloud against itself still reads zero'.format(mode),
+              abs(same) < 1e-4, '{:.2e}'.format(same))
+
+    unweighted = FeatureWassersteinLoss(
+        eps=0.2, n_iters=100, align='prefix', debiased=True)
+    was = float(unweighted(left, right))
+    now = float(FeatureWassersteinLoss(
+        eps=0.2, n_iters=100, align='prefix', debiased=True,
+        weighting='none')(left, right))
+    check('and leaving the flag off reproduces K exactly',
+          abs(was - now) < 1e-9, '{:.6f} against {:.6f}'.format(was, now))
+
+
 def main():
     print('torch', torch.__version__)
     print()
@@ -866,6 +925,7 @@ def main():
     test_bures_survives_more_channels_than_samples()
     test_the_three_new_axes_leave_k_exactly_where_it_was()
     test_the_chain_does_not_move_which_widths_get_coupled()
+    test_a_weighted_ground_cost_keeps_what_it_is_supposed_to()
     print()
     if FAILURES:
         print('{} failed: {}'.format(len(FAILURES), ', '.join(FAILURES)))
