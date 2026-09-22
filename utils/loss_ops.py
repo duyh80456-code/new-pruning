@@ -225,7 +225,7 @@ def _feature_scale(left, right):
     return spread.clamp_min(1e-12)
 
 
-def channel_weights(left, right, mode):
+def channel_weights(left, right, mode, estimate=None):
     """how much each channel counts toward the distance
 
     The cost charges every channel the same, and the channels are not
@@ -248,20 +248,39 @@ def channel_weights(left, right, mode):
     nobody could diagnose. A reversal that permutes the same weights
     cannot leave the range they already occupy.
 
-    Normalised to mean one either way, so this moves what the cost
+    activation is the other free one: the mean absolute value of the
+    channel. It differs from variance in counting a channel that is
+    large and constant, which carries no information about which sample
+    is which, so the two are worth telling apart rather than assuming.
+
+    taylor is the score the other two stand in for, and it cannot be
+    computed from this batch. It needs the gradient of a loss that
+    contains this term, so using this step's value would weight a term
+    by its own gradient. The estimate passed in is an average over the
+    steps already taken, detached, and is therefore a constant to the
+    graph being built now. Stale by design; the alternative is circular.
+
+    Normalised to mean one every way, so this moves what the cost
     attends to and not how large it is.
     """
     if mode in (None, 'none'):
         return None
-    spread = 0.5 * (left.var(dim=0) + right.var(dim=0))
-    if mode == 'variance':
-        weight = spread
-    elif mode == 'inverse':
-        order = spread.argsort()
-        weight = torch.empty_like(spread)
-        weight[order] = spread.sort(descending=True).values
+    if mode == 'taylor':
+        if estimate is None:
+            return None            # still warming up: uniform, which is K
+        weight = estimate[:left.size(1)].clone()
+    elif mode == 'activation':
+        weight = 0.5 * (left.abs().mean(dim=0) + right.abs().mean(dim=0))
     else:
-        raise ValueError('unknown feature_weighting {}'.format(mode))
+        spread = 0.5 * (left.var(dim=0) + right.var(dim=0))
+        if mode == 'variance':
+            weight = spread
+        elif mode == 'inverse':
+            order = spread.argsort()
+            weight = torch.empty_like(spread)
+            weight[order] = spread.sort(descending=True).values
+        else:
+            raise ValueError('unknown feature_weighting {}'.format(mode))
     return weight / weight.mean().clamp_min(1e-12)
 
 
@@ -320,6 +339,53 @@ class FeatureWassersteinLoss(torch.nn.modules.loss._Loss):
         self.debiased = debiased
         self.ground = ground
         self.weighting = weighting
+        # the Taylor estimate, accumulated across steps. The loss object
+        # is built once outside the loop, the same way set_target relies
+        # on, so this survives between batches.
+        self.momentum = getattr(FLAGS, 'taylor_momentum', 0.05)
+        # counted in hook firings, not optimizer steps: the term runs
+        # once per student width, so 50 is roughly 17 steps of a
+        # four-width sandwich. The smoke config lowers it, or neither
+        # the suite nor the smoke run would ever leave warmup and the
+        # weighted path would reach Kaggle untried.
+        self.warmup = getattr(FLAGS, 'taylor_warmup', 50)
+        self._taylor = None
+        self._seen = 0
+
+    def observe(self, feature):
+        """accumulate |f * dL/df| per channel when the backward runs
+
+        A hook on the feature rather than a second backward: the
+        gradient is already computed for the update, and reading it
+        costs one reduction.
+        """
+        if not (self.weighting == 'taylor' and feature.requires_grad):
+            return
+
+        def absorb(grad):
+            with torch.no_grad():
+                score = (feature.detach() * grad).abs().sum(dim=0)
+                width = score.size(0)
+                if self._taylor is None:
+                    self._taylor = torch.zeros(
+                        width, dtype=score.dtype, device=score.device)
+                if self._taylor.size(0) < width:
+                    grown = torch.zeros(
+                        width, dtype=self._taylor.dtype,
+                        device=self._taylor.device)
+                    grown[:self._taylor.size(0)] = self._taylor
+                    self._taylor = grown
+                head = self._taylor[:width]
+                self._taylor[:width] = (
+                    (1.0 - self.momentum) * head + self.momentum * score)
+                self._seen += 1
+
+        feature.register_hook(absorb)
+
+    def estimate(self):
+        if self._taylor is None or self._seen < self.warmup:
+            return None
+        return self._taylor
 
     def _transport(self, left, right, scale, weight=None):
         cost = ground_cost(left, right, self.ground, scale, weight)
@@ -332,8 +398,9 @@ class FeatureWassersteinLoss(torch.nn.modules.loss._Loss):
         # one metric for all three terms. A weight recomputed inside each
         # would make the self-transports use a different geometry from the
         # cross term, and the debiasing would stop landing on zero.
+        self.observe(left)
         weight = channel_weights(left.detach(), right.detach(),
-                                 self.weighting)
+                                 self.weighting, self.estimate())
         value = self._transport(left, right, scale, weight)
         if self.debiased:
             value = value - 0.5 * self._transport(left, left, scale, weight)

@@ -49,7 +49,7 @@ QUEUE = [
      'Which samples the teacher still has something to say about'),
     ('aw_teacher_chain', 'ak_bures',
      'A chain of teachers, and the Gaussian form that never ran'),
-    ('ax_var_ground', 'ay_inverse_ground',
+    ('az_act_ground', 'ba_taylor_ground',
      'Charge the channels for what they carry'),
 ]
 
@@ -60,6 +60,10 @@ RERUN = {(3, 'ak_bures'): 'moved to 15',
          (15, 'ak_bures'): '**rerun**'}
 
 HELD = [
+    ('ax_var_ground, ay_inverse_ground', 'the same weighting by batch '
+     'variance, and its reversal. Variance and activation disagree about '
+     'a channel that is large and constant, so they are separate '
+     'questions; this pair is the follow-up if row 16 moves anything.'),
     ('k_seed2, a_seed3', 'seeds. Six branches now sit within a quarter '
      'point of each other at the top and sigma is still unmeasured, so '
      'these have stopped being defensive and started being the thing '

@@ -47,13 +47,17 @@ carries 81 to 87 per cent of the Taylor score and only 44 to 66 per cent
 are effective at all. So the cost being minimised is mostly distance
 along channels that carry nothing, and that is the part nothing has
 touched yet.
+
+There is no reversed control in this pair, and it is not needed here:
+weighting every channel the same **is** K, which has run and sits at
+74.26. The two branches are read against it.
 """
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
     # whose results are already recorded. OFF_AXIS is kept because it is
     # what they say.
-    (16, 'ax_var_ground', 'ay_inverse_ground',
+    (16, 'az_act_ground', 'ba_taylor_ground',
      'Charge the channels for what they carry', ON_AXIS),
 ]
 

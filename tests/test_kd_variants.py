@@ -895,6 +895,82 @@ def test_a_weighted_ground_cost_keeps_what_it_is_supposed_to():
           abs(was - now) < 1e-9, '{:.6f} against {:.6f}'.format(was, now))
 
 
+def test_the_taylor_estimate_warms_up_before_it_is_trusted():
+    """AZ weights by a score it cannot compute from the batch in hand
+
+    The Taylor score needs the gradient of a loss that contains this
+    term, so the value for this step does not exist while this step is
+    being built. The loss keeps a running estimate from the steps
+    already taken and uses that, detached, which makes it a constant to
+    the current graph rather than a circular reference.
+
+    Two things have to hold. Before the estimate exists the branch has
+    to be K exactly, not K with an arbitrary weight, or the first fifty
+    steps train something nobody chose. And the estimate has to end up
+    tracking the gradient rather than the activation, or it is the
+    activation branch under a different name.
+    """
+    torch.manual_seed(1995)
+    plain = FeatureWassersteinLoss(eps=0.2, n_iters=100, align='prefix',
+                                   debiased=True)
+    late = FeatureWassersteinLoss(eps=0.2, n_iters=100, align='prefix',
+                                  debiased=True, weighting='taylor')
+    late.warmup = 4
+
+    student = torch.randn(16, 8, requires_grad=True)
+    teacher = torch.randn(16, 8)
+    check('before warmup it is K to the last digit',
+          abs(float(plain(student, teacher))
+              - float(late(student, teacher))) < 1e-9)
+    check('and the estimate is withheld rather than guessed',
+          late.estimate() is None)
+
+    # drive the hook: one channel is handed no gradient at all
+    for _ in range(8):
+        f = torch.randn(16, 8, requires_grad=True)
+        value = late(f, teacher)
+        mask = torch.ones(8)
+        mask[5] = 0.0
+        (value + (f * mask).sum()).backward()
+
+    got = late.estimate()
+    check('after warmup there is an estimate', got is not None)
+    if got is not None:
+        weight = channel_weights(student.detach(), teacher, 'taylor', got)
+        check('the weights average to one',
+              abs(float(weight.mean()) - 1.0) < 1e-5,
+              'mean {:.6f}'.format(float(weight.mean())))
+        check('the channel nothing pushed on is charged least',
+              int(got.argmin()) == 5,
+              'argmin {} of {}'.format(int(got.argmin()),
+                                       [round(float(v), 3) for v in got]))
+        # the check the smoke run cannot make for itself. Warmup is 50
+        # hook firings by default and a smoke run is six steps, so
+        # without this the weighted path could reach Kaggle having never
+        # once been evaluated, reading exactly like K the whole way.
+        was = float(plain(student, teacher))
+        now = float(late(student, teacher))
+        check('and past warmup the loss is no longer K',
+              abs(was - now) > 1e-6,
+              '{:.6f} against {:.6f}'.format(was, now))
+
+
+def test_activation_and_variance_are_not_the_same_criterion():
+    """a channel can be large and constant, and that is the difference"""
+    torch.manual_seed(1995)
+    left = torch.randn(32, 6)
+    right = torch.randn(32, 6)
+    left[:, 2] = 5.0          # big, says nothing about which sample
+    right[:, 2] = 5.0
+    by_var = channel_weights(left, right, 'variance')
+    by_act = channel_weights(left, right, 'activation')
+    check('variance charges the constant channel nothing',
+          float(by_var[2]) < 1e-3, '{:.2e}'.format(float(by_var[2])))
+    check('activation charges it the most',
+          int(by_act.argmax()) == 2,
+          'argmax {}'.format(int(by_act.argmax())))
+
+
 def main():
     print('torch', torch.__version__)
     print()
@@ -926,6 +1002,8 @@ def main():
     test_the_three_new_axes_leave_k_exactly_where_it_was()
     test_the_chain_does_not_move_which_widths_get_coupled()
     test_a_weighted_ground_cost_keeps_what_it_is_supposed_to()
+    test_the_taylor_estimate_warms_up_before_it_is_trusted()
+    test_activation_and_variance_are_not_the_same_criterion()
     print()
     if FAILURES:
         print('{} failed: {}'.format(len(FAILURES), ', '.join(FAILURES)))

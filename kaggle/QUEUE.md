@@ -50,13 +50,14 @@ training loop rather than running it, so anything that lives only in
 | 13 | `kaggle_kd_13_as_at.ipynb` | `as_log_widths`, `at_macs_widths` | Where the sandwich rule spends its free samples | 73.93 / 73.96 |
 | 14 | `kaggle_kd_14_au_av.ipynb` | `au_entropy_kd`, `av_confidence_kd` | Which samples the teacher still has something to say about | 73.00 / 30.46 |
 | 15 | `kaggle_kd_15_aw_ak.ipynb` | `aw_teacher_chain`, `ak_bures` | A chain of teachers, and the Gaussian form that never ran | 74.32 / 73.56 |
-| 16 | `kaggle_kd_16_ax_ay.ipynb` | `ax_var_ground`, `ay_inverse_ground` | Charge the channels for what they carry | free / free |
+| 16 | `kaggle_kd_16_az_ba.ipynb` | `az_act_ground`, `ba_taylor_ground` | Charge the channels for what they carry | free / free |
 
 ## Held back
 
 These have configs in `apps/` and are not queued. Any of them runs
 from a notebook by editing `BRANCHES`.
 
+* `ax_var_ground, ay_inverse_ground` - the same weighting by batch variance, and its reversal. Variance and activation disagree about a channel that is large and constant, so they are separate questions; this pair is the follow-up if row 16 moves anything.
 * `k_seed2, a_seed3` - seeds. Six branches now sit within a quarter point of each other at the top and sigma is still unmeasured, so these have stopped being defensive and started being the thing that decides the order.
 * `z_eps_100, q_feature_mse` - controls for K. They are built to lose: blur the plan away, or forbid rematching, and see what is left. Y at eps 0.5 has since made most of z_eps_100's point for a quarter of the cost.
 * `r_feature_mmd` - a control from outside transport.
