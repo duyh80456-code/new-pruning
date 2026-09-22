@@ -175,6 +175,24 @@ def overlap(score, fraction=0.25):
     return len(top & set(range(k))) / k
 
 
+def report(model, criterion='l1'):
+    """how sorted the prefix is, without touching anything
+
+    The branch below permutes at a named epoch, and which epoch that
+    should be is a guess: too early and the criterion is noise, too late
+    and there is nothing left to move or to gain by moving it. Nothing
+    measured pins the window, because pinning it needs a checkpoint from
+    the middle of a run and the only ones to hand are finished.
+
+    This is what would pin it. Costs a few reductions over weights that
+    are already in memory, so it can ride along on any run and say, at
+    every epoch, how much of the best quarter the prefix already holds.
+    """
+    scorer = {'l1': score_l1, 'read': score_read}[criterion]
+    seen = [overlap(scorer(group)) for group in collect(model)]
+    return sum(seen) / len(seen)
+
+
 def reorder(model, criterion='l1', optimizer=None):
     """permute every channel space so the prefix holds the best channels"""
     scorer = {'l1': score_l1, 'read': score_read}[criterion]

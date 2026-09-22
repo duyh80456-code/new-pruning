@@ -91,6 +91,7 @@ horizontal_weight: 1.0
 feature_kd: True
 feature_align: prefix
 reorder_epoch: 1
+reorder_report: True
 reorder_by: read
 feature_weight: 1.0
 horizontal_where: feature

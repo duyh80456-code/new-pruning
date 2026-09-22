@@ -963,6 +963,10 @@ def train_val_test():
         # Once, at a named epoch: the permutation is free but it discards
         # the co-adaptation the narrow widths have built, so doing it
         # repeatedly would keep paying that without ever settling.
+        if getattr(FLAGS, 'reorder_report', False):
+            print('prefix_sorted {} {:.4f}'.format(
+                epoch, channel_reorder.report(
+                    model_wrapper, getattr(FLAGS, 'reorder_by', 'l1'))))
         if epoch == getattr(FLAGS, 'reorder_epoch', -1):
             spaces, moved, held = channel_reorder.reorder(
                 model_wrapper, getattr(FLAGS, 'reorder_by', 'l1'),

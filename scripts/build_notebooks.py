@@ -65,9 +65,17 @@ freshly initialised model it is 29 per cent, which is the arbitrary
 ordering OFA has to fix.
 
 So the question is not whether the end state is sorted. It is when it
-gets that way. These permute once at epoch 10 and print, on the way
-past, how much of the best quarter the prefix held before they ran.
-That line is the measurement; the accuracy is what it is worth.
+gets that way, and epoch 10 is a guess: early enough that the criterion
+is not pure noise, late enough that there may still be something to
+move. Nothing measured pins it, because pinning it needs a checkpoint
+from the middle of a run and every one to hand is finished.
+
+So both branches also print `prefix_sorted <epoch> <fraction>` every
+epoch, before and after the permutation. One run draws the whole
+trajectory from 0.29 to wherever it ends, which is the reading that
+says whether epoch 10 was anywhere near the window - and if it was not,
+it says which epoch to use instead without spending another session
+guessing.
 """
 
 QUEUE = [
