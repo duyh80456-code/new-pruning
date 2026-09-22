@@ -452,9 +452,21 @@ def render():
       'between the two middle widths. E, the same term as plain KL, is '
       'what separates those.')
     w('- Sigma, properly. Two seeds put it under the floor; three would '
-      'make it a number worth quoting.')
-    w('- Everything at the feature tier. Those four branches died in the '
-      'profiler on their first run and have not been rerun.')
+      'make it a number worth quoting. It has stopped being a '
+      'precaution: the four branches below decide their own reading on '
+      'it.')
+    w('- Whether K sits on a peak or on a high draw. AS, AT, AC and AD '
+      'are K with one knob moved in four different directions - the '
+      'free widths drawn narrower, the free widths drawn wider, the '
+      'feature weight halved, the feature weight doubled - and all four '
+      'land between 73.82 and 73.96, which is 0.30 to 0.44 below K. '
+      'Four perturbations that share nothing mechanically do not '
+      'usually agree by accident, so either 1.0 and a uniform draw are '
+      'both genuinely best, or the 74.26 for K is a high seed and the '
+      'branch '
+      'is really worth about 73.9. Both readings fit this table. Only '
+      'sigma separates them, and it is the same measurement the bullet '
+      'above asks for.')
     w('')
 
     with open(PAGE, 'w', encoding='utf-8') as handle:
