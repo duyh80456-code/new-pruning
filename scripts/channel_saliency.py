@@ -42,7 +42,15 @@ def batches_of(batch, count):
     """
     import pickle
 
-    tried = [os.path.join(ROOT, 'data', 'cifar-100-python', 'train')]
+    tried = []
+    if os.environ.get('CIFAR_TRAIN'):
+        tried.append(os.environ['CIFAR_TRAIN'])
+    tried.append(os.path.join(ROOT, 'data', 'cifar-100-python', 'train'))
+    # sibling checkouts often already hold a complete copy
+    parent = os.path.dirname(ROOT)
+    for entry in sorted(os.listdir(parent)) if os.path.isdir(parent) else []:
+        tried.append(os.path.join(parent, entry, 'data',
+                                  'cifar-100-python', 'train'))
     if os.path.isdir('/kaggle/input'):
         for base, dirs, _ in os.walk('/kaggle/input'):
             if 'cifar-100-python' in dirs:
@@ -138,8 +146,12 @@ def main():
             now += a
             best += b
         now, best = now / len(names), best / len(names)
-        print('{:8.2f} {:10.3f} {:10.3f} {:>10.0f}%'.format(
-            w, now, best, 100 * (now - 0.25) / max(best - 0.25, 1e-9)))
+        # At w == 0.25 only the prefix exists, so it holds all of the
+        # score by construction and the row says nothing.
+        note = '  (degenerate: no tail at this width)' if w <= 0.25 else ''
+        print('{:8.2f} {:10.3f} {:10.3f} {:>10.0f}%{}'.format(
+            w, now, best,
+            100 * (now - 0.25) / max(best - 0.25, 1e-9), note))
 
     print('\ndo the widths agree on the order?  rank correlation per layer')
     for a, b in ((1.0, 0.5), (1.0, 0.25), (0.5, 0.25)):
