@@ -461,6 +461,42 @@ def render():
                 key, value, ' - ' + text if text else ''))
         w('')
 
+    w('## Answered without a run')
+    w('')
+    w('US-Net slices channels as `weight[:k]`, so which channels a '
+      'narrow width gets is decided by initialisation and never '
+      'revisited. Sorting them by importance, the way Once-for-All '
+      'does for elastic width, is the obvious thing to try, and it '
+      'would have cost a session.')
+    w('')
+    w("It would have moved nothing. `scripts/channel_order.py` reads "
+      "K's checkpoint and compares the L1 mass the first k channels "
+      "hold against the mass the best k would hold. The control is the "
+      "same checkpoint with each layer's output channels shuffled, so "
+      "the layer shapes and the L1 values are identical and only the "
+      "order is destroyed.")
+    w('')
+    w('| width | K as trained | order destroyed | sorted |')
+    w('|---|---|---|---|')
+    w('| 0.25 | 0.468 | 0.250 | 0.472 |')
+    w('| 0.50 | 0.714 | 0.502 | 0.720 |')
+    w('| 0.75 | 0.879 | 0.757 | 0.884 |')
+    w('')
+    w('Shuffled, the first quarter of the channels holds a quarter of '
+      'the mass, which is what no ordering at all looks like. As '
+      'trained it holds 0.468, close to double its share, and within '
+      '0.003 of what the best possible quarter would hold. The '
+      'headroom sorting could recover is 0.003 against 0.221 for the '
+      'shuffled control, seventy times smaller.')
+    w('')
+    w('So the sandwich rule already sorts the channels. It trains the '
+      'prefix at every sampled width and the tail only at the widest, '
+      'and at 0.25 the prefix has to classify alone, so importance is '
+      'not a property an explicit sort would discover here - it is a '
+      'property the objective spends every step creating, and it has '
+      'reached it. The branch is closed before it was written.')
+    w('')
+
     w('## Not settled')
     w('')
     w('- Whether F is ahead of A at all. The accuracy gap is at the '
