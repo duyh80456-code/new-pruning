@@ -23,6 +23,7 @@ import torch
 
 from utils.config import FLAGS
 from utils.channel_reorder import collect, reorder, score_l1, score_read
+from utils.channel_reorder import score_taylor
 
 FAILURES = []
 
@@ -167,6 +168,54 @@ def test_it_reaches_through_the_wrapper_train_py_hands_it():
           float((before - after).abs().max()) < 1e-4)
 
 
+def test_taylor_refuses_to_rank_by_zeros():
+    """the score needs gradients, and having none must not look like ties
+
+    argsort on a vector of zeros returns 0, 1, 2, ... which is the
+    identity, so a missing backward would permute nothing and report a
+    prefix that was already perfectly sorted. Both halves of that are
+    wrong and neither raises.
+    """
+    torch.manual_seed(1995)
+    model = build()
+    group = collect(model)[0]
+    check('with no backward there is no score at all',
+          score_taylor(group) is None)
+    raised = False
+    try:
+        reorder(model, 'taylor')
+    except ValueError:
+        raised = True
+    check('and reorder says so rather than permuting by nothing', raised)
+
+
+def test_taylor_ranks_by_what_removing_a_channel_would_cost():
+    torch.manual_seed(1995)
+    model = build()
+    model.train()
+    model.apply(lambda m: setattr(m, 'width_mult', 1.0))
+    x = torch.randn(8, 3, 32, 32)
+    y = torch.randint(0, 100, (8,))
+    model.zero_grad(set_to_none=True)
+    torch.nn.functional.cross_entropy(model(x), y).backward()
+
+    group = collect(model)[0]
+    score = score_taylor(group)
+    check('now there is one, one number per channel',
+          score is not None and score.numel() == group['size'],
+          '{} against {}'.format(
+              None if score is None else score.numel(), group['size']))
+    check('and it is not the gain on its own',
+          not torch.allclose(score, group['produce'][0][1].weight.abs()))
+
+    before = at_width(model, x, 1.0)
+    spaces, moved, held = reorder(model, 'taylor')
+    after = at_width(model, x, 1.0)
+    check('a taylor permutation is still a symmetry at full width',
+          float((before - after).abs().max()) < 1e-3,
+          '{} channels moved, prefix held {:.0%}'.format(moved, held))
+
+
 def main():
     print('torch', torch.__version__)
     print()
@@ -176,6 +225,8 @@ def main():
     test_the_prefix_holds_the_best_channels_afterwards()
     test_the_optimizer_state_moves_with_the_weights()
     test_it_reaches_through_the_wrapper_train_py_hands_it()
+    test_taylor_refuses_to_rank_by_zeros()
+    test_taylor_ranks_by_what_removing_a_channel_would_cost()
     print()
     if FAILURES:
         print('{} failed: {}'.format(len(FAILURES), ', '.join(FAILURES)))

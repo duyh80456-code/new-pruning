@@ -57,6 +57,8 @@ QUEUE = [
      'Make a window, then sort inside it'),
     ('bf_warm10_plain', 'bg_warm25_plain',
      'What the warm-up is worth on its own'),
+    ('bh_warm10_taylor', 'bi_warm25_taylor',
+     'The same window, sorted by what removal would cost'),
 ]
 
 # ak_bures died in linalg.eigh three minutes in and the fix landed after,

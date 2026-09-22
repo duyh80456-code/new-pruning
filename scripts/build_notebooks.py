@@ -114,6 +114,8 @@ QUEUE = [
      'Make a window, then sort inside it', WARM),
     (19, 'bf_warm10_plain', 'bg_warm25_plain',
      'What the warm-up is worth on its own', WARM),
+    (20, 'bh_warm10_taylor', 'bi_warm25_taylor',
+     'The same window, sorted by what removal would cost', WARM),
 ]
 
 HEADER = """# {number}. {title}
@@ -147,7 +149,7 @@ checkpoint, so at most one is lost.
 Send back the final table. Pasting the output of the last cell is enough.
 """
 
-CONFIG = """# Fixed for this notebook. Notebook {number} of 19.
+CONFIG = """# Fixed for this notebook. Notebook {number} of 20.
 BRANCHES = {branches!r}
 
 SMOKE_FIRST = True

@@ -54,6 +54,7 @@ training loop rather than running it, so anything that lives only in
 | 17 | `kaggle_kd_17_bb_bc.ipynb` | `bb_reorder_l1`, `bc_reorder_read` | Which channels the narrow subnet gets | _skipped_ |
 | 18 | `kaggle_kd_18_bd_be.ipynb` | `bd_warm10_sort`, `be_warm25_sort` | Make a window, then sort inside it | free / free |
 | 19 | `kaggle_kd_19_bf_bg.ipynb` | `bf_warm10_plain`, `bg_warm25_plain` | What the warm-up is worth on its own | free / free |
+| 20 | `kaggle_kd_20_bh_bi.ipynb` | `bh_warm10_taylor`, `bi_warm25_taylor` | The same window, sorted by what removal would cost | free / free |
 
 ## Held back
 

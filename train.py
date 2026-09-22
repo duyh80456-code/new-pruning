@@ -980,6 +980,26 @@ def train_val_test():
                 epoch, channel_reorder.report(
                     model_wrapper, getattr(FLAGS, 'reorder_by', 'l1'))))
         if epoch == getattr(FLAGS, 'reorder_epoch', -1):
+            if getattr(FLAGS, 'reorder_by', 'l1') == 'taylor':
+                # The Taylor score needs a gradient on the gains, and
+                # nothing in the loop has put one there yet at the top
+                # of an epoch. A few batches at the widest width, then
+                # the gradients are dropped: they are a measurement, not
+                # a step, and leaving them would add themselves to the
+                # first real update of the epoch.
+                model_wrapper.train()
+                model_wrapper.apply(
+                    lambda m: setattr(m, 'width_mult', 1.0))
+                model_wrapper.zero_grad(set_to_none=True)
+                charged = getattr(FLAGS, 'taylor_batches', 8)
+                for seen, (image, label) in enumerate(train_loader):
+                    if seen >= charged:
+                        break
+                    label = label.cuda(non_blocking=True)
+                    torch.mean(criterion(
+                        model_wrapper(image), label)).backward()
+                print('Charged the gains with {} batches for the Taylor '
+                      'score.'.format(charged))
             spaces, moved, held = channel_reorder.reorder(
                 model_wrapper, getattr(FLAGS, 'reorder_by', 'l1'),
                 optimizer)
@@ -992,6 +1012,7 @@ def train_val_test():
                   'quarter.'.format(
                       moved, spaces, getattr(FLAGS, 'reorder_by', 'l1'),
                       epoch, held))
+            model_wrapper.zero_grad(set_to_none=True)
         # train
         results = run_one_epoch(
             epoch, train_loader, model_wrapper, criterion, optimizer,

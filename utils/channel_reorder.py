@@ -116,6 +116,31 @@ def score_read(group):
     return total
 
 
+def score_taylor(group):
+    """what zeroing each channel would cost, to first order
+
+    |gamma * dL/dgamma| on the batch-norm gains writing into the space,
+    summed over them the way the L1 score is. Zeroing a gain removes the
+    channel, so this is the first-order estimate of what that costs.
+
+    Not circular, unlike weighting a loss by its own gradient: the
+    permutation is not part of any objective, so this is a measurement
+    taken once, between epochs, and thrown away.
+
+    The gradients have to be there already. charge_gains() in train.py
+    puts them there, and reorder() refuses rather than silently ranking
+    by zeros if it was not called - which would come out as a random
+    permutation and look like a result.
+    """
+    total = None
+    for _, bn in group['produce']:
+        if bn is None or bn.weight is None or bn.weight.grad is None:
+            continue
+        piece = (bn.weight * bn.weight.grad).abs().detach()
+        total = piece if total is None else total + piece
+    return total
+
+
 def _move(param, order, dim, optimizer):
     """permute a parameter and whatever the optimizer remembers about it
 
@@ -188,19 +213,30 @@ def report(model, criterion='l1'):
     are already in memory, so it can ride along on any run and say, at
     every epoch, how much of the best quarter the prefix already holds.
     """
-    scorer = {'l1': score_l1, 'read': score_read}[criterion]
-    seen = [overlap(scorer(group)) for group in collect(model)]
+    scorer = {'l1': score_l1, 'read': score_read,
+              'taylor': score_taylor}[criterion]
+    seen = [overlap(scorer(group)) for group in collect(model)
+            if scorer(group) is not None]
+    if not seen:
+        return float('nan')
     return sum(seen) / len(seen)
 
 
 def reorder(model, criterion='l1', optimizer=None):
     """permute every channel space so the prefix holds the best channels"""
-    scorer = {'l1': score_l1, 'read': score_read}[criterion]
+    scorer = {'l1': score_l1, 'read': score_read,
+              'taylor': score_taylor}[criterion]
     moved = 0
     already = []
     groups = collect(model)
     for group in groups:
         score = scorer(group)
+        if score is None:
+            raise ValueError(
+                'reorder_by: {} found no gradient on the batch-norm '
+                'gains. Nothing charged them, and ranking by zeros is a '
+                'random permutation wearing a criterion.'.format(
+                    criterion))
         already.append(overlap(score))
         order = score.argsort(descending=True)
         moved += int((order != torch.arange(
