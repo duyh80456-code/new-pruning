@@ -389,15 +389,32 @@ def render():
                  'which samples KD attends to'),
                 ('ac_weight_half', 'ad_weight_double',
                  'the weight on the feature terms')]
+    # A bracket only reads as a bracket if both ends actually trained.
+    # An end that collapsed says nothing about the axis, so naming it
+    # beside the working pairs would claim an answer that is not there.
+    def alive(name):
+        return mean(by_name[name]['top1']) > mean(reference['top1']) - 5.0
+
+    have = [(a, b, what) for a, b, what in BRACKETS
+            if a in by_name and b in by_name]
     pairs = ['{} against {} on {}'.format(
         by_name[a]['letter'], by_name[b]['letter'], what)
-        for a, b, what in BRACKETS if a in by_name and b in by_name]
+        for a, b, what in have if alive(a) and alive(b)]
+    broken = ['{} against {} on {}, where {} collapsed'.format(
+        by_name[a]['letter'], by_name[b]['letter'], what,
+        by_name[a]['letter'] if not alive(a) else by_name[b]['letter'])
+        for a, b, what in have if not (alive(a) and alive(b))]
     if pairs:
         w('')
         w('Some branches are only readable in pairs, one leaning each '
           'way from K: {}. A bracket where both ends win says the axis '
           'does not matter, which is an answer the winning end alone '
           'cannot give.'.format('; '.join(pairs)))
+    if broken:
+        w('')
+        w('One bracket does not close: {}. A collapsed end is not a '
+          'losing end, so it cannot stand as the control its pair '
+          'needed, and the axis stays open.'.format('; '.join(broken)))
     w('')
     # Diffed against the nearest of a few ancestors rather than always
     # against A. Most of the table is K with one line changed, and
@@ -455,6 +472,25 @@ def render():
       'make it a number worth quoting. It has stopped being a '
       'precaution: the four branches below decide their own reading on '
       'it.')
+    w('- Why AV collapsed. Everything at width 0.70 and above '
+      'trained; everything at 0.65 and below sits at exactly chance, '
+      '1.00 accuracy and NLL ln(100). A cliff, not a slope, which is '
+      'the shape AJ and AN already showed. What has been measured is '
+      'that the weight itself does not explode: across teacher '
+      'sharpness from uniform to memorised the per-sample weight stays '
+      'between 0 and about 4 with mean 1, so a blown-up KD term is '
+      'ruled out rather than merely unlikely. What has not been found '
+      'is the path from that weighting to dead leading channels. It is '
+      'undiagnosed, not explained.')
+    w('- One defect the probe did find, which is not yet shown to be '
+      'the cause. AV measures confidence as `entropy.max() - entropy`, '
+      'taking its zero point from a batch order statistic that itself '
+      'drifts to zero as the teacher memorises. When every entropy in '
+      'a batch underflows to exactly zero both AU and AV divide zero '
+      'by zero and hand KD a weight of exactly zero for every sample. '
+      'The fixed reference the quantity actually has, log(C) minus '
+      'entropy, survives that case and does not move with the batch. '
+      'A rerun of this axis should use it.')
     w('- Whether K sits on a peak or on a high draw. AS, AT, AC and AD '
       'are K with one knob moved in four different directions - the '
       'free widths drawn narrower, the free widths drawn wider, the '
