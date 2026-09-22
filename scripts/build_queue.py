@@ -53,6 +53,10 @@ QUEUE = [
      'Charge the channels for what they carry'),
     ('bb_reorder_l1', 'bc_reorder_read',
      'Which channels the narrow subnet gets'),
+    ('bd_warm10_sort', 'be_warm25_sort',
+     'Make a window, then sort inside it'),
+    ('bf_warm10_plain', 'bg_warm25_plain',
+     'What the warm-up is worth on its own'),
 ]
 
 # ak_bures died in linalg.eigh three minutes in and the fix landed after,

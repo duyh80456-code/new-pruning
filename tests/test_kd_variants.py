@@ -23,6 +23,7 @@ import torch
 from utils.config import FLAGS
 
 from utils.loss_ops import channel_weights
+from utils.loss_ops import training_widths
 from utils.loss_ops import ClasswiseFeatureLoss
 from utils.loss_ops import _feature_scale
 from utils.loss_ops import ConfusionEmbedding
@@ -971,6 +972,45 @@ def test_activation_and_variance_are_not_the_same_criterion():
           'argmax {}'.format(int(by_act.argmax())))
 
 
+def test_the_warm_up_holds_the_narrow_end_back_and_then_returns_it():
+    """BD to BG train only the widest width for the first epochs
+
+    Neither the branch suite nor a two step smoke run reaches the epoch
+    loop, so nothing else here sees this. What it has to get right:
+    during the warm-up the narrow end is absent entirely, and the step
+    after it the sandwich is whole again. Coming back one width short
+    would quietly train a different method for ninety epochs.
+    """
+    was_warm = getattr(FLAGS, 'narrow_start_epoch', None)
+    was_n = getattr(FLAGS, 'num_sample_training', None)
+    FLAGS.narrow_start_epoch = 10
+    FLAGS.num_sample_training = 4
+    try:
+        for epoch in (0, 5, 9):
+            widths = training_widths(epoch, 0.25, 1.0)
+            check('epoch {}: the widest alone'.format(epoch),
+                  widths == [1.0], str(widths))
+        for epoch in (10, 11, 99):
+            widths = training_widths(epoch, 0.25, 1.0)
+            check('epoch {}: the sandwich is whole'.format(epoch),
+                  len(widths) == 4 and widths[0] == 1.0
+                  and widths[1] == 0.25, str(widths))
+            check('epoch {}: and the free draws are inside'.format(epoch),
+                  all(0.25 <= w <= 1.0 for w in widths[2:]))
+        FLAGS.narrow_start_epoch = 0
+        check('with no warm-up epoch zero is already whole',
+              len(training_widths(0, 0.25, 1.0)) == 4)
+    finally:
+        if was_warm is None:
+            del FLAGS.narrow_start_epoch
+        else:
+            FLAGS.narrow_start_epoch = was_warm
+        if was_n is None:
+            del FLAGS.num_sample_training
+        else:
+            FLAGS.num_sample_training = was_n
+
+
 def main():
     print('torch', torch.__version__)
     print()
@@ -1004,6 +1044,7 @@ def main():
     test_a_weighted_ground_cost_keeps_what_it_is_supposed_to()
     test_the_taylor_estimate_warms_up_before_it_is_trusted()
     test_activation_and_variance_are_not_the_same_criterion()
+    test_the_warm_up_holds_the_narrow_end_back_and_then_returns_it()
     print()
     if FAILURES:
         print('{} failed: {}'.format(len(FAILURES), ', '.join(FAILURES)))

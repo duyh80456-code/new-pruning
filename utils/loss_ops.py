@@ -915,6 +915,23 @@ def sample_width(low, high):
     raise ValueError('unknown width_sampling {}'.format(mode))
 
 
+def training_widths(epoch, low, high):
+    """the widths one training step runs
+
+    The sandwich rule is the two ends plus num_sample_training - 2 free
+    draws. narrow_start_epoch holds the narrow end back before that
+    epoch, leaving only the widest, so the ordering of the channels
+    stays arbitrary while the weights become worth ranking. Lives here
+    rather than inline in the loop so a test can see it; the loop could
+    not be checked without running a full epoch.
+    """
+    if epoch < getattr(FLAGS, 'narrow_start_epoch', 0):
+        return [high]
+    free = [sample_width(low, high)
+            for _ in range(getattr(FLAGS, 'num_sample_training', 2) - 2)]
+    return [high, low] + free
+
+
 def width_gate(width_mult):
     """how strongly an extra term applies at this width
 

@@ -78,6 +78,30 @@ it says which epoch to use instead without spending another session
 guessing.
 """
 
+WARM = """Sorting the channels only pays inside a window: late enough that the
+criterion is not noise on near-random weights, early enough that the
+prefix is not already sorted and there is training left to use it.
+
+US-Net has no such window, and that is the point of these. What makes a
+criterion meaningful here is the prefix taking gradient at every width
+and having to classify alone at 0.25 - and that is the same thing that
+sorts it. On a finished K the prefix already is 96 to 98 per cent of
+the best quarter; on a fresh model it is 29. The signal and the problem
+grow together. Once-for-All escapes that by making width elastic last,
+so its weights mature while the ordering stays arbitrary.
+
+So these make the window. The narrow end is held back for the first
+epochs and only width 1.0 trains, which costs **less** than a sandwich
+step rather than more, so the branch spends less total compute than K,
+not more. The total stays at 100 epochs: the warm-up comes out of the
+budget, because every schedule in common use rescales with the total
+and 110 epochs would be a different run rather than a longer one.
+
+The narrow widths get fewer epochs, which is a handicap, and it makes
+this a one sided test. A win is clean, because it won despite the
+handicap. A loss says nothing.
+"""
+
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
     # whose results are already recorded. OFF_AXIS is kept because it is
@@ -86,6 +110,10 @@ QUEUE = [
      'Charge the channels for what they carry', ON_AXIS),
     (17, 'bb_reorder_l1', 'bc_reorder_read',
      'Which channels the narrow subnet gets', REORDER),
+    (18, 'bd_warm10_sort', 'be_warm25_sort',
+     'Make a window, then sort inside it', WARM),
+    (19, 'bf_warm10_plain', 'bg_warm25_plain',
+     'What the warm-up is worth on its own', WARM),
 ]
 
 HEADER = """# {number}. {title}
@@ -119,7 +147,7 @@ checkpoint, so at most one is lost.
 Send back the final table. Pasting the output of the last cell is enough.
 """
 
-CONFIG = """# Fixed for this notebook. Notebook {number} of 16.
+CONFIG = """# Fixed for this notebook. Notebook {number} of 19.
 BRANCHES = {branches!r}
 
 SMOKE_FIRST = True

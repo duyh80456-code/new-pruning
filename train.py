@@ -25,6 +25,7 @@ from utils.loss_ops import build_feature_criterion
 from utils.loss_ops import build_feature_pair_criterion
 from utils.loss_ops import horizontal_pairs, ClasswiseFeatureLoss
 from utils.loss_ops import sample_width
+from utils.loss_ops import training_widths
 from utils.loss_ops import build_confusion_embedding, build_cost_matrix
 from utils.loss_ops import build_spread_criterion, get_classifier_weight
 from utils.loss_ops import width_gate
@@ -505,11 +506,22 @@ def run_one_epoch(
                     # universally slimmable model (us-nets)
                     # where the free samples land is width_sampling,
                     # which US-Net left uniform without saying why
-                    widths_train = []
-                    for _ in range(getattr(FLAGS, 'num_sample_training', 2)-2):
-                        widths_train.append(
-                            sample_width(min_width, max_width))
-                    widths_train = [max_width, min_width] + widths_train
+                    # Hold the narrow end back for the first epochs, so
+                    # that the ordering of the channels stays arbitrary
+                    # while the weights become worth ranking. Without it
+                    # the two happen together: what makes a criterion
+                    # meaningful here is the prefix taking gradient at
+                    # every width, which is also what sorts it, so there
+                    # is no moment at which a permutation has both a
+                    # signal to use and something left to move. This is
+                    # what Once-for-All gets for free by making width
+                    # elastic last.
+                    # one width during the warm-up, so those epochs
+                    # cost less than a sandwich step rather than more:
+                    # the branch spends less total compute than the run
+                    # it is compared against, not more
+                    widths_train = training_widths(
+                        epoch, min_width, max_width)
                     if getattr(FLAGS, 'teacher_chain', False):
                         # each width is taught by the next larger one, so
                         # they have to run widest first. mid_widths is put

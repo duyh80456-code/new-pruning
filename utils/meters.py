@@ -48,6 +48,12 @@ def flush_scalar_meters(meters, method='avg'):
     for name, meter in meters.items():
         if not isinstance(meter, ScalarMeter):
             continue
+        if not meter.values:
+            # A width that was not trained this epoch has nothing to
+            # average. Branches that hold the narrow end back for the
+            # first epochs leave exactly that, and dividing by zero at
+            # the end of the first one is how it used to show up.
+            continue
         if method == 'avg':
             value = sum(meter.values) / len(meter.values)
         elif method == 'sum':
