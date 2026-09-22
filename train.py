@@ -20,6 +20,7 @@ from utils.distributed import AllReduceDistributedDataParallel, allreduce_grads
 from utils.loss_ops import CrossEntropyLossSoft, CrossEntropyLossSmooth
 from utils.loss_ops import WassersteinLossSoft, WassersteinPairLoss
 from utils.loss_ops import build_soft_criterion, build_pair_criterion
+from utils import channel_reorder
 from utils.loss_ops import build_feature_criterion
 from utils.loss_ops import build_feature_pair_criterion
 from utils.loss_ops import horizontal_pairs, ClasswiseFeatureLoss
@@ -957,6 +958,24 @@ def train_val_test():
             print('Skip training at epoch: {}'.format(epoch))
             break
         lr_scheduler.step()
+        # Permute the channels so the prefix holds the ones the criterion
+        # likes, the way Once-for-All does when it makes width elastic.
+        # Once, at a named epoch: the permutation is free but it discards
+        # the co-adaptation the narrow widths have built, so doing it
+        # repeatedly would keep paying that without ever settling.
+        if epoch == getattr(FLAGS, 'reorder_epoch', -1):
+            spaces, moved, held = channel_reorder.reorder(
+                model_wrapper, getattr(FLAGS, 'reorder_by', 'l1'),
+                optimizer)
+            # held is the diagnostic the branch exists to collect: how
+            # much of the best quarter the prefix already had. Near one
+            # means the permutation had nothing to move and whatever
+            # this run reports is about noise, not about the idea.
+            print('Reordered {} channels across {} spaces by {} at '
+                  'epoch {}. The prefix already held {:.0%} of the best '
+                  'quarter.'.format(
+                      moved, spaces, getattr(FLAGS, 'reorder_by', 'l1'),
+                      epoch, held))
         # train
         results = run_one_epoch(
             epoch, train_loader, model_wrapper, criterion, optimizer,

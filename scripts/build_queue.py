@@ -51,6 +51,8 @@ QUEUE = [
      'A chain of teachers, and the Gaussian form that never ran'),
     ('az_act_ground', 'ba_taylor_ground',
      'Charge the channels for what they carry'),
+    ('bb_reorder_l1', 'bc_reorder_read',
+     'Which channels the narrow subnet gets'),
 ]
 
 # ak_bures died in linalg.eigh three minutes in and the fix landed after,

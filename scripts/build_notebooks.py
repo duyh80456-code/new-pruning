@@ -53,12 +53,31 @@ weighting every channel the same **is** K, which has run and sits at
 74.26. The two branches are read against it.
 """
 
+REORDER = """US-Net decides at initialisation which channels a narrow subnet gets.
+`weight[:k]`, and k counts from index zero, and nothing revisits it.
+Once-for-All does revisit it: when it makes width elastic it permutes
+the channels so the prefix holds the ones a criterion ranks highest.
+
+Read on a finished K the prefix is already 96 to 98 per cent of the
+best quarter, by every criterion tried, because it runs at every
+sampled width and at 0.25 has to classify with nothing beside it. On a
+freshly initialised model it is 29 per cent, which is the arbitrary
+ordering OFA has to fix.
+
+So the question is not whether the end state is sorted. It is when it
+gets that way. These permute once at epoch 10 and print, on the way
+past, how much of the best quarter the prefix held before they ran.
+That line is the measurement; the accuracy is what it is worth.
+"""
+
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
     # whose results are already recorded. OFF_AXIS is kept because it is
     # what they say.
     (16, 'az_act_ground', 'ba_taylor_ground',
      'Charge the channels for what they carry', ON_AXIS),
+    (17, 'bb_reorder_l1', 'bc_reorder_read',
+     'Which channels the narrow subnet gets', REORDER),
 ]
 
 HEADER = """# {number}. {title}
@@ -146,8 +165,18 @@ template_path = sorted(glob.glob(
 with io.open(template_path, encoding='utf-8') as handle:
     template = json.load(handle)
 
+# The template is notebook 01, whose results are recorded, so the extra
+# suite is added here at generation time rather than edited into it.
+SUITES_WAS = "          'tests/test_kd_variants.py']"
+SUITES_NOW = chr(10).join([
+    "          'tests/test_kd_variants.py',",
+    "          'tests/test_channel_reorder.py']"])
+
 for number, left, right, title, preamble in QUEUE:
     nb = json.loads(json.dumps(template))
+    for cell in nb['cells']:
+        cell['source'] = [line.replace(SUITES_WAS, SUITES_NOW)
+                          for line in cell['source']]
     body = HEADER.format(number=number, title=title,
                          preamble=preamble)
     for branch in (left, right):

@@ -51,6 +51,7 @@ training loop rather than running it, so anything that lives only in
 | 14 | `kaggle_kd_14_au_av.ipynb` | `au_entropy_kd`, `av_confidence_kd` | Which samples the teacher still has something to say about | 73.00 / 30.46 |
 | 15 | `kaggle_kd_15_aw_ak.ipynb` | `aw_teacher_chain`, `ak_bures` | A chain of teachers, and the Gaussian form that never ran | 74.32 / 73.56 |
 | 16 | `kaggle_kd_16_az_ba.ipynb` | `az_act_ground`, `ba_taylor_ground` | Charge the channels for what they carry | free / free |
+| 17 | `kaggle_kd_17_bb_bc.ipynb` | `bb_reorder_l1`, `bc_reorder_read` | Which channels the narrow subnet gets | free / free |
 
 ## Held back
 
