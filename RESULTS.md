@@ -439,7 +439,9 @@ US-Net slices channels as `weight[:k]`, so which channels a narrow width gets is
 
 Seven of the eight say the sorting is done. The one that does not is the batch-norm gain, and it is also the one that agrees least with the others: ranked against the Taylor score, every other criterion correlates between 0.89 and 0.95 and the gain manages 0.603, falling to 0.127 in one layer. Being both the outlier in the answer and the outlier in the ordering is what a bad measure looks like, not a revealing one.
 
-The row above it says why. The gain records how far a channel is turned up and nothing about whether anything downstream reads it; how much the next layer reads each channel is a separate quantity, and that one is sorted to 100%. A channel can be quiet and still matter. The Taylor score multiplies the gain by the gradient reaching it and so carries both halves, which is why it lands with the majority.
+There is a second reason, and it is in this repository rather than in the measurement. Ranking channels by the batch-norm gain is Network Slimming, and that method trains with an L1 penalty on the gains, which is what drives them apart and makes the small ones mean something. `train.py:271` gives every one-dimensional parameter a weight decay of zero, so the gains here are trained under no penalty at all. The criterion is being read outside the regime it was built for.
+
+The row above it says the rest. The gain records how far a channel is turned up and nothing about whether anything downstream reads it; how much the next layer reads each channel is a separate quantity, and that one is sorted to 100%. A channel can be quiet and still matter. The Taylor score multiplies the gain by the gradient reaching it and so carries both halves, which is why it lands with the majority.
 
 One of the eight is not asking about importance at all. Distance from the other filters is the FPGM criterion, which ranks a channel by how much of a duplicate it is, and the sandwich rule presses directly for a prefix that is good and only indirectly for one that is varied. It was the likeliest place to find headroom and it reads 99%.
 

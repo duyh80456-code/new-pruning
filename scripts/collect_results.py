@@ -495,7 +495,16 @@ def render():
       'outlier in the answer and the outlier in the ordering is what a '
       'bad measure looks like, not a revealing one.')
     w('')
-    w('The row above it says why. The gain records how far a channel '
+    w('There is a second reason, and it is in this repository rather '
+      'than in the measurement. Ranking channels by the batch-norm '
+      'gain is Network Slimming, and that method trains with an L1 '
+      'penalty on the gains, which is what drives them apart and '
+      'makes the small ones mean something. `train.py:271` gives '
+      'every one-dimensional parameter a weight decay of zero, so the '
+      'gains here are trained under no penalty at all. The criterion '
+      'is being read outside the regime it was built for.')
+    w('')
+    w('The row above it says the rest. The gain records how far a channel '
       'is turned up and nothing about whether anything downstream '
       'reads it; how much the next layer reads each channel is a '
       'separate quantity, and that one is sorted to 100%. A channel '
