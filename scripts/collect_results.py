@@ -97,6 +97,125 @@ def ingest(path):
     save(store)
 
 
+
+# What each config key does, for the 'How each branch is built' section.
+# Keyed by the key alone where the key is the whole story, and by
+# key=value where the value picks between mechanisms.
+LEGEND = [
+    ('kd_loss=wasserstein', 'the vertical KD term becomes entropic '
+     'transport over a class cost matrix, instead of soft cross entropy'),
+    ('kd_loss=alpha', 'the vertical KD term becomes an adaptive '
+     'alpha-divergence, AlphaNet as published'),
+    ('kd_temperature', 'the logit teacher is softened by this factor '
+     'before the student is matched to it, with a T^2 rescale so the '
+     'gradient stays comparable'),
+    ('kd_weighting=entropy', 'each sample\'s KD loss is scaled by the '
+     'teacher\'s entropy on it, normalised to mean one'),
+    ('kd_weighting=confidence', 'the same scaling, reversed: strongest '
+     'where the teacher is most certain'),
+    ('cost_source', 'where the class cost matrix comes from. `fc` is the '
+     'distance between classifier rows, `confusion` is what the teacher '
+     'mistakes for what, `identity` is every pair equally far apart'),
+    ('feature_kd', 'adds a vertical term between the student\'s pooled '
+     'features and the teacher\'s, on top of the logit KD'),
+    ('horizontal_kd', 'adds a term between two co-sampled widths that '
+     'stand in no teacher relation to each other'),
+    ('horizontal_where', 'which tier the horizontal term sits at: '
+     '`logit`, `feature`, or `both`'),
+    ('horizontal_loss', 'what compares the two widths at the logit tier: '
+     '`wasserstein`, `jeffreys`, or `kl`'),
+    ('horizontal_pairs=all', 'every pair among the co-sampled students is '
+     'coupled, not just the two middle ones'),
+    ('feature_loss=sliced', 'transport along random one dimensional '
+     'projections instead of a full plan'),
+    ('feature_loss=channel', 'exact transport along each shared channel, '
+     'one dimension at a time, which the nesting makes meaningful'),
+    ('feature_loss=bures', 'the closed form between two Gaussians fitted '
+     'to the clouds: mean gap plus a covariance term'),
+    ('feature_loss=unbalanced', 'transport that may leave mass unmatched, '
+     'the marginals penalised rather than enforced'),
+    ('feature_loss=mse', 'sample i against sample i, no rematching'),
+    ('feature_loss=mmd', 'the clouds matched with a kernel, no plan'),
+    ('feature_align', 'how two widths are put in a comparable space. '
+     '`prefix` truncates the wide features to the narrow width, which '
+     'the nesting allows; `gram` compares which samples each width '
+     'considers similar'),
+    ('feature_layers', 'the depths the feature term is applied at, '
+     'instead of the final pooled tap alone'),
+    ('feature_classwise', 'transport runs between class means rather '
+     'than between samples'),
+    ('feature_ground=cosine', 'the ground cost is angle rather than '
+     'distance'),
+    ('feature_weight', 'the weight on the feature terms, set by matching '
+     'gradient norms rather than loss values'),
+    ('horizontal_weight', 'the weight on the horizontal term'),
+    ('weight_schedule=narrow', 'the extra term is faded out toward the '
+     'wide widths, where it was measured to hurt'),
+    ('sinkhorn_eps', 'the entropic blur. Small collapses the plan onto a '
+     'permutation, large spreads mass over many partners'),
+    ('sinkhorn_iters', 'fixed point iterations in the Sinkhorn solve'),
+    ('sinkhorn_debiased', 'subtracts the self-transport terms, so two '
+     'identical clouds read exactly zero'),
+    ('wasserstein_p=1.0', 'an absolute ground cost instead of a squared '
+     'one, so the gradient does not decay as the widths converge'),
+    ('sliced_projections', 'how many random directions stand in for the '
+     'full plan'),
+    ('sliced_reduce=max', 'keeps the worst projection rather than the '
+     'average of them'),
+    ('unbalanced_tau', 'the price of leaving mass unmatched. Large '
+     'recovers the balanced plan'),
+    ('bures_diagonal', 'keeps only the per channel variances and drops '
+     'every cross channel term'),
+    ('spread_weight', 'a repulsion on the classifier rows, the one term '
+     'here with the opposite sign to the rest'),
+    ('spread_neighbours', 'how many nearest rows the repulsion charges '
+     'for, which makes it a minimum margin rather than a mean spread'),
+    ('width_sampling=log', 'the sandwich rule draws its free widths flat '
+     'in log width, which puts half of them below 0.50 against a third '
+     'for uniform'),
+    ('width_sampling=macs', 'the same draw made flat in compute. MACs '
+     'measured at width^1.965 here, so this leans toward the wide end'),
+    ('teacher_chain', 'each width learns from the next larger one in the '
+     'batch instead of every width learning from the widest'),
+    ('num_sample_training', 'how many widths are run per step, the '
+     'sandwich rule\'s two ends included'),
+    ('random_seed', 'the seed, for a repeat of a branch already run'),
+    ('confusion_momentum', 'how fast the confusion embedding updates'),
+    ('confusion_warmup', 'steps before the confusion cost is trusted'),
+    ('cost_normalize', 'divides the class cost by its own mean'),
+    ('alpha_min', 'lower end of the adaptive alpha range'),
+    ('alpha_max', 'upper end of the adaptive alpha range'),
+    ('alpha_iw_clip', 'importance weight clip in the alpha-divergence'),
+]
+
+
+def config_keys(branch):
+    """every top level key a branch's config sets"""
+    path = os.path.join(ROOT, 'apps', 'cifar100_{}.yml'.format(branch))
+    if not os.path.exists(path):
+        return None
+    found = {}
+    with open(path, encoding='utf-8') as handle:
+        for line in handle:
+            line = line.split('#')[0].rstrip()
+            if not line or line.startswith(' ') or ':' not in line:
+                continue
+            key, value = line.split(':', 1)
+            found[key.strip()] = value.strip()
+    return found
+
+
+def explain(key, value):
+    """the legend entry for one setting, most specific first"""
+    for name, text in LEGEND:
+        if name == '{}={}'.format(key, value):
+            return text
+    for name, text in LEGEND:
+        if name == key:
+            return text
+    return None
+
+
 def mean(values):
     return sum(values) / len(values)
 
@@ -186,6 +305,17 @@ def render():
                 '**{:.2f}**'.format(value) if value == best
                 else '{:.2f}'.format(value))
         w(row)
+    best = max(mean(r['top1']) for r in ranked)
+    row = '| **mean** | {:.1f} |'.format(mean(macs))
+    for run in ranked:
+        value = mean(run['top1'])
+        row += ' {} |'.format(
+            '**{:.2f}**'.format(value) if value == best
+            else '{:.2f}'.format(value))
+    w(row)
+    w('')
+    w('The mean row is the column each branch is ranked by, which the '
+      'table above it could not be read off before.')
     w('')
 
     w('## Against A, by width')
@@ -226,12 +356,93 @@ def render():
                 '**{:.3f}**'.format(value) if value == best
                 else '{:.3f}'.format(value))
         w(row)
+    lowest = min(mean(r['nll']) for r in have_nll)
+    row = '| **mean** |'
+    for run in have_nll:
+        value = mean(run['nll'])
+        row += ' {} |'.format(
+            '**{:.3f}**'.format(value) if value == lowest
+            else '{:.3f}'.format(value))
+    w(row)
     w('')
     w("A's NLL climbs from {:.3f} at width 0.25 to {:.3f} at 1.00: it is "
       'least calibrated where it is most accurate, which is what a '
       'training error of 0.000 at the widest width predicts. F does not '
       'do that.'.format(reference['nll'][0], reference['nll'][-1]))
     w('')
+
+    w('## How each branch is built')
+    w('')
+    w('Each row names the closest branch above it and lists only what '
+      'differs, so the line that makes a branch itself is the line you '
+      'read. Diffed against A, most of this table would be K repeated '
+      'ten times with the distinguishing setting arriving last.')
+    w('')
+    w('Read out of `apps/cifar100_<name>.yml` when this page was '
+      'written, so a branch cannot be described here as something its '
+      'config has stopped being.')
+    # Brackets are only worth pointing at once both ends have run.
+    BRACKETS = [('w_eps_002', 'y_eps_050', 'blur'),
+                ('as_log_widths', 'at_macs_widths',
+                 'where the free widths are drawn'),
+                ('au_entropy_kd', 'av_confidence_kd',
+                 'which samples KD attends to'),
+                ('ac_weight_half', 'ad_weight_double',
+                 'the weight on the feature terms')]
+    pairs = ['{} against {} on {}'.format(
+        by_name[a]['letter'], by_name[b]['letter'], what)
+        for a, b, what in BRACKETS if a in by_name and b in by_name]
+    if pairs:
+        w('')
+        w('Some branches are only readable in pairs, one leaning each '
+          'way from K: {}. A bracket where both ends win says the axis '
+          'does not matter, which is an answer the winning end alone '
+          'cannot give.'.format('; '.join(pairs)))
+    w('')
+    # Diffed against the nearest of a few ancestors rather than always
+    # against A. Most of the table is K with one line changed, and
+    # against A that line arrives tenth.
+    ancestors = [(name, config_keys(name)) for name in
+                 ('k_feature_pair', 'i_feature_vertical', 'c_wasserstein',
+                  reference['name'])]
+    ancestors = [(n, k) for n, k in ancestors if k]
+    letter_of = {r['name']: r['letter'] for r in runs}
+
+    def diff(settings, base):
+        return [(k, v) for k, v in sorted(settings.items())
+                if base.get(k) != v and k != 'log_dir']
+
+    for run in ranked:
+        settings = config_keys(run['name'])
+        if settings is None:
+            continue
+        best_name, best_changed = None, None
+        for name, base in ancestors:
+            if name == run['name']:
+                continue
+            changed = diff(settings, base)
+            if best_changed is None or len(changed) < len(best_changed):
+                best_name, best_changed = name, changed
+        if not best_changed:
+            w('**{}** - {}. Identical to {} in config; they differ by '
+              'seed.'.format(run['letter'], run['what'],
+                             letter_of.get(best_name, best_name)))
+            w('')
+            continue
+        if run['name'] == reference['name']:
+            w('**{}** - {}. The reference every row below is measured '
+              'against.'.format(run['letter'], run['what']))
+            w('')
+            continue
+        w('**{}** - {}'.format(run['letter'], run['what']))
+        w('')
+        w('{}, with:'.format(letter_of.get(best_name, best_name)))
+        w('')
+        for key, value in best_changed:
+            text = explain(key, value)
+            w('* `{}: {}`{}'.format(
+                key, value, ' - ' + text if text else ''))
+        w('')
 
     w('## Not settled')
     w('')

@@ -70,6 +70,9 @@ NLL is printed to three decimals on a scale near 1.3, so it resolves to 0.001 an
 | 0.90 | 439.8 | **75.73** | 75.30 | 75.49 | 75.46 | 75.33 | 75.47 | 74.88 | 75.20 | 74.86 | 75.22 | 74.90 | 75.20 | 74.85 | 74.47 | 74.95 | 75.10 | 74.53 | 74.58 | 74.80 | 74.60 | 74.50 | 74.80 | 74.95 | 74.77 | 74.76 | 74.80 | 74.50 | 74.39 | 74.20 | 74.30 | 74.92 | 75.72 | 68.58 |
 | 0.95 | 511.6 | 75.82 | 75.39 | 75.84 | 75.60 | 75.63 | 75.71 | 74.92 | 75.28 | 74.96 | 75.36 | 74.90 | 75.40 | 75.13 | 74.47 | 75.08 | 75.40 | 74.54 | 74.60 | 75.13 | 74.50 | 74.70 | 74.90 | 74.89 | 74.80 | 74.58 | 75.00 | 74.70 | 74.59 | 74.60 | 74.50 | 74.97 | **75.98** | 69.98 |
 | 1.00 | 555.5 | 76.00 | 75.42 | 75.83 | 75.68 | 75.60 | 75.56 | 75.05 | 75.27 | 75.21 | 75.34 | 75.20 | 75.60 | 75.13 | 74.84 | 75.22 | 75.30 | 74.50 | 74.38 | 75.10 | 74.50 | 74.90 | 75.30 | 75.14 | 75.01 | 74.75 | 75.30 | 74.70 | 74.73 | 74.70 | 74.50 | 75.11 | **76.05** | 70.28 |
+| **mean** | 248.0 | **74.26** | 74.24 | 74.18 | 74.14 | 74.10 | 74.03 | 73.75 | 73.74 | 73.66 | 73.64 | 73.54 | 73.53 | 73.53 | 73.53 | 73.52 | 73.52 | 73.42 | 73.38 | 73.28 | 73.27 | 73.27 | 73.25 | 73.24 | 73.22 | 73.19 | 73.16 | 73.08 | 72.99 | 72.74 | 72.74 | 67.70 | 37.47 | 20.27 |
+
+The mean row is the column each branch is ranked by, which the table above it could not be read off before.
 
 ## Against A, by width
 
@@ -118,8 +121,245 @@ The one place a branch has separated from A by more than the measurement can be 
 | 0.90 | 1.144 | 1.191 | 1.085 | 1.149 | 1.214 | 1.137 | 1.298 | 1.247 | 1.385 | 1.359 | 1.184 | 1.226 | **1.080** | 1.435 | 1.427 | 1.155 | 1.439 | 1.407 | 1.342 | 1.201 | 1.374 | 1.435 | 1.442 | 1.417 | 1.329 | 1.628 | 1.463 | 1.409 | 1.425 | 1.277 | 1.326 | 1.416 |
 | 0.95 | 1.158 | 1.201 | 1.097 | 1.165 | 1.224 | 1.151 | 1.305 | 1.254 | 1.396 | 1.363 | 1.199 | 1.241 | **1.095** | 1.450 | 1.436 | 1.169 | 1.427 | 1.410 | 1.354 | 1.211 | 1.363 | 1.444 | 1.444 | 1.425 | 1.327 | 1.619 | 1.465 | 1.399 | 1.426 | 1.295 | 1.343 | 1.475 |
 | 1.00 | 1.179 | 1.214 | **1.128** | 1.187 | 1.236 | 1.173 | 1.308 | 1.260 | 1.397 | 1.373 | 1.304 | 1.262 | 1.188 | 1.450 | 1.437 | 1.216 | 1.437 | 1.416 | 1.351 | 1.331 | 1.352 | 1.449 | 1.447 | 1.426 | 1.333 | 1.596 | 1.463 | 1.398 | 1.426 | 1.310 | 1.353 | 1.529 |
+| **mean** | 1.127 | 1.170 | **1.083** | 1.135 | 1.187 | 1.127 | 1.266 | 1.230 | 1.311 | 1.337 | 1.255 | 1.203 | 1.135 | 1.393 | 1.361 | 1.175 | 1.522 | 1.354 | 1.361 | 1.276 | 1.379 | 1.393 | 1.399 | 1.377 | 1.343 | 1.573 | 1.409 | 1.415 | 1.438 | 1.446 | 2.951 | 3.669 |
 
 A's NLL climbs from 1.272 at width 0.25 to 1.437 at 1.00: it is least calibrated where it is most accurate, which is what a training error of 0.000 at the widest width predicts. F does not do that.
+
+## How each branch is built
+
+Each row names the closest branch above it and lists only what differs, so the line that makes a branch itself is the line you read. Diffed against A, most of this table would be K repeated ten times with the distinguishing setting arriving last.
+
+Read out of `apps/cifar100_<name>.yml` when this page was written, so a branch cannot be described here as something its config has stopped being.
+
+Some branches are only readable in pairs, one leaning each way from K: W against Y on blur. A bracket where both ends win says the axis does not matter, which is an answer the winning end alone cannot give.
+
+**K** - I plus transport between the two middle widths, at the feature tier
+
+I, with:
+
+* `horizontal_kd: True` - adds a term between two co-sampled widths that stand in no teacher relation to each other
+* `horizontal_weight: 1.0` - the weight on the horizontal term
+* `horizontal_where: feature` - which tier the horizontal term sits at: `logit`, `feature`, or `both`
+
+**X** - K at eps 0.1 instead of 0.2
+
+K, with:
+
+* `sinkhorn_eps: 0.1` - the entropic blur. Small collapses the plan onto a permutation, large spreads mass over many partners
+
+**V** - K with transport that may leave mass unmatched, at tau 1.0
+
+K, with:
+
+* `feature_loss: unbalanced` - transport that may leave mass unmatched, the marginals penalised rather than enforced
+* `feature_weight: 0.8` - the weight on the feature terms, set by matching gradient norms rather than loss values
+* `unbalanced_tau: 1.0` - the price of leaving mass unmatched. Large recovers the balanced plan
+
+**AO** - K plus a repulsion pushing the classifier rows apart
+
+K, with:
+
+* `spread_neighbours: 5` - how many nearest rows the repulsion charges for, which makes it a minimum margin rather than a mean spread
+* `spread_weight: 1.0` - a repulsion on the classifier rows, the one term here with the opposite sign to the rest
+
+**AQ** - K transporting the two widths' class means rather than their samples
+
+K, with:
+
+* `feature_classwise: True` - transport runs between class means rather than between samples
+* `feature_weight: 0.7` - the weight on the feature terms, set by matching gradient norms rather than loss values
+
+**AF** - K coupling all three student pairs instead of one
+
+K, with:
+
+* `horizontal_pairs: all` - every pair among the co-sampled students is coupled, not just the two middle ones
+
+**AA** - K charging transport by direction rather than distance
+
+K, with:
+
+* `feature_ground: cosine` - the ground cost is angle rather than distance
+* `feature_weight: 78.0` - the weight on the feature terms, set by matching gradient norms rather than loss values
+
+**W** - K at eps 0.02, a plan collapsed onto a permutation
+
+K, with:
+
+* `sinkhorn_eps: 0.02` - the entropic blur. Small collapses the plan onto a permutation, large spreads mass over many partners
+
+**I** - A plus transport between the student and teacher feature clouds
+
+K, with:
+
+* `horizontal_kd: False` - adds a term between two co-sampled widths that stand in no teacher relation to each other
+
+**AM** - K with sliced transport keeping the worst direction rather than the average
+
+K, with:
+
+* `feature_loss: sliced` - transport along random one dimensional projections instead of a full plan
+* `feature_weight: 0.09` - the weight on the feature terms, set by matching gradient norms rather than loss values
+* `sliced_reduce: max` - keeps the worst projection rather than the average of them
+
+**F** - A plus a symmetrized KL between the two middle widths
+
+K, with:
+
+* `horizontal_loss: jeffreys` - what compares the two widths at the logit tier: `wasserstein`, `jeffreys`, or `kl`
+* `horizontal_where: logit` - which tier the horizontal term sits at: `logit`, `feature`, or `both`
+
+**A'** - the same branch again, to measure the noise
+
+I, with:
+
+* `random_seed: 2026` - the seed, for a repeat of a branch already run
+
+**M** - K with transport at every stage, not the last one alone
+
+K, with:
+
+* `feature_layers: [stage2, stage3, stage4, final]` - the depths the feature term is applied at, instead of the final pooled tap alone
+
+**AH** - K, F and all three pairs at once, every addition together
+
+K, with:
+
+* `horizontal_loss: jeffreys` - what compares the two widths at the logit tier: `wasserstein`, `jeffreys`, or `kl`
+* `horizontal_pairs: all` - every pair among the co-sampled students is coupled, not just the two middle ones
+* `horizontal_where: both` - which tier the horizontal term sits at: `logit`, `feature`, or `both`
+
+**AL** - K with Gaussian transport on the per channel variances alone
+
+K, with:
+
+* `bures_diagonal: True` - keeps only the per channel variances and drops every cross channel term
+* `feature_loss: bures` - the closed form between two Gaussians fitted to the clouds: mean gap plus a covariance term
+* `feature_weight: 2.7` - the weight on the feature terms, set by matching gradient norms rather than loss values
+
+**A** - US-Net as published: inplace distillation with KL. Identical to I in config; they differ by seed.
+
+**AE** - K and F at once, transport on features and Jeffreys on logits
+
+K, with:
+
+* `horizontal_loss: jeffreys` - what compares the two widths at the logit tier: `wasserstein`, `jeffreys`, or `kl`
+* `horizontal_where: both` - which tier the horizontal term sits at: `logit`, `feature`, or `both`
+
+**AR** - K with the logit teacher softened to temperature 4
+
+K, with:
+
+* `kd_temperature: 4.0` - the logit teacher is softened by this factor before the student is matched to it, with a T^2 rescale so the gradient stays comparable
+
+**Y** - K at eps 0.5, mass spread over many partners
+
+K, with:
+
+* `sinkhorn_eps: 0.5` - the entropic blur. Small collapses the plan onto a permutation, large spreads mass over many partners
+
+**D** - C plus Wasserstein between the two middle widths
+
+K, with:
+
+* `kd_loss: wasserstein` - the vertical KD term becomes entropic transport over a class cost matrix, instead of soft cross entropy
+
+**E** - A plus plain KL between the two middle widths, neither symmetric nor metric aware
+
+K, with:
+
+* `horizontal_loss: kl` - what compares the two widths at the logit tier: `wasserstein`, `jeffreys`, or `kl`
+* `horizontal_where: logit` - which tier the horizontal term sits at: `logit`, `feature`, or `both`
+
+**G** - C with every pair of classes equally far apart, so transport has no geometry to use
+
+C, with:
+
+* `cost_source: identity` - where the class cost matrix comes from. `fc` is the distance between classifier rows, `confusion` is what the teacher mistakes for what, `identity` is every pair equally far apart
+
+**AI** - K transporting one shared channel at a time, exactly rather than by projection
+
+K, with:
+
+* `feature_loss: channel` - exact transport along each shared channel, one dimension at a time, which the nesting makes meaningful
+* `feature_weight: 1.7` - the weight on the feature terms, set by matching gradient norms rather than loss values
+
+**S** - K with sliced transport on 128 projections
+
+K, with:
+
+* `feature_loss: sliced` - transport along random one dimensional projections instead of a full plan
+* `feature_weight: 1.6` - the weight on the feature terms, set by matching gradient norms rather than loss values
+* `sliced_projections: 128` - how many random directions stand in for the full plan
+
+**T** - K with sliced transport on 32 random projections rather than the entropic plan
+
+K, with:
+
+* `feature_loss: sliced` - transport along random one dimensional projections instead of a full plan
+* `feature_weight: 0.8` - the weight on the feature terms, set by matching gradient norms rather than loss values
+* `sliced_projections: 32` - how many random directions stand in for the full plan
+
+**H** - C with the class metric taken from what the teacher confuses, rather than from the classifier rows
+
+C, with:
+
+* `confusion_momentum: 0.01` - how fast the confusion embedding updates
+* `confusion_warmup: 50` - steps before the confusion cost is trusted
+* `cost_source: confusion` - where the class cost matrix comes from. `fc` is the distance between classifier rows, `confusion` is what the teacher mistakes for what, `identity` is every pair equally far apart
+
+**B** - adaptive alpha-divergence, AlphaNet, bit-for-bit against the reference implementation
+
+I, with:
+
+* `alpha_iw_clip: 5.0` - importance weight clip in the alpha-divergence
+* `alpha_max: 1.0` - upper end of the adaptive alpha range
+* `alpha_min: -1.0` - lower end of the adaptive alpha range
+* `kd_loss: alpha` - the vertical KD term becomes an adaptive alpha-divergence, AlphaNet as published
+
+**U** - the same on 512 projections, four times the cost of 128
+
+K, with:
+
+* `feature_loss: sliced` - transport along random one dimensional projections instead of a full plan
+* `feature_weight: 2.7` - the weight on the feature terms, set by matching gradient norms rather than loss values
+* `sliced_projections: 512` - how many random directions stand in for the full plan
+
+**C** - Wasserstein on the logits, vertical only
+
+I, with:
+
+* `kd_loss: wasserstein` - the vertical KD term becomes entropic transport over a class cost matrix, instead of soft cross entropy
+
+**L** - D with the horizontal term weighted toward the narrow widths
+
+K, with:
+
+* `kd_loss: wasserstein` - the vertical KD term becomes entropic transport over a class cost matrix, instead of soft cross entropy
+* `weight_schedule: narrow` - the extra term is faded out toward the wide widths, where it was measured to hurt
+
+**AG** - K with five sampled widths and every pair coupled: the narrowest never trained
+
+K, with:
+
+* `horizontal_pairs: all` - every pair among the co-sampled students is coupled, not just the two middle ones
+* `num_sample_training: 5` - how many widths are run per step, the sandwich rule's two ends included
+
+**AJ** - K with per channel transport at an absolute gap: the narrow half of the range collapsed
+
+K, with:
+
+* `feature_loss: channel` - exact transport along each shared channel, one dimension at a time, which the nesting makes meaningful
+* `feature_weight: 0.05` - the weight on the feature terms, set by matching gradient norms rather than loss values
+* `wasserstein_p: 1.0` - an absolute ground cost instead of a squared one, so the gradient does not decay as the widths converge
+
+**AN** - K with sliced transport at an absolute gap: collapsed below width 0.80
+
+K, with:
+
+* `feature_loss: sliced` - transport along random one dimensional projections instead of a full plan
+* `feature_weight: 0.04` - the weight on the feature terms, set by matching gradient norms rather than loss values
+* `wasserstein_p: 1.0` - an absolute ground cost instead of a squared one, so the gradient does not decay as the widths converge
 
 ## Not settled
 
