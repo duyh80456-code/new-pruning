@@ -32,16 +32,47 @@ def build():
     return model
 
 
-def loader(batch, batches):
-    import torchvision
-    import torchvision.transforms as T
-    tf = T.Compose([T.ToTensor(),
-                    T.Normalize((0.5071, 0.4865, 0.4409),
-                                (0.2673, 0.2564, 0.2762))])
-    data = torchvision.datasets.CIFAR100(root='data', train=True,
-                                         download=False, transform=tf)
-    return torch.utils.data.DataLoader(data, batch_size=batch, shuffle=True,
-                                       num_workers=0)
+def batches_of(batch, count):
+    """read the pickle directly
+
+    torchvision re-checks the tarball before it will open the extracted
+    files, so a mounted copy without it, or a partial download, stops
+    the measurement for a reason that has nothing to do with the data
+    being there. The pickle is three lines to read.
+    """
+    import pickle
+
+    tried = [os.path.join(ROOT, 'data', 'cifar-100-python', 'train')]
+    if os.path.isdir('/kaggle/input'):
+        for base, dirs, _ in os.walk('/kaggle/input'):
+            if 'cifar-100-python' in dirs:
+                tried.append(
+                    os.path.join(base, 'cifar-100-python', 'train'))
+    raw = None
+    for here in tried:
+        if not os.path.exists(here):
+            continue
+        try:
+            with open(here, 'rb') as handle:
+                raw = pickle.load(handle, encoding='bytes')
+            break
+        except Exception as problem:
+            # a half-finished download reads as a missing one here, and
+            # saying which is the difference between attaching the
+            # dataset and waiting for a retry
+            print('  unusable: {} ({})'.format(here, problem))
+    if raw is None:
+        raise SystemExit('no readable cifar-100-python/train. Looked in: '
+                         + ', '.join(tried or ['nowhere']))
+    images = torch.from_numpy(
+        raw[b'data'].reshape(-1, 3, 32, 32)).float().div_(255.0)
+    mean = torch.tensor([0.5071, 0.4865, 0.4409]).view(1, 3, 1, 1)
+    std = torch.tensor([0.2673, 0.2564, 0.2762]).view(1, 3, 1, 1)
+    images = (images - mean) / std
+    labels = torch.tensor(raw[b'fine_labels'])
+    order = torch.randperm(len(labels))[:batch * count]
+    return [(images[order[i:i + batch]], labels[order[i:i + batch]])
+            for i in range(0, len(order), batch)]
 
 
 def gains(model):
@@ -87,7 +118,8 @@ def main():
         os.path.basename(path), len(missing), len(unexpected)))
 
     batches = int(os.environ.get('BATCHES', '4'))
-    data = list(loader(int(os.environ.get('BATCH', '64')), batches))[:batches]
+    torch.manual_seed(1995)
+    data = batches_of(int(os.environ.get('BATCH', '64')), batches)
     widths = [1.0, 0.5, 0.25]
     scores = {}
     for w in widths:
