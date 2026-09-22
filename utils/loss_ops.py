@@ -565,11 +565,49 @@ class FeatureBuresLoss(torch.nn.modules.loss._Loss):
         self.align = align
         self.diagonal = diagonal
 
-    @staticmethod
-    def _sqrt_psd(matrix):
-        values, vectors = torch.linalg.eigh(matrix)
-        values = values.clamp_min(0.0).sqrt()
-        return (vectors * values.unsqueeze(0)).mm(vectors.t())
+    # A batch of 256 in 512 channels gives a covariance of rank at most
+    # 255, so over 250 of its eigenvalues are exactly zero. eigh refuses
+    # that outright on the GPU - 'too many repeated eigenvalues', which
+    # killed the first AK run three minutes in - and where it survives,
+    # on the CPU, it returns a nan gradient instead, because tr(sqrt(A))
+    # has gradient A^-0.5 / 2 and that is unbounded in the null space.
+    # The crash was the visible half.
+    #
+    # Coupled Newton-Schulz replaces it: no eigendecomposition, so no
+    # repeated roots to trip over. It needs every eigenvalue of the
+    # normalised matrix inside the unit ball around one, and a zero sits
+    # exactly on the boundary, converging only marginally until float
+    # error carries it off. Two knobs were measured against each other:
+    #
+    #   ridge     lifts the zeros off the boundary, and biases the value
+    #   precision decides how fast the error in those directions grows
+    #
+    # In float32 they could not both be satisfied. Stability wanted a
+    # ridge of at least 1e-5, below which the iteration is nan by thirty
+    # steps; signal wanted at most 1e-7, above which clamp_min flattens
+    # the whole term at a gap of 0.03. float64 dissolves the conflict,
+    # because it is the iteration and not the trace that needs the
+    # precision: at 1e-9 the value settles by twenty steps and is
+    # unchanged at eighty, and near agreement it reproduces the unridged
+    # number to three digits.
+    #
+    # It costs about twice the float32 time for a 512 by 512 pair, once
+    # per step.
+    RIDGE = 1e-9
+    ITERATIONS = 20
+
+    @classmethod
+    def _sqrt_psd(cls, matrix):
+        eye = torch.eye(matrix.size(0), dtype=matrix.dtype,
+                        device=matrix.device)
+        matrix = matrix + (cls.RIDGE * matrix.diagonal().mean().detach()) * eye
+        norm = matrix.norm(p='fro')
+        root, inverse = matrix / norm, eye
+        for _ in range(cls.ITERATIONS):
+            step = 0.5 * (3.0 * eye - inverse.mm(root))
+            root = root.mm(step)
+            inverse = step.mm(inverse)
+        return root * norm.sqrt()
 
     def forward(self, student, teacher):
         left, right = align_features(student, teacher, self.align)
@@ -581,8 +619,13 @@ class FeatureBuresLoss(torch.nn.modules.loss._Loss):
             # difference of the standard deviations, channel by channel
             spread_gap = (left.std(dim=0) - right.std(dim=0)).pow(2).sum()
             return mean_gap + spread_gap
-        left = left - left.mean(dim=0, keepdim=True)
-        right = right - right.mean(dim=0, keepdim=True)
+        # float64 from here down: see the note on RIDGE. The traces
+        # below are of order the total variance and cancel to nothing at
+        # agreement, so the arithmetic that produces them is the part
+        # that has to be exact.
+        left = (left - left.mean(dim=0, keepdim=True)).double()
+        right = (right - right.mean(dim=0, keepdim=True)).double()
+        mean_gap = mean_gap.double()
         count = max(left.size(0) - 1, 1)
         cov_left = left.t().mm(left) / count
         cov_right = right.t().mm(right) / count
@@ -593,7 +636,7 @@ class FeatureBuresLoss(torch.nn.modules.loss._Loss):
         # that is a term rewarding a width for matching its partner and
         # then pushing past it.
         return (mean_gap + cov_left.trace() + cov_right.trace()
-                - 2.0 * cross.trace()).clamp_min(0.0)
+                - 2.0 * cross.trace()).clamp_min(0.0).float()
 
 
 class ClasswiseFeatureLoss(torch.nn.modules.loss._Loss):

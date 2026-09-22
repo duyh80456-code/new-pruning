@@ -23,7 +23,10 @@ import torch
 from utils.config import FLAGS
 
 from utils.loss_ops import ClasswiseFeatureLoss
+from utils.loss_ops import _feature_scale
 from utils.loss_ops import ConfusionEmbedding
+from utils.loss_ops import FeatureBuresLoss
+from utils.loss_ops import FeatureChannelLoss
 from utils.loss_ops import FeatureMMDLoss
 from utils.loss_ops import FeatureMSELoss
 from utils.loss_ops import FeatureGromovLoss
@@ -342,6 +345,9 @@ def feature_losses():
         ('mse', FeatureMSELoss(align='prefix')),
         ('mmd', FeatureMMDLoss(align='prefix')),
         ('sliced', FeatureSlicedWassersteinLoss(align='prefix')),
+        ('channel', FeatureChannelLoss(align='prefix')),
+        ('bures', FeatureBuresLoss(align='prefix')),
+        ('bures diag', FeatureBuresLoss(align='prefix', diagonal=True)),
         ('wasserstein', FeatureWassersteinLoss(align='prefix')),
     ]
 
@@ -697,6 +703,65 @@ def test_gromov_is_invariant_to_what_it_claims():
               far))
 
 
+def test_bures_survives_more_channels_than_samples():
+    """the shape that killed AK three minutes into a session
+
+    A batch of 256 in 512 channels gives a covariance of rank at most
+    255, so over 250 of its eigenvalues are exactly zero. eigh refuses
+    that outright on the GPU and returns a nan gradient on the CPU, and
+    the branch had no test at this shape because the roster above ran at
+    24 by 32 and Bures was not on it. Both are fixed here.
+
+    Above width 0.5 the paired features have more channels than the batch
+    has rows, so this is the usual case rather than an unlucky one.
+    """
+    loss_fn = FeatureBuresLoss(align='prefix')
+    torch.manual_seed(1995)
+    student = torch.randn(256, 512, requires_grad=True)
+    teacher = torch.randn(256, 512) * 1.3 + 0.2
+    value = loss_fn(student, teacher)
+    value.backward()
+    check('bures runs where the covariance is singular',
+          torch.isfinite(value).item(), 'value {}'.format(value.item()))
+    check('and its gradient is finite there',
+          bool(torch.isfinite(student.grad).all()),
+          'max {:.4g}'.format(student.grad.abs().max().item()))
+    check('and a cloud against itself still reads zero',
+          loss_fn(teacher.clone(), teacher).item() == 0.0,
+          '{:.3e}'.format(loss_fn(teacher.clone(), teacher).item()))
+
+    # Where eigh can be trusted - more rows than channels - the Newton
+    # iteration has an exact answer to be checked against. The ridge
+    # costs about a tenth of a per cent; anything larger would be buying
+    # stability with the number itself.
+    left = torch.randn(512, 128)
+    right = torch.randn(512, 128) * 1.3 + 0.2
+    got = loss_fn(left, right).item()
+    # the loss divides both clouds by one shared spread first, so the
+    # reference has to as well or it is measuring a different quantity
+    scale = _feature_scale(left, right)
+    left, right = left / scale, right / scale
+    gap = (left.mean(dim=0) - right.mean(dim=0)).pow(2).sum()
+    centred_l = left - left.mean(dim=0, keepdim=True)
+    centred_r = right - right.mean(dim=0, keepdim=True)
+    cov_l = centred_l.t().mm(centred_l).double() / 511.0
+    cov_r = centred_r.t().mm(centred_r).double() / 511.0
+
+    def exact_sqrt(matrix):
+        values, vectors = torch.linalg.eigh(matrix)
+        return (vectors * values.clamp_min(0.0).sqrt().unsqueeze(0)).mm(
+            vectors.t())
+
+    root = exact_sqrt(cov_l)
+    cross = exact_sqrt(root.mm(cov_r).mm(root))
+    exact = (gap.double() + cov_l.trace() + cov_r.trace()
+             - 2.0 * cross.trace()).item()
+    check('bures tracks the eigendecomposition where that one works',
+          abs(got - exact) < 0.005 * abs(exact),
+          '{:.4f} against {:.4f}, off by {:+.4f}'.format(
+              got, exact, got - exact))
+
+
 def main():
     print('torch', torch.__version__)
     print()
@@ -724,6 +789,7 @@ def main():
     test_unbalanced_stays_monotone_at_the_shipped_tau()
     test_cosine_ground_behaves_like_a_cost()
     test_gromov_is_invariant_to_what_it_claims()
+    test_bures_survives_more_channels_than_samples()
     print()
     if FAILURES:
         print('{} failed: {}'.format(len(FAILURES), ', '.join(FAILURES)))
