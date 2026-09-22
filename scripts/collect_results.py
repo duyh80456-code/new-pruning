@@ -495,6 +495,18 @@ def render():
       'outlier in the answer and the outlier in the ordering is what a '
       'bad measure looks like, not a revealing one.')
     w('')
+    w('The L1 of a conv filter is not durable in principle: scale a '
+      'filter by c, divide the gain of that channel by c, and the '
+      'function is unchanged, because the normalisation removes the '
+      'scale. For one commit this page treated that as a reason to '
+      'disbelieve the L1 row and believe the gain. It is not. Training '
+      'does not wander through that freedom, because `train.py:267` '
+      'decays the conv weights and `train.py:271` leaves every '
+      'one-dimensional parameter alone, so the conv scale is pinned '
+      'and the gain is the one left to drift. Which is why L1 tracks '
+      'Taylor at 0.892 here and the gain does not, and why Once-for-All '
+      'can sort by L1 and get a usable order out of it.')
+    w('')
     w('There is a second reason, and it is in this repository rather '
       'than in the measurement. Ranking channels by the batch-norm '
       'gain is Network Slimming, and that method trains with an L1 '
