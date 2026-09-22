@@ -65,6 +65,23 @@ QUEUE = [
 RERUN = {(3, 'ak_bures'): 'moved to 15',
          (15, 'ak_bures'): '**rerun**'}
 
+# Rows kept in place so the numbering and the notebook filenames stay
+# aligned, but not to be run. Renumbering would rename files that are
+# already pushed and break every reference to them.
+SKIPPED = {
+    16: 'the transport term charges every channel the same and these '
+        'would have weighted it, by activation and by the Taylor score. '
+        'Set aside for the channel-ordering axis rather than answered. '
+        'The configs and the notebook are there if it comes back.',
+    17: 'superseded by 18. It permutes at epoch 10, an epoch nothing '
+        'measured can justify, and the reason it cannot is that US-Net '
+        'has no window to name: the prefix taking gradient at every '
+        'width is what makes a criterion meaningful and also what sorts '
+        'it. 18 makes the window instead. The one thing 17 alone would '
+        'have produced, the prefix_sorted trajectory under an ordinary '
+        'schedule, comes out of 19 from the end of its warm-up onward.',
+}
+
 HELD = [
     ('ax_var_ground, ay_inverse_ground', 'the same weighting by batch '
      'variance, and its reversal. Variance and activation disagree about '
@@ -133,9 +150,13 @@ def main():
 
     rows, free = [], 0
     for number, (left, right, asks) in enumerate(QUEUE, start=1):
-        result = '{} / {}'.format(cell(number, left), cell(number, right))
-        if 'free' in result:
-            free += 1
+        if number in SKIPPED:
+            result = '_skipped_'
+        else:
+            result = '{} / {}'.format(cell(number, left),
+                                      cell(number, right))
+            if 'free' in result:
+                free += 1
         rows.append(
             '| {} | `kaggle_kd_{:02d}_{}_{}.ipynb` | `{}`, `{}` | {} | {} |'
             .format(number, number, left.split('_')[0],
@@ -203,6 +224,11 @@ def main():
             'from a notebook by editing `BRANCHES`.', '']
     for names, why in HELD:
         out.append('* `{}` - {}'.format(names, why))
+    out += ['', '## Skipped', '',
+            'Still numbered, because renumbering would rename notebooks '
+            'that are already pushed.', '']
+    for number, why in sorted(SKIPPED.items()):
+        out.append('* **row {}** - {}'.format(number, why))
     out += ['', '## Dropped on evidence', '']
     for names, why in DROPPED:
         out.append('* `{}` - {}'.format(names, why))

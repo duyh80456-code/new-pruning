@@ -50,8 +50,8 @@ training loop rather than running it, so anything that lives only in
 | 13 | `kaggle_kd_13_as_at.ipynb` | `as_log_widths`, `at_macs_widths` | Where the sandwich rule spends its free samples | 73.93 / 73.96 |
 | 14 | `kaggle_kd_14_au_av.ipynb` | `au_entropy_kd`, `av_confidence_kd` | Which samples the teacher still has something to say about | 73.00 / 30.46 |
 | 15 | `kaggle_kd_15_aw_ak.ipynb` | `aw_teacher_chain`, `ak_bures` | A chain of teachers, and the Gaussian form that never ran | 74.32 / 73.56 |
-| 16 | `kaggle_kd_16_az_ba.ipynb` | `az_act_ground`, `ba_taylor_ground` | Charge the channels for what they carry | free / free |
-| 17 | `kaggle_kd_17_bb_bc.ipynb` | `bb_reorder_l1`, `bc_reorder_read` | Which channels the narrow subnet gets | free / free |
+| 16 | `kaggle_kd_16_az_ba.ipynb` | `az_act_ground`, `ba_taylor_ground` | Charge the channels for what they carry | _skipped_ |
+| 17 | `kaggle_kd_17_bb_bc.ipynb` | `bb_reorder_l1`, `bc_reorder_read` | Which channels the narrow subnet gets | _skipped_ |
 | 18 | `kaggle_kd_18_bd_be.ipynb` | `bd_warm10_sort`, `be_warm25_sort` | Make a window, then sort inside it | free / free |
 | 19 | `kaggle_kd_19_bf_bg.ipynb` | `bf_warm10_plain`, `bg_warm25_plain` | What the warm-up is worth on its own | free / free |
 
@@ -67,6 +67,13 @@ from a notebook by editing `BRANCHES`.
 * `j_feature_gram` - a control for whether nesting is what makes K work.
 * `ab_no_debias` - a control for whether the debiasing correction is load bearing.
 * `ap_logit_spread` - a test of the flatness diagnosis on branch C, which came last of twelve and is not going to reach K.
+
+## Skipped
+
+Still numbered, because renumbering would rename notebooks that are already pushed.
+
+* **row 16** - the transport term charges every channel the same and these would have weighted it, by activation and by the Taylor score. Set aside for the channel-ordering axis rather than answered. The configs and the notebook are there if it comes back.
+* **row 17** - superseded by 18. It permutes at epoch 10, an epoch nothing measured can justify, and the reason it cannot is that US-Net has no window to name: the prefix taking gradient at every width is what makes a criterion meaningful and also what sorts it. 18 makes the window instead. The one thing 17 alone would have produced, the prefix_sorted trajectory under an ordinary schedule, comes out of 19 from the end of its warm-up onward.
 
 ## Dropped on evidence
 
