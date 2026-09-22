@@ -23,6 +23,7 @@ from utils.loss_ops import build_soft_criterion, build_pair_criterion
 from utils.loss_ops import build_feature_criterion
 from utils.loss_ops import build_feature_pair_criterion
 from utils.loss_ops import horizontal_pairs, ClasswiseFeatureLoss
+from utils.loss_ops import sample_width
 from utils.loss_ops import build_confusion_embedding, build_cost_matrix
 from utils.loss_ops import build_spread_criterion, get_classifier_weight
 from utils.loss_ops import width_gate
@@ -403,8 +404,28 @@ def forward_loss(
         # distribution for them to disagree about; the squared factor keeps
         # the gradient magnitude comparable across settings.
         temperature = getattr(FLAGS, 'kd_temperature', 1.0)
-        loss = (temperature * temperature) * torch.mean(
-            soft_criterion(output / temperature, soft_target))
+        per_sample = soft_criterion(
+            output / temperature, soft_target).view(-1)
+        # The teacher reaches a training error of 0.000, so on most
+        # samples its soft target is one-hot in all but name and KD is
+        # repeating the label. Its entropy says which samples it still
+        # has something to say about. Normalised to mean one, so this
+        # moves KD's attention without moving its scale.
+        weighting = getattr(FLAGS, 'kd_weighting', 'none')
+        if weighting != 'none':
+            with torch.no_grad():
+                entropy = -(soft_target
+                            * soft_target.clamp_min(1e-12).log()).sum(1)
+                if weighting == 'entropy':
+                    weight = entropy
+                elif weighting == 'confidence':
+                    weight = entropy.max() - entropy
+                else:
+                    raise ValueError(
+                        'unknown kd_weighting {}'.format(weighting))
+                weight = weight / weight.mean().clamp_min(1e-12)
+            per_sample = per_sample * weight
+        loss = (temperature * temperature) * torch.mean(per_sample)
     else:
         loss = torch.mean(criterion(output, target))
     # topk
@@ -481,11 +502,19 @@ def run_one_epoch(
             if getattr(FLAGS, 'slimmable_training', False):
                 if getattr(FLAGS, 'universally_slimmable_training', False):
                     # universally slimmable model (us-nets)
+                    # where the free samples land is width_sampling,
+                    # which US-Net left uniform without saying why
                     widths_train = []
                     for _ in range(getattr(FLAGS, 'num_sample_training', 2)-2):
                         widths_train.append(
-                            random.uniform(min_width, max_width))
+                            sample_width(min_width, max_width))
                     widths_train = [max_width, min_width] + widths_train
+                    if getattr(FLAGS, 'teacher_chain', False):
+                        # each width is taught by the next larger one, so
+                        # they have to run widest first. mid_widths is put
+                        # back in the order horizontal_pairs documents
+                        # once the loop is done.
+                        widths_train = sorted(widths_train, reverse=True)
                     # the class cost matrix is read off the classifier, which
                     # keeps moving, so refresh it before the widths are run
                     if needs_cost:
@@ -532,7 +561,9 @@ def run_one_epoch(
                         else:
                             meter = None
 
-                        # inplace distillation
+                        # inplace distillation. chain_target is what
+                        # this width learns from: the widest width
+                        # normally, the previous one under teacher_chain.
                         if width_mult == max_width:
                             loss, soft_target, teacher_feature = forward_loss(
                                 model, criterion, input, target, meter,
@@ -542,6 +573,7 @@ def run_one_epoch(
                             # once a step, not once a width: the rows are
                             # shared by every width, so charging it four
                             # times would only rescale it
+                            chain_target = soft_target
                             if spread_criterion is not None:
                                 loss = loss + (
                                     getattr(FLAGS, 'spread_weight', 0.0)
@@ -551,13 +583,22 @@ def run_one_epoch(
                             if getattr(FLAGS, 'inplace_distill', False):
                                 loss, output, feature = forward_loss(
                                     model, criterion, input, target, meter,
-                                    soft_target=soft_target.detach(),
+                                    soft_target=chain_target.detach(),
                                     soft_criterion=soft_criterion,
                                     return_output=True)
                             else:
                                 loss, output, feature = forward_loss(
                                     model, criterion, input, target, meter,
                                     return_output=True)
+                            if getattr(FLAGS, 'teacher_chain', False):
+                                # the next width down learns from this one
+                                # rather than from the widest, so the gap
+                                # the soft target has to describe is small
+                                with torch.no_grad():
+                                    hot = getattr(FLAGS, 'kd_temperature',
+                                                  1.0)
+                                    chain_target = torch.softmax(
+                                        output / hot, dim=1)
                             # vertical term at the feature level, alongside
                             # whatever the logits are being matched with
                             if (feature_criterion is not None
@@ -583,6 +624,15 @@ def run_one_epoch(
                         else:
                             loss.backward()
                     if deferred:
+                        if getattr(FLAGS, 'teacher_chain', False):
+                            # the loop ran widest first; horizontal_pairs
+                            # documents narrowest first, so undo it here
+                            # rather than let the pairing quietly change
+                            order = sorted(range(len(mid_widths)),
+                                           key=lambda i: mid_widths[i])
+                            mid_widths = [mid_widths[i] for i in order]
+                            mid_outputs = [mid_outputs[i] for i in order]
+                            mid_features = [mid_features[i] for i in order]
                         pair_loss = 0.0
                         pairs = horizontal_pairs(mid_widths)
                         for left, right in pairs:

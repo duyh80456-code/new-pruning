@@ -1,4 +1,5 @@
 import math
+import random
 
 import torch
 
@@ -760,6 +761,37 @@ class MultiTierFeatureLoss(torch.nn.modules.loss._Loss):
         for weight, left, right in zip(weights, student, teacher):
             total = total + weight * self.inner(left, right)
         return total / max(sum(weights), 1e-12)
+
+
+def sample_width(low, high):
+    """where in the width range the sandwich rule spends its free samples
+
+    US-Net draws the middle widths uniformly and says nothing about why.
+    On this supernet that spends the budget in the wrong place: A gains
+    3.10 points across 0.25 to 0.50 and 1.90 across 0.55 to 1.00, so the
+    curve is steepest at the narrow end, while a uniform draw puts two
+    thirds of its samples in the flat half.
+
+    Three settings, and the first is what every finished run used:
+
+      uniform  flat in width, as published
+      log      flat in log width, which doubles the mass below 0.5
+      macs     flat in compute. MACs measured at width^1.965 on this
+               model, so this is flat in width squared and leans the
+               other way, toward the wide end
+
+    log and macs are a bracket rather than a proposal and a control: one
+    moves the samples narrow, the other wide, and if neither beats
+    uniform then where they land does not matter.
+    """
+    mode = getattr(FLAGS, 'width_sampling', 'uniform')
+    if mode == 'uniform':
+        return random.uniform(low, high)
+    if mode == 'log':
+        return math.exp(random.uniform(math.log(low), math.log(high)))
+    if mode == 'macs':
+        return math.sqrt(random.uniform(low * low, high * high))
+    raise ValueError('unknown width_sampling {}'.format(mode))
 
 
 def width_gate(width_mult):

@@ -25,6 +25,7 @@ from utils.config import FLAGS
 from utils.loss_ops import ClasswiseFeatureLoss
 from utils.loss_ops import _feature_scale
 from utils.loss_ops import ConfusionEmbedding
+from utils.loss_ops import CrossEntropyLossSoft
 from utils.loss_ops import FeatureBuresLoss
 from utils.loss_ops import FeatureChannelLoss
 from utils.loss_ops import FeatureMMDLoss
@@ -762,6 +763,79 @@ def test_bures_survives_more_channels_than_samples():
               got, exact, got - exact))
 
 
+def test_the_three_new_axes_leave_k_exactly_where_it_was():
+    """K has to be bit identical, not merely close
+
+    Three settings were threaded through train.py for AS through AW, and
+    all three sit on the path K already runs. The branch harness cannot
+    catch a regression here because it draws its widths unseeded, so the
+    same branch gives a different number twice in a row. These check the
+    arithmetic directly.
+    """
+    generator = torch.Generator().manual_seed(44)
+    logits = torch.randn(32, 100, generator=generator)
+    teacher = torch.softmax(
+        torch.randn(32, 100, generator=generator) * 3.0, dim=1)
+    soft = CrossEntropyLossSoft()
+
+    # kd_weighting 'none' is the published reduction, spelt differently
+    was = torch.mean(soft(logits, teacher)).item()
+    now = torch.mean(soft(logits, teacher).view(-1)).item()
+    check('kd_weighting none is the old reduction exactly', was == now,
+          '{:.8f} against {:.8f}'.format(was, now))
+
+    # both weightings must leave the term's scale alone, or a branch
+    # that changes attention is confounded with one that changes weight
+    entropy = -(teacher * teacher.clamp_min(1e-12).log()).sum(1)
+    for name, raw in (('entropy', entropy),
+                      ('confidence', entropy.max() - entropy)):
+        weight = raw / raw.mean().clamp_min(1e-12)
+        check('{:10} weights average to one'.format(name),
+              abs(weight.mean().item() - 1.0) < 1e-5,
+              '{:.6f}'.format(weight.mean().item()))
+
+    # and they have to point opposite ways, which is the whole reason
+    # AV is worth a session
+    sharp = entropy.argmin()
+    blunt = entropy.argmax()
+    ent_w = entropy / entropy.mean()
+    con_w = (entropy.max() - entropy) / (entropy.max() - entropy).mean()
+    check('entropy backs the sample the teacher is least sure of',
+          ent_w[blunt] > ent_w[sharp],
+          '{:.3f} against {:.3f}'.format(ent_w[blunt], ent_w[sharp]))
+    check('confidence backs the opposite one',
+          con_w[sharp] > con_w[blunt],
+          '{:.3f} against {:.3f}'.format(con_w[sharp], con_w[blunt]))
+
+
+def test_the_chain_does_not_move_which_widths_get_coupled():
+    """AW runs the loop widest first, and horizontal_pairs reads order
+
+    horizontal_pairs is positional: it documents 'narrowest first' and
+    takes everything after index 0 as the middles. Running the sandwich
+    widest first to pass the teaching baton reverses that, and would
+    quietly pair the narrowest with a middle instead of the two middles
+    with each other. train.py sorts back before pairing; this is what
+    says it still does.
+    """
+    drawn = [0.25, 0.61, 0.43]          # as the loop collects them now
+    reversed_loop = [0.61, 0.43, 0.25]  # as teacher_chain collects them
+
+    restored = sorted(reversed_loop)
+    chosen = horizontal_pairs(drawn)
+    after = horizontal_pairs(restored)
+    check('the pairing is one pair either way',
+          len(chosen) == len(after) == 1,
+          '{} and {}'.format(chosen, after))
+    picked = {drawn[i] for i in chosen[0]}
+    picked_after = {restored[i] for i in after[0]}
+    check('and it is the two middle widths both times',
+          picked == picked_after == {0.61, 0.43},
+          '{} against {}'.format(sorted(picked), sorted(picked_after)))
+    check('the narrowest is in neither',
+          0.25 not in picked and 0.25 not in picked_after)
+
+
 def main():
     print('torch', torch.__version__)
     print()
@@ -790,6 +864,8 @@ def main():
     test_cosine_ground_behaves_like_a_cost()
     test_gromov_is_invariant_to_what_it_claims()
     test_bures_survives_more_channels_than_samples()
+    test_the_three_new_axes_leave_k_exactly_where_it_was()
+    test_the_chain_does_not_move_which_widths_get_coupled()
     print()
     if FAILURES:
         print('{} failed: {}'.format(len(FAILURES), ', '.join(FAILURES)))

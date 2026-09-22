@@ -1,5 +1,13 @@
 """every branch config, built and stepped, on the CPU
 
+What this does NOT do: run train.py. The loop below is a reimplementation
+of its shape, so anything that lives only in train.py - teacher_chain
+reordering the widths, kd_weighting reweighting the KD term - is inert
+here. Those are exercised by the smoke config in each notebook, which
+runs the real train.py for two iterations before a card is committed to
+a long session. A branch that passes here and nothing else has only had
+its config and its criteria checked.
+
 A config that does not parse, or a combination of axes that does not wire
 together, costs a Kaggle session to discover and seconds to discover here.
 This builds the model and every criterion each config asks for, then runs
@@ -34,6 +42,13 @@ def check_single():
 
     import torch
 
+    # Seeded, so the same branch gives the same number twice. Unseeded it
+    # could not have caught a regression: K read 22.5315 and 22.4889 on
+    # consecutive runs of unchanged code, which is noise wide enough to
+    # hide any change worth catching.
+    random.seed(1995)
+    torch.manual_seed(1995)
+
     from utils.config import FLAGS
     from utils.loss_ops import build_confusion_embedding
     from utils.loss_ops import build_cost_matrix
@@ -43,6 +58,7 @@ def check_single():
     from utils.loss_ops import build_pair_criterion
     from utils.loss_ops import build_soft_criterion
     from utils.loss_ops import WassersteinLossSoft, WassersteinPairLoss
+    from utils.loss_ops import sample_width
     from utils.loss_ops import width_gate
 
     FLAGS.width_mult_list = FLAGS.width_mult_range
@@ -86,7 +102,7 @@ def check_single():
         optimizer.zero_grad()
 
         widths = [high, low] + [
-            random.uniform(low, high)
+            sample_width(low, high)
             for _ in range(getattr(FLAGS, 'num_sample_training', 2) - 2)]
         if isinstance(soft, WassersteinLossSoft) or isinstance(
                 pair, WassersteinPairLoss):
