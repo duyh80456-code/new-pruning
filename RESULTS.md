@@ -420,21 +420,22 @@ K, with:
 * `feature_weight: 0.04` - the weight on the feature terms, set by matching gradient norms rather than loss values
 * `wasserstein_p: 1.0` - an absolute ground cost instead of a squared one, so the gradient does not decay as the widths converge
 
-## Answered without a run
+## Reopened: which channels the prefix holds
 
 US-Net slices channels as `weight[:k]`, so which channels a narrow width gets is decided by initialisation and never revisited. Sorting them by importance, the way Once-for-All does for elastic width, is the obvious thing to try, and it would have cost a session.
 
-It would have moved nothing. `scripts/channel_order.py` reads K's checkpoint and compares the L1 mass the first k channels hold against the mass the best k would hold. The control is the same checkpoint with each layer's output channels shuffled, so the layer shapes and the L1 values are identical and only the order is destroyed.
+`scripts/channel_order.py` reads a checkpoint and compares the importance mass the first k channels hold against the mass the best k would hold. The control is the same checkpoint with each layer's output channels shuffled, so the shapes and the values are identical and only the order is destroyed. Read on K, at width 0.25:
 
-| width | K as trained | order destroyed | sorted |
-|---|---|---|---|
-| 0.25 | 0.468 | 0.250 | 0.472 |
-| 0.50 | 0.714 | 0.502 | 0.720 |
-| 0.75 | 0.879 | 0.757 | 0.884 |
+| importance | shuffled | as trained | best possible | recovered |
+|---|---|---|---|---|
+| L1 of the conv filter | 0.250 | 0.468 | 0.472 | 98% |
+| absolute batch-norm scale | 0.254 | 0.303 | 0.357 | 48% |
 
-Shuffled, the first quarter of the channels holds a quarter of the mass, which is what no ordering at all looks like. As trained it holds 0.468, close to double its share, and within 0.003 of what the best possible quarter would hold. The headroom sorting could recover is 0.003 against 0.221 for the shuffled control, seventy times smaller.
+Those are different answers, and the second is the one to believe. In a network with batch norm the L1 of a conv filter is not a measure of anything: scale a filter by c and divide the batch-norm gain of that channel by c and the function is unchanged, because the normalisation removes the scale. The gain carries it. Ranked by the two criteria, the same layer disagrees with itself - rank correlation averages 0.581 across the twenty layers and falls to 0.067 in one of them.
 
-So the sandwich rule already sorts the channels. It trains the prefix at every sampled width and the tail only at the widest, and at 0.25 the prefix has to classify alone, so importance is not a property an explicit sort would discover here - it is a property the objective spends every step creating, and it has reached it. The branch is closed before it was written.
+So the sandwich rule does push importance toward the prefix, which is what the objective would predict: the prefix trains at every sampled width and at 0.25 has to classify alone. But by the measure that survives the normalisation it has done about half the sorting available, not all of it. This page said otherwise for one commit, on the strength of the weaker of the two numbers.
+
+What is still not measured is whether the widths agree on the ordering. The nesting admits one global permutation and there are sixteen widths to satisfy, so a channel that earns its place at 1.00 need not earn it at 0.25. That, and not the headroom, is what would decide the branch.
 
 ## Not settled
 
