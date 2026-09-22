@@ -10,10 +10,19 @@ used as a constant.
 
 What that buys is every assumption gone: no drift, no warmup, no hook,
 and a weight you can look at before the run rather than after. What it
-costs is that the number comes from a model that has already finished,
-so a branch using it is a two-run method and is not comparable to K on
-one run. Both readings are worth having, which is why this exists
-beside BA rather than instead of it.
+costs is that the number comes from a model that has already finished.
+
+Which is why nothing in apps/ reads what this writes. Every branch here
+trains from scratch - pretrained and resume both empty, parameters
+reset - because A's 73.52 was trained that way and a branch that starts
+from someone else's finished weights is not being compared to it. A
+loss that loaded this file would be a two-run method wearing a one-run
+number.
+
+So this is a measurement tool. It produced the channel weights quoted
+in RESULTS.md and it answers what the score looks like on a trained
+supernet. Wiring it into training would need the comparison rebuilt
+first, against a second A that got the same head start.
 
 Measured across the middle widths, not at 1.00. The feature term runs
 between two sampled middle widths and never at the top, and importance
