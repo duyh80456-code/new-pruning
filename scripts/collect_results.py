@@ -527,6 +527,22 @@ def render():
       'The fixed reference the quantity actually has, log(C) minus '
       'entropy, survives that case and does not move with the batch. '
       'A rerun of this axis should use it.')
+    w('- Whether AW is ahead of K, and the table should not be read '
+      'as saying it is. AW is first at 74.32 against 74.26, a gap of '
+      '0.06 where a difference of means over sixteen widths carries '
+      '0.01 to 0.03 of rounding alone. The number that settles it is '
+      'not the mean: AW is ahead of K at eight widths out of sixteen, '
+      'behind at eight, scattered from -0.26 to +0.71. A real gain '
+      'does not look like that. K against A is ahead at all sixteen, '
+      'which is what one does look like. On this evidence AW ties K '
+      'and the ordering between them is a coin.')
+    w('- What AW is still worth. It reaches K from somewhere else - it '
+      'changes which width teaches which and never touches the '
+      'transport term - and it is the first branch off that axis to '
+      'get there. Its NLL is 1.091 against 1.127, about twice the '
+      'gap two seeds of A showed, which is weak but points the same '
+      'way. Two mechanisms arriving at the same place is worth a '
+      'second seed on both, which is the run to do next.')
     w('- Whether K sits on a peak or on a high draw. AS, AT, AC and AD '
       'are K with one knob moved in four different directions - the '
       'free widths drawn narrower, the free widths drawn wider, the '
