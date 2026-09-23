@@ -541,39 +541,45 @@ def render():
       'is the one with the most room to disagree.')
     w('')
     w('Every row above is read on a finished checkpoint, which cannot '
-      'say when the prefix got that way. BH and BI print the same '
-      'overlap at the top of every epoch, and they hold the narrow end '
-      'back for the first 10 and 25 epochs, so between them they '
-      'measure it. Under L1, with only width 1.00 training:')
+      'say when the prefix got that way. BF, BG, BH and BI print the '
+      'same overlap at the top of every epoch and hold the narrow end '
+      'back for the first 10 or 25, so between them they measure it. '
+      'Under L1:')
     w('')
-    w('| epoch | BH, warm-up of 10 | BI, warm-up of 25 |')
-    w('|---|---|---|')
-    w('| 1 | 0.254 | 0.254 |')
-    w('| 5 | 0.226 | 0.232 |')
-    w('| 10 | 0.231, permuted after | 0.244 |')
-    w('| 25 | - | 0.231, permuted after |')
-    w('| the epoch after the permutation | 0.844 | 0.830 |')
-    w('| 99 | 0.991 | 0.994 |')
+    w('| | last warm-up epoch | the epoch after | 99 |')
+    w('|---|---|---|---|')
+    w('| BF, warm 10, nothing permuted | 0.238 | 0.744 | 0.987 |')
+    w('| BH, warm 10, permuted by taylor | 0.231 | 0.844 | 0.991 |')
+    w('| BG, warm 25, nothing permuted | 0.211 | 0.731 | 0.971 |')
+    w('| BI, warm 25, permuted by taylor | 0.255 | 0.830 | 0.994 |')
+    w('')
+    w('Two things, and the second closes the idea.')
     w('')
     w('Twenty five epochs at full width leave the ordering where '
       'initialisation put it. It does not drift up and it does not '
-      'drift down: every reading in both warm-ups sits between 0.216 '
-      'and 0.254, against a floor of 0.25 at this fraction. So the 99% '
-      'a finished K reads is not what training does to a network, it '
-      'is what the narrow widths do to it, and the window these '
-      'branches were built to open stays open for at least 25 epochs.')
+      'drift down: every reading in all four warm-ups sits between '
+      '0.195 and 0.256, against a floor of 0.25 at this fraction. So '
+      'the 96 to 98 per cent a finished K reads is not what training '
+      'does to a network, it is what the narrow widths do to it.')
     w('')
-    w('The jump is the other half. Both permutations rank by Taylor '
-      'and the column reports L1, so the reading has no obligation to '
-      'move at all, and it goes to 0.84 at once. That is the two '
-      'criteria agreeing on a mid-run model about as well as the 0.892 '
-      'rank correlation on a finished one.')
+    w('And they do it in one epoch, without being asked. BF and BG '
+      'permute nothing, and the epoch after the narrow widths arrive '
+      'they read 0.744 and 0.731. The sandwich rule sorts its own '
+      'prefix immediately: weight[:k] takes gradient at every width '
+      'and has to classify alone at 0.25, and one epoch of that is '
+      'enough. A permutation at that moment buys 0.10 of overlap, '
+      'which is one epoch of head start, and by the end the permuted '
+      'and unpermuted runs are both at 0.97 to 0.99.')
     w('')
-    w('None of that says the sorting is worth doing. BH and BI land at '
-      '73.71 and 73.95, below K at 74.26, and their narrow widths '
-      'trained for 90 and 75 epochs rather than 99. BF and BG take the '
-      'same two warm-ups and do not permute, and until they run there '
-      'is no way to tell the warm-up apart from the sort.')
+    w('Which is why sorting is worth nothing here, and the accuracy '
+      'agrees. Against its own control the taylor permutation is '
+      '-0.19 at a warm-up of 10 and +0.17 at 25: opposite signs, both '
+      'inside the noise, and their average is -0.01. This is also the '
+      'difference between US-Net and Once-for-All that the idea came '
+      'from. OFA makes width elastic last, so its weights mature '
+      'while no position is asked for anything the others are not, '
+      'and the ordering stays arbitrary until something sorts it. '
+      'US-Net asks from step one, so there is nothing left to sort.')
     w('')
     w('Nothing here is sorted, and saying the sandwich rule sorts the '
       'channels gets the mechanism backwards. The index mapping is '
@@ -661,17 +667,20 @@ def render():
       'sigma separates them, and it is the same measurement the bullet '
       'above asks for.')
     w('')
-    w('- And BH and BI make it six. They are K with a warm-up and a '
-      'Taylor permutation, which shares nothing mechanically with a '
-      'free-width draw or a feature weight, and they land at 73.71 and '
-      '73.95. Six perturbations of K, none of them related to any '
-      'other, now sit between 73.71 and 73.96 while K sits at 74.26 '
-      'alone. That is the strongest evidence in this table for the '
-      'second reading, that K drew high and this family is worth about '
-      '73.9. It is not proof: BH and BI also trained their narrow '
-      'widths for 90 and 75 epochs rather than 99, so they had a '
-      'reason to land low that the other four did not. The measurement '
-      'that would settle it is still a second seed of K.')
+    w('- And the warm-up family makes it eight. BF, BG, BH and BI are '
+      'K with a warm-up, two of them also with a taylor permutation, '
+      'which shares nothing mechanically with a free-width draw or a '
+      'feature weight. They land at 73.90, 73.78, 73.71 and 73.95. '
+      'Eight perturbations of K now sit between 73.71 and 73.96 with '
+      'a mean of 73.88, and K sits at 74.26 alone. Eight unrelated '
+      'ways of nudging a branch do not all land 0.30 to 0.55 below it '
+      'by accident. Either every one of those knobs was already at '
+      'its best setting, or K drew high and this family is worth '
+      'about 73.9. The second reading now needs less explaining than '
+      'the first. It is still not proof - BH and BI trained their '
+      'narrow widths for 90 and 75 epochs rather than 99, and BF and '
+      'BG too - and the measurement that would settle it is still a '
+      'second seed of K.')
     w('')
 
     with open(PAGE, 'w', encoding='utf-8') as handle:
