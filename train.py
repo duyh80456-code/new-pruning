@@ -668,15 +668,28 @@ def run_one_epoch(
                             pair_loss = pair_loss + width_gate(
                                 0.5 * (mid_widths[left]
                                        + mid_widths[right])) * here
-                        # averaged, so horizontal_weight keeps its meaning
-                        # when the number of pairs changes
-                        pair_loss = pair_loss / max(len(pairs), 1)
-                        losses.append(
-                            getattr(FLAGS, 'horizontal_weight', 1.0)
-                            * pair_loss)
-                        if is_master():
-                            meters[str(max_width)]['pair_loss'].cache(
-                                pair_loss.item())
+                        # A warm-up epoch runs the widest width alone,
+                        # so there are no middle widths, no pairs, and
+                        # pair_loss is still the float it was initialised
+                        # to. Adding that to losses is a no-op and calling
+                        # .item() on it is an AttributeError, which is
+                        # how bd and be died on their first real epoch.
+                        # The term is skipped rather than cached as a
+                        # zero, because a zero would read as a pair term
+                        # that ran and had nothing to say.
+                        # flush_scalar_meters drops the empty meter, so a
+                        # warm-up epoch simply has no pair_loss on its
+                        # line.
+                        if pairs:
+                            # averaged, so horizontal_weight keeps its
+                            # meaning when the number of pairs changes
+                            pair_loss = pair_loss / len(pairs)
+                            losses.append(
+                                getattr(FLAGS, 'horizontal_weight', 1.0)
+                                * pair_loss)
+                            if is_master():
+                                meters[str(max_width)]['pair_loss'].cache(
+                                    pair_loss.item())
                         loss = sum(losses)
                         loss.backward()
                 else:

@@ -58,7 +58,7 @@ def check_single():
     from utils.loss_ops import build_pair_criterion
     from utils.loss_ops import build_soft_criterion
     from utils.loss_ops import WassersteinLossSoft, WassersteinPairLoss
-    from utils.loss_ops import sample_width
+    from utils.loss_ops import training_widths
     from utils.loss_ops import width_gate
 
     FLAGS.width_mult_list = FLAGS.width_mult_range
@@ -90,7 +90,14 @@ def check_single():
 
     low, high = FLAGS.width_mult_range[0], FLAGS.width_mult_range[-1]
     batch = 8
-    for _ in range(2):
+    # train.py counts epochs from 1, and a branch with a warm-up runs the
+    # widest width alone until narrow_start_epoch. That leaves no middle
+    # widths, so no pairs, which is a different shape and the one that
+    # broke: bd and be passed here, passed the smoke run, and then died
+    # on their first real epoch. Both shapes get stepped now, and a
+    # branch without a warm-up steps the ordinary one twice as before.
+    warm = getattr(FLAGS, 'narrow_start_epoch', 0)
+    for epoch in ([1, warm] if warm > 1 else [1, 1]):
         data = torch.randn(batch, 3, FLAGS.image_size, FLAGS.image_size)
         target = torch.randint(0, FLAGS.num_classes, (batch,))
         # the classwise feature term needs this batch's labels, set once a
@@ -101,9 +108,7 @@ def check_single():
                 term.set_target(target)
         optimizer.zero_grad()
 
-        widths = [high, low] + [
-            sample_width(low, high)
-            for _ in range(getattr(FLAGS, 'num_sample_training', 2) - 2)]
+        widths = training_widths(epoch, low, high)
         if isinstance(soft, WassersteinLossSoft) or isinstance(
                 pair, WassersteinPairLoss):
             cost = build_cost_matrix(model, confusion)
@@ -138,7 +143,9 @@ def check_single():
                 mid_features.append(features)
                 mid_widths.append(width)
 
-        if pair is not None or feature_pair is not None:
+        # mid_widths is empty on a warm-up step, and the average below
+        # would divide by zero before the pair terms indexed past the end
+        if (pair is not None or feature_pair is not None) and mid_widths:
             gate = width_gate(sum(mid_widths) / len(mid_widths))
             extra = 0.0
             if pair is not None:

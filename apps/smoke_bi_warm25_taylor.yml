@@ -64,7 +64,14 @@ lr: 0.2
 lr_scheduler: cosine_decaying
 lr_warmup: True
 lr_warmup_epochs: 1
-num_epochs: 2
+# 3 epochs, not 2, and the narrow end arrives at 2, not 1.
+# train.py counts from epoch 1, so narrow_start_epoch 1 meant
+# 1 < 1 was false on the only epoch that ran and the warm-up
+# was never entered. The smoke run was set up to skip the one
+# thing this branch adds, and it passed while the real config
+# died on its first epoch. Now epoch 1 is the warm-up and
+# epoch 2 is where the narrow widths arrive.
+num_epochs: 3
 
 # model profiling
 profiling: [gpu]
@@ -106,8 +113,8 @@ horizontal_kd: True
 horizontal_weight: 1.0
 feature_kd: True
 feature_align: prefix
-narrow_start_epoch: 1
-reorder_epoch: 1
+narrow_start_epoch: 2
+reorder_epoch: 2
 reorder_by: taylor
 taylor_batches: 2
 reorder_report: True
