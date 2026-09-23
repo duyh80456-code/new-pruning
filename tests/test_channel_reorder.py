@@ -154,10 +154,18 @@ def test_it_reaches_through_the_wrapper_train_py_hands_it():
     Every other check here runs on the bare model. If unwrapping were
     wrong this would raise, or worse, permute nothing and report that it
     had.
+
+    device_ids is empty on purpose, which makes the wrapper forward
+    straight to .module and scatter nothing. What is under test is that
+    collect() reaches through it, not that PyTorch can split a batch.
+    A real DataParallel refuses a model still on the CPU, so without
+    this the check passes on a machine with no GPU and stops the session
+    on one with two - before a card is touched, which is what these
+    checks are for, but for the wrong reason.
     """
     torch.manual_seed(1995)
     model = build()
-    wrapper = torch.nn.DataParallel(model)
+    wrapper = torch.nn.DataParallel(model, device_ids=[])
     x = torch.randn(4, 3, 32, 32)
     before = at_width(wrapper, x, 1.0)
     spaces, moved, held = reorder(wrapper, 'read')

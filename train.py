@@ -976,9 +976,19 @@ def train_val_test():
         # the co-adaptation the narrow widths have built, so doing it
         # repeatedly would keep paying that without ever settling.
         if getattr(FLAGS, 'reorder_report', False):
-            print('prefix_sorted {} {:.4f}'.format(
-                epoch, channel_reorder.report(
-                    model_wrapper, getattr(FLAGS, 'reorder_by', 'l1'))))
+            # Reported by a criterion that needs no gradient, and named
+            # in the line so an l1 trajectory is never read later as a
+            # taylor one. Asking for taylor here would print nan every
+            # epoch: nothing has charged the gains at the top of an
+            # epoch, so the score does not exist yet and the trajectory
+            # this exists to draw would be lost for the whole run. The
+            # taylor reading at the epoch that decides anything is the
+            # one reorder() returns below.
+            shown = getattr(FLAGS, 'reorder_by', 'l1')
+            if shown == 'taylor':
+                shown = 'l1'
+            print('prefix_sorted {} {} {:.4f}'.format(
+                epoch, shown, channel_reorder.report(model_wrapper, shown)))
         if epoch == getattr(FLAGS, 'reorder_epoch', -1):
             if getattr(FLAGS, 'reorder_by', 'l1') == 'taylor':
                 # The Taylor score needs a gradient on the gains, and
