@@ -59,6 +59,8 @@ QUEUE = [
      'What the warm-up is worth on its own'),
     ('bh_warm10_taylor', 'bi_warm25_taylor',
      'The same window, sorted by what removal would cost'),
+    ('k_seed2', 'bj_chain_only',
+     'The noise on K, and the chain without the transport'),
 ]
 
 # ak_bures died in linalg.eigh three minutes in and the fix landed after,
@@ -89,10 +91,11 @@ HELD = [
      'variance, and its reversal. Variance and activation disagree about '
      'a channel that is large and constant, so they are separate '
      'questions; this pair is the follow-up if row 16 moves anything.'),
-    ('k_seed2, a_seed3', 'seeds. Six branches now sit within a quarter '
-     'point of each other at the top and sigma is still unmeasured, so '
-     'these have stopped being defensive and started being the thing '
-     'that decides the order.'),
+    ('a_seed3', 'a third seed of A. Held because the seed that matters '
+     'is K, and that one has moved out of this list into row 21: ten '
+     'unrelated perturbations of K now sit 0.28 to 0.55 below it, which '
+     'is either ten knobs already optimal or one high draw, and only '
+     'sigma tells them apart.'),
     ('z_eps_100, q_feature_mse', 'controls for K. They are built to lose: '
      'blur the plan away, or forbid rematching, and see what is left. Y '
      'at eps 0.5 has since made most of z_eps_100\'s point for a quarter '

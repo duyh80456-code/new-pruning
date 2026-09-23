@@ -102,6 +102,37 @@ this a one sided test. A win is clean, because it won despite the
 handicap. A loss says nothing.
 """
 
+SETTLE = """Fifty runs, and neither of the two things this table most needs to
+know has been measured. Both are measured here, and neither is a new
+idea - that is the point of this notebook.
+
+**Is 74.26 real.** Ten branches are K with one knob moved in ten
+mechanically unrelated directions: the free widths drawn narrower and
+wider, the feature weight halved and doubled, and six warm-up variants.
+They land between 73.71 and 73.98, mean 73.89, and K sits alone at
+74.26. Ten unrelated nudges do not all land below a branch by accident.
+Either every knob was already at its best setting, or K drew a high
+seed and this family is worth about 73.9. Nothing in the table
+separates those, because sigma has never been measured on K. A second
+seed does, and it is the same config with `random_seed: 2026`.
+
+**Does the teacher chain do anything by itself.** AW leads at 74.32 and
+the page has been describing it as a second mechanism reaching K from
+elsewhere. That was wrong, and diffing the configs says so: AW is K
+plus one line, `teacher_chain: True`, with the transport term running
+inside it untouched. So chaining has only ever been read on top of
+transport, where it is worth +0.06. The two by two is missing a cell -
+A at 73.52, K at 74.26, AW at 74.32, and nothing for chaining alone.
+BJ is that cell: A with the chain and no transport anywhere.
+
+Near 73.5 says the transport term is the only active ingredient and the
+report has one clean claim. Near 74.3 says chaining gets there on its
+own and the two are redundant rather than additive, which is a
+different paper. Either answer is worth more than another term added to
+the loss: every addition to K so far has cost accuracy except the one
+that did nothing.
+"""
+
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
     # whose results are already recorded. OFF_AXIS is kept because it is
@@ -116,6 +147,8 @@ QUEUE = [
      'What the warm-up is worth on its own', WARM),
     (20, 'bh_warm10_taylor', 'bi_warm25_taylor',
      'The same window, sorted by what removal would cost', WARM),
+    (21, 'k_seed2', 'bj_chain_only',
+     'The noise on K, and the chain without the transport', SETTLE),
 ]
 
 HEADER = """# {number}. {title}
@@ -149,7 +182,7 @@ checkpoint, so at most one is lost.
 Send back the final table. Pasting the output of the last cell is enough.
 """
 
-CONFIG = """# Fixed for this notebook. Notebook {number} of 20.
+CONFIG = """# Fixed for this notebook. Notebook {number} of 21.
 BRANCHES = {branches!r}
 
 SMOKE_FIRST = True

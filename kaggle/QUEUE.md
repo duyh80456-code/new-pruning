@@ -52,9 +52,10 @@ training loop rather than running it, so anything that lives only in
 | 15 | `kaggle_kd_15_aw_ak.ipynb` | `aw_teacher_chain`, `ak_bures` | A chain of teachers, and the Gaussian form that never ran | 74.32 / 73.56 |
 | 16 | `kaggle_kd_16_az_ba.ipynb` | `az_act_ground`, `ba_taylor_ground` | Charge the channels for what they carry | _skipped_ |
 | 17 | `kaggle_kd_17_bb_bc.ipynb` | `bb_reorder_l1`, `bc_reorder_read` | Which channels the narrow subnet gets | _skipped_ |
-| 18 | `kaggle_kd_18_bd_be.ipynb` | `bd_warm10_sort`, `be_warm25_sort` | Make a window, then sort inside it | free / free |
-| 19 | `kaggle_kd_19_bf_bg.ipynb` | `bf_warm10_plain`, `bg_warm25_plain` | What the warm-up is worth on its own | free / free |
-| 20 | `kaggle_kd_20_bh_bi.ipynb` | `bh_warm10_taylor`, `bi_warm25_taylor` | The same window, sorted by what removal would cost | free / free |
+| 18 | `kaggle_kd_18_bd_be.ipynb` | `bd_warm10_sort`, `be_warm25_sort` | Make a window, then sort inside it | 73.96 / 73.98 |
+| 19 | `kaggle_kd_19_bf_bg.ipynb` | `bf_warm10_plain`, `bg_warm25_plain` | What the warm-up is worth on its own | 73.90 / 73.78 |
+| 20 | `kaggle_kd_20_bh_bi.ipynb` | `bh_warm10_taylor`, `bi_warm25_taylor` | The same window, sorted by what removal would cost | 73.71 / 73.95 |
+| 21 | `kaggle_kd_21_k_bj.ipynb` | `k_seed2`, `bj_chain_only` | The noise on K, and the chain without the transport | free / free |
 
 ## Held back
 
@@ -62,7 +63,7 @@ These have configs in `apps/` and are not queued. Any of them runs
 from a notebook by editing `BRANCHES`.
 
 * `ax_var_ground, ay_inverse_ground` - the same weighting by batch variance, and its reversal. Variance and activation disagree about a channel that is large and constant, so they are separate questions; this pair is the follow-up if row 16 moves anything.
-* `k_seed2, a_seed3` - seeds. Six branches now sit within a quarter point of each other at the top and sigma is still unmeasured, so these have stopped being defensive and started being the thing that decides the order.
+* `a_seed3` - a third seed of A. Held because the seed that matters is K, and that one has moved out of this list into row 21: ten unrelated perturbations of K now sit 0.28 to 0.55 below it, which is either ten knobs already optimal or one high draw, and only sigma tells them apart.
 * `z_eps_100, q_feature_mse` - controls for K. They are built to lose: blur the plan away, or forbid rematching, and see what is left. Y at eps 0.5 has since made most of z_eps_100's point for a quarter of the cost.
 * `r_feature_mmd` - a control from outside transport.
 * `j_feature_gram` - a control for whether nesting is what makes K work.
