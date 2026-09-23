@@ -148,24 +148,42 @@ def test_the_optimizer_state_moves_with_the_weights():
           not torch.allclose(after, before))
 
 
+class Wrapped(torch.nn.Module):
+    """what train.py hands reorder(): something with .module on it
+
+    Not a real DataParallel, on purpose. That class decides what it is
+    in its constructor from what the machine has: with no card it keeps
+    the module and returns, with cards it demands the parameters already
+    be on cuda:0 and indexes device_ids[0]. Either way a check built on
+    it tests one thing here and a different thing on Kaggle, which is
+    how this file passed locally twice and stopped the session twice.
+
+    _unwrap asks for .module and nothing else, so this is the whole
+    contract, and it has no path that depends on the hardware. The real
+    DataParallel is covered where it can be: train.py:50 builds one and
+    the smoke run permutes through it at epoch 1 on the card.
+    """
+
+    def __init__(self, module):
+        super().__init__()
+        self.module = module
+
+    def forward(self, *args, **kwargs):
+        return self.module(*args, **kwargs)
+
+
 def test_it_reaches_through_the_wrapper_train_py_hands_it():
-    """train.py passes model_wrapper, which is a DataParallel
+    """train.py passes model_wrapper, not the bare model
 
     Every other check here runs on the bare model. If unwrapping were
     wrong this would raise, or worse, permute nothing and report that it
     had.
-
-    device_ids is empty on purpose, which makes the wrapper forward
-    straight to .module and scatter nothing. What is under test is that
-    collect() reaches through it, not that PyTorch can split a batch.
-    A real DataParallel refuses a model still on the CPU, so without
-    this the check passes on a machine with no GPU and stops the session
-    on one with two - before a card is touched, which is what these
-    checks are for, but for the wrong reason.
     """
     torch.manual_seed(1995)
     model = build()
-    wrapper = torch.nn.DataParallel(model, device_ids=[])
+    wrapper = Wrapped(model)
+    check('the wrapper is the shape train.py hands over',
+          hasattr(wrapper, 'module') and wrapper.module is model)
     x = torch.randn(4, 3, 32, 32)
     before = at_width(wrapper, x, 1.0)
     spaces, moved, held = reorder(wrapper, 'read')
