@@ -541,24 +541,35 @@ def render():
       'is the one with the most room to disagree.')
     w('')
     w('Every row above is read on a finished checkpoint, which cannot '
-      'say when the prefix got that way. BF, BG, BH and BI print the '
-      'same overlap at the top of every epoch and hold the narrow end '
-      'back for the first 10 or 25, so between them they measure it. '
-      'Under L1:')
+      'say when the prefix got that way. Six branches print the same '
+      'overlap at the top of every epoch and hold the narrow end back '
+      'for the first 10 or 25, so between them they measure it. Under '
+      'L1, at the last warm-up epoch, the epoch after, and the end:')
     w('')
     w('| | last warm-up epoch | the epoch after | 99 |')
     w('|---|---|---|---|')
     w('| BF, warm 10, nothing permuted | 0.238 | 0.744 | 0.987 |')
     w('| BH, warm 10, permuted by taylor | 0.231 | 0.844 | 0.991 |')
+    w('| BD, warm 10, permuted by L1 | 0.231 | 0.992 | 1.000 |')
     w('| BG, warm 25, nothing permuted | 0.211 | 0.731 | 0.971 |')
-    w('| BI, warm 25, permuted by taylor | 0.255 | 0.830 | 0.994 |')
+    w('| BI, warm 25, permuted by taylor | 0.231 | 0.830 | 0.994 |')
+    w('| BE, warm 25, permuted by L1 | 0.244 | 0.994 | 1.000 |')
+    w('')
+    w('The two L1 rows are partly tautological and are here for one '
+      'reason. A branch sorted by L1 and read by L1 must read about '
+      '1.000 the moment after it is sorted, so that column measures '
+      'nothing about training. What it does fix is the size of the '
+      'lever: the permutation can place 99 per cent of the best '
+      'quarter in the prefix against the 74 per cent the network '
+      'reaches unaided, and the accuracy below says what that bought.')
     w('')
     w('Two things, and the second closes the idea.')
     w('')
     w('Twenty five epochs at full width leave the ordering where '
       'initialisation put it. It does not drift up and it does not '
-      'drift down: every reading in all four warm-ups sits between '
-      '0.195 and 0.256, against a floor of 0.25 at this fraction. So '
+      'drift down: all 105 readings taken during a warm-up, across six '
+      'branches, sit between 0.195 and 0.262, against a floor of 0.25 '
+      'at this fraction. So '
       'the 96 to 98 per cent a finished K reads is not what training '
       'does to a network, it is what the narrow widths do to it.')
     w('')
@@ -572,9 +583,16 @@ def render():
       'and unpermuted runs are both at 0.97 to 0.99.')
     w('')
     w('Which is why sorting is worth nothing here, and the accuracy '
-      'agrees. Against its own control the taylor permutation is '
-      '-0.19 at a warm-up of 10 and +0.17 at 25: opposite signs, both '
-      'inside the noise, and their average is -0.01. This is also the '
+      'agrees. Each permutation has its own control at the same '
+      'warm-up, which makes four comparisons. Taylor is -0.19 at a '
+      'warm-up of 10 and +0.17 at 25, opposite signs averaging -0.01. '
+      'L1 is +0.06 and +0.20, averaging +0.13. Every one of the four '
+      'is inside the noise, and the L1 pair is the informative half: '
+      'it drives the overlap from 0.23 to 0.99, four times the head '
+      'start the taylor permutation gives and a near-perfect prefix '
+      'by construction, and buys a tenth of a point. The quantity the '
+      'method is built to maximise can be maximised, and the accuracy '
+      'does not follow. This is also the '
       'difference between US-Net and Once-for-All that the idea came '
       'from. OFA makes width elastic last, so its weights mature '
       'while no position is asked for anything the others are not, '
@@ -667,20 +685,25 @@ def render():
       'sigma separates them, and it is the same measurement the bullet '
       'above asks for.')
     w('')
-    w('- And the warm-up family makes it eight. BF, BG, BH and BI are '
-      'K with a warm-up, two of them also with a taylor permutation, '
+    w('- And the warm-up family makes it ten. BD, BE, BF, BG, BH and '
+      'BI are K with a warm-up, four of them also with a permutation, '
       'which shares nothing mechanically with a free-width draw or a '
-      'feature weight. They land at 73.90, 73.78, 73.71 and 73.95. '
-      'Eight perturbations of K now sit between 73.71 and 73.96 with '
-      'a mean of 73.88, and K sits at 74.26 alone. Eight unrelated '
-      'ways of nudging a branch do not all land 0.30 to 0.55 below it '
-      'by accident. Either every one of those knobs was already at '
-      'its best setting, or K drew high and this family is worth '
-      'about 73.9. The second reading now needs less explaining than '
-      'the first. It is still not proof - BH and BI trained their '
-      'narrow widths for 90 and 75 epochs rather than 99, and BF and '
-      'BG too - and the measurement that would settle it is still a '
-      'second seed of K.')
+      'feature weight. They land at 73.96, 73.98, 73.90, 73.78, 73.71 '
+      'and 73.95. Ten perturbations of K now sit between 73.71 and '
+      '73.98 with a mean of 73.89, and K sits at 74.26 alone, 0.28 '
+      'clear of the best of them. Ten unrelated ways of nudging a '
+      'branch do not all land below it by accident. Either every one '
+      'of those knobs was already at its best setting, or K drew high '
+      'and this family is worth about 73.9. The second reading now '
+      'needs less explaining than the first, and the warm-up six '
+      'sharpen it: they differ from each other in the one thing this '
+      'report set out to test, they scatter across 0.27, and that '
+      'scatter is the closest thing to a sigma the table has. A gap '
+      'of 0.37 from their mean to K is larger than anything inside '
+      'the family. It is still not proof - all six trained their '
+      'narrow widths for 90 or 75 epochs rather than 99 - and the '
+      'measurement that would settle it is still a second seed of K, '
+      'which is now the single most valuable run on the list.')
     w('')
 
     with open(PAGE, 'w', encoding='utf-8') as handle:
