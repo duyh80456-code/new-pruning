@@ -898,7 +898,8 @@ def train_val_test():
     # check pretrained
     if getattr(FLAGS, 'pretrained', False):
         checkpoint = torch.load(
-            FLAGS.pretrained, map_location=lambda storage, loc: storage)
+            FLAGS.pretrained, map_location=lambda storage, loc: storage,
+            weights_only=False)
         # update keys from external models
         if type(checkpoint) == dict and 'model' in checkpoint:
             checkpoint = checkpoint['model']
@@ -917,9 +918,14 @@ def train_val_test():
 
     # check resume training
     if os.path.exists(os.path.join(FLAGS.log_dir, 'latest_checkpoint.pt')):
+        # weights_only defaults to True from torch 2.6, and a resume
+        # checkpoint carries the optimizer state, so the default turns
+        # every resume into an UnpicklingError. Kaggle is on 2.10 and
+        # the notebooks tell you to resume a timed-out session from
+        # exactly this file. It is a file this run wrote itself.
         checkpoint = torch.load(
             os.path.join(FLAGS.log_dir, 'latest_checkpoint.pt'),
-            map_location=lambda storage, loc: storage)
+            map_location=lambda storage, loc: storage, weights_only=False)
         model_wrapper.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         last_epoch = checkpoint['last_epoch']
@@ -1019,8 +1025,15 @@ def train_val_test():
                     if seen >= charged:
                         break
                     label = label.cuda(non_blocking=True)
-                    torch.mean(criterion(
-                        model_wrapper(image), label)).backward()
+                    # feature_kd branches return (output, features), and
+                    # every other call site unwraps that; this one fed
+                    # the tuple straight to the loss. Only reachable by
+                    # running train.py, which is why it survived every
+                    # CPU suite.
+                    charge = model_wrapper(image)
+                    if isinstance(charge, tuple):
+                        charge = charge[0]
+                    torch.mean(criterion(charge, label)).backward()
                 print('Charged the gains with {} batches for the Taylor '
                       'score.'.format(charged))
             spaces, moved, held = channel_reorder.reorder(
