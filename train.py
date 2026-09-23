@@ -1048,6 +1048,16 @@ def train_val_test():
                   'quarter.'.format(
                       moved, spaces, getattr(FLAGS, 'reorder_by', 'l1'),
                       epoch, held))
+            if getattr(FLAGS, 'reorder_by', 'l1') == 'taylor':
+                # prefix_sorted tracks l1, because taylor has no score
+                # at the top of an epoch. A taylor permutation does not
+                # sort l1, so that line stays near a quarter afterwards
+                # instead of jumping the way a reorder_by: l1 branch
+                # does. The number above is the taylor one, and it is
+                # the one that says what this permutation did.
+                print('prefix_sorted tracks l1 and will not jump for a '
+                      'taylor permutation. The figure above is the '
+                      'taylor reading.')
             model_wrapper.zero_grad(set_to_none=True)
         # train
         results = run_one_epoch(
