@@ -206,6 +206,32 @@ with io.open(template_path, encoding='utf-8') as handle:
 # The template is notebook 01, whose results are recorded, so the extra
 # suite is added here at generation time rather than edited into it.
 SUITES_WAS = "          'tests/test_kd_variants.py']"
+# Notebook 01's run_pinned drops every line that starts with two spaces,
+# which is the whole body of a traceback: when bd and be died on their
+# first real epoch the log kept "Traceback (most recent call last):" and
+# the exception and threw away the file and the line between them. Its
+# results are recorded, so the fix goes in here rather than into it.
+QUIET_WAS = chr(10).join([
+    "    lines = queue.Queue()",
+    "    procs = {}"])
+QUIET_NOW = chr(10).join([
+    "    lines = queue.Queue()",
+    "    procs = {}",
+    "    failing = set()"])
+
+FILTER_WAS = chr(10).join([
+    "        if quiet and (line.startswith(('  ', ')', 'Model(', 'Total', 'Item'))",
+    "                      or not line.strip()):"])
+FILTER_NOW = chr(10).join([
+    "        # Once a branch starts printing a traceback, stop filtering",
+    "        # it. The body is indented, so the rule below would keep the",
+    "        # exception and throw away where it came from.",
+    "        if 'Traceback (most recent call last)' in line:",
+    "            failing.add(label)",
+    "        if quiet and label not in failing and (",
+    "                line.startswith(('  ', ')', 'Model(', 'Total', 'Item'))",
+    "                or not line.strip()):"])
+
 SUITES_NOW = chr(10).join([
     "          'tests/test_kd_variants.py',",
     "          'tests/test_channel_reorder.py']"])
@@ -213,8 +239,12 @@ SUITES_NOW = chr(10).join([
 for number, left, right, title, preamble in QUEUE:
     nb = json.loads(json.dumps(template))
     for cell in nb['cells']:
-        cell['source'] = [line.replace(SUITES_WAS, SUITES_NOW)
-                          for line in cell['source']]
+        body = ''.join(cell['source'])
+        for old, new in ((SUITES_WAS, SUITES_NOW),
+                         (QUIET_WAS, QUIET_NOW),
+                         (FILTER_WAS, FILTER_NOW)):
+            body = body.replace(old, new)
+        cell['source'] = source(body) if body.strip() else cell['source']
     body = HEADER.format(number=number, title=title,
                          preamble=preamble)
     for branch in (left, right):
