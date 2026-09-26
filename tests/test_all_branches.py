@@ -152,9 +152,15 @@ def check_single():
                 mid_features.append(features)
                 mid_widths.append(width)
 
-        # mid_widths is empty on a warm-up step, and the average below
-        # would divide by zero before the pair terms indexed past the end
-        if (pair is not None or feature_pair is not None) and mid_widths:
+        # A pair needs two middles. mid_widths is empty on a large-first
+        # warm-up step, which the average below would divide by zero on,
+        # and it holds exactly one when a narrow-first phase settles a
+        # width that is not the lower bound - then mids[1] indexed past
+        # the end. train.py asks horizontal_pairs() and gets [] in both
+        # cases; this mimic indexes 0 and 1 by hand, so it has to check
+        # for two rather than for any.
+        if (pair is not None or feature_pair is not None) and (
+                len(mid_widths) >= 2):
             gate = width_gate(sum(mid_widths) / len(mid_widths))
             extra = 0.0
             if pair is not None:

@@ -441,6 +441,56 @@ patch. The suite reads 4.5859 for these two against K's 22.6405, so
 unlike the last four branches it does see them.
 """
 
+SETTLE_HOW_MUCH = """Notebook 28 asks whether the narrow end should go first. These two ask
+how much of the network that phase should settle, and for how long.
+
+The axis now has five rows. **BF** and **BG** train width 1.00 alone for
+10 and 25 epochs and then admit the narrow end: -0.36 and -0.49 against
+K, so large-first is answered. **BU** and **BT** are the same
+intervention pointed the other way, without and with a freeze at 0.25.
+These two move the freeze itself.
+
+**BV settles half the network.** Width 0.50 alone for 25 epochs, then that
+block is held still: 2,815,840 weights, 25.1 per cent, against BT's
+710,576 at 6.3 per cent. Four times as much. If the narrow-first order
+helps at all, this says whether it helps in proportion to how much is
+settled before the rest may move, or whether 6.3 per cent was already the
+whole effect.
+
+The curriculum width and the freeze width have to match, which is why
+this branch also changes what the first phase trains. Freezing 0.50 after
+a phase that ran 0.25 alone would lock the channels between them at
+their initialisation, and the row would be measuring a partly random
+network rather than a settled one.
+
+**BW shortens the phase.** Width 0.25 alone for 10 epochs rather than 25,
+then frozen. On the large-first side this knob was worth almost nothing -
+BF at 10 epochs reads 73.90 and BG at 25 reads 73.78, a spread of 0.13 -
+but nothing there was ever held still. Under a freeze a phase that ends
+too early locks a prefix that was not finished, which is a failure mode
+the large-first branches cannot have.
+
+## Same counterweight, and a third bug
+
+Thirteen measurements in the literature say the small end is rescued by
+weight sharing and the large end pays for it. If that holds here, every
+row on this axis is protecting the half that was never in trouble, and
+the honest outcome is that all four small-first branches land below K.
+
+And this idea has now found three latent bugs, none of them reachable
+before a sampler returned something other than the widest width. Two were
+on notebook 28: `chain_target` read before assignment in the real loop,
+then the same assumption inside the branch suite's mimic. The third is
+BV's: the suite guarded its pair term with "mid_widths is not empty" and
+then indexed `mids[0]` and `mids[1]` by hand, which is fine for every
+sampler that came before and an IndexError for a phase that settles one
+middle width. train.py asks `horizontal_pairs()` and gets an empty list in
+that case, so only the mimic was wrong. It now checks for two.
+
+The suite reads 4.5719 for BV and 4.5859 for BW against K's 22.6405, so
+it does see both of these.
+"""
+
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
     # whose results are already recorded. OFF_AXIS is kept because it is
@@ -471,6 +521,8 @@ QUEUE = [
      'The same two branches, three times the schedule', LONGER),
     (28, 'bu_narrow_first', 'bt_narrow_first_frozen',
      'The narrow end first, and then held still', OTHERWAY),
+    (29, 'bv_half_first_frozen', 'bw_narrow10_frozen',
+     'How much to settle first, and for how long', SETTLE_HOW_MUCH),
 ]
 
 HEADER = """# {number}. {title}
@@ -504,7 +556,7 @@ checkpoint, so at most one is lost.
 Send back the final table. Pasting the output of the last cell is enough.
 """
 
-CONFIG = """# Fixed for this notebook. Notebook {number} of 28.
+CONFIG = """# Fixed for this notebook. Notebook {number} of 29.
 BRANCHES = {branches!r}
 
 SMOKE_FIRST = True

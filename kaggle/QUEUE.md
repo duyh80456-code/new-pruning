@@ -63,6 +63,7 @@ training loop rather than running it, so anything that lives only in
 | 26 | `kaggle_kd_26_bq_bo.ipynb` | `bq_equalize_half`, `bo_conv_averaged` | The learning rate nobody set | 73.63 / 74.16 |
 | 27 | `kaggle_kd_27_br_bs.ipynb` | `br_a300`, `bs_k300` | The same two branches, three times the schedule | free / free |
 | 28 | `kaggle_kd_28_bu_bt.ipynb` | `bu_narrow_first`, `bt_narrow_first_frozen` | The narrow end first, and then held still | free / free |
+| 29 | `kaggle_kd_29_bv_bw.ipynb` | `bv_half_first_frozen`, `bw_narrow10_frozen` | How much to settle first, and for how long | free / free |
 
 ## Held back
 

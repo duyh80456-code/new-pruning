@@ -934,7 +934,12 @@ def training_widths(epoch, low, high):
         # structure, while a small one cropped out of a trained large one
         # loses it in the deeper layers. Large-first is measured here and
         # lost: the six warm-up branches average -0.38 against K.
-        return [low]
+        #
+        # narrow_first_width says which width that phase settles, because
+        # freeze_prefix_at can only hold a block that something has
+        # trained: freezing 0.50 after a phase that ran 0.25 alone would
+        # lock the channels between them at initialisation.
+        return [getattr(FLAGS, 'narrow_first_width', low)]
     if epoch < getattr(FLAGS, 'narrow_start_epoch', 0):
         return [high]
     free = [sample_width(low, high)

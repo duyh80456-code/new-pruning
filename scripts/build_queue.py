@@ -75,6 +75,8 @@ QUEUE = [
      'The same two branches, three times the schedule'),
     ('bu_narrow_first', 'bt_narrow_first_frozen',
      'The narrow end first, and then held still'),
+    ('bv_half_first_frozen', 'bw_narrow10_frozen',
+     'How much to settle first, and for how long'),
 ]
 
 # ak_bures died in linalg.eigh three minutes in and the fix landed after,
