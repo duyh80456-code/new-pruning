@@ -133,6 +133,107 @@ the loss: every addition to K so far has cost accuracy except the one
 that did nothing.
 """
 
+CONTROLS = """Fifty runs and the transport term has never had a control.
+
+K is A plus entropic transport between the two middle widths' features,
+and it is worth +0.75 over A at all sixteen widths. Thirty three branches
+have since been stacked on it and exactly one came out above, by 0.06.
+Every one of those thirty three changed the loss, its weight, the
+sampler, the schedule or the channel order. So the axis is exhausted
+without anyone having asked the prior question.
+
+These two ask it. Both sit exactly where K's term sits - the feature
+tier, between the same two sampled widths - and replace only the
+divergence. **Q** uses squared distance, which pairs sample i with sample
+i and nothing else, so it asks whether the freedom to rematch samples is
+what transport buys. **R** uses maximum mean discrepancy, a control from
+outside the transport family altogether.
+
+Read the result as a fork. If either lands near 74.26, then +0.75 was
+never about transport - it was about coupling the two middle widths at
+the feature tier at all, and thirty four variants of the coupling were
+always going to say nothing. If both land near A, transport is the active
+ingredient and the paper has one clean claim.
+
+Both configs have been in apps/ since the transport sweep and have never
+been run. feature_weight is 0.3 and 9.5, from
+scripts/calibrate_feature_weight.py, so the three terms apply comparable
+gradient rather than comparable loss - otherwise "this divergence is
+worse" and "this term was ten times weaker" would be the same reading.
+"""
+
+DIAGNOSTIC = """Two branches that are not ideas. One is a control this project should
+have run first, the other is prior art it has been missing.
+
+**BM** is one ResNet-18 at width 1.00 and nothing else. All sixty five
+configs here train every width, so the table cannot say what multi-width
+training costs the widest width - and that number gates a whole family of
+work. A's width 1.00 reads 75.30. If BM lands well above it, the hard
+one-hot label at the widest is being drowned by the narrow widths' much
+larger losses, and the fix belongs at the label. If BM lands near 75.30,
+that family is closed. The literature disagrees with itself on the sign:
+the US-Net paper has MobileNet v1 *better* multi-width than solo by 0.9
+and v2 worse by 0.3, while SlimCLR's supervised control is 76.6 solo
+against 76.0 slimmable. A reviewer asks for this number either way.
+
+BM also tests all sixteen widths afterwards, so the row shows what a
+model trained at one width does when it is sliced anyway - the other
+thing nothing here has measured.
+
+**BK** is K with AlphaNet's alpha-divergence in place of the soft cross
+entropy. Plain KL is zero-avoiding, so a student made to match a teacher
+it cannot represent over-estimates the teacher's uncertainty; the
+alpha-divergence penalises over- and under-estimation both, and the paper
+applies it to slimmable networks over exactly this width range. The loss
+has been in loss_ops since branch B and has never been put underneath K.
+
+B is that loss on A and came out at 73.08, below A - but B has no
+transport term, and every divergence in this project has depended on
+which tier it sits at: KL, Jeffreys and Wasserstein all fail at the logit
+tier while Wasserstein at the feature tier is worth +0.75. So B does not
+settle what alpha does under K. Prior art either way: if it helps, the
+baseline should have had it and the comparison has to be redrawn against
+K plus alpha.
+"""
+
+NOTRUNC = """Two branches about the assumption K makes and never states.
+
+K compares the two widths' features after truncating the wide one to the
+narrow width. At 0.25 that discards 384 of 512 wide channels and asserts
+narrow channel i is wide channel i - which is false in function space,
+because narrow channel i is computed from k input channels and wide
+channel i from all of them. They are different functions sharing an
+index.
+
+**BL** drops the assumption. Gromov transport compares how far sample i
+is from sample k inside one cloud against the same pair inside the other,
+so no correspondence between channels is needed and no channel is thrown
+away. FeatureGromovLoss has been in loss_ops since the transport sweep
+and had never been run until this notebook was built.
+
+Read it as a prediction, not as variant 35. Both widths see the same
+batch, so the sample correspondence is already known and trivial. If the
+solver returns the identity coupling, the objective collapses to a
+distance between the two clouds' own distance matrices - a three-line
+relation loss, not transport at all. If it returns anything else it is
+matching image i to image j, which is wrong supervision. Either outcome
+says something the prefix branch cannot.
+
+One thing to state plainly: at feature_weight 1.0 this term contributes a
+gradient of 0.0088 against entropic transport's 3.6502, so the first
+version of the config was K with no horizontal term and the branch suite
+scored it at a_kl to four decimals. It now runs at 413.8, from
+scripts/calibrate_feature_weight.py. A term needing 414x amplification to
+be felt is a weak signal, and that calibration is one measurement on an
+untrained model, so the ratio drifts as the widths converge.
+
+**AB** is the cheapest control K never had: the same transport with the
+debiasing correction switched off. Entropic blur makes the objective
+positive even between a cloud and itself, and a horizontal term has to be
+minimised at agreement, so the correction should be load bearing. Nobody
+has checked.
+"""
+
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
     # whose results are already recorded. OFF_AXIS is kept because it is
@@ -149,6 +250,12 @@ QUEUE = [
      'The same window, sorted by what removal would cost', WARM),
     (21, 'k_seed2', 'bj_chain_only',
      'The noise on K, and the chain without the transport', SETTLE),
+    (22, 'q_feature_mse', 'r_feature_mmd',
+     'What the transport term actually bought', CONTROLS),
+    (23, 'bm_solo_full', 'bk_alpha_on_k',
+     'The control never run, and the loss never tried under K', DIAGNOSTIC),
+    (24, 'bl_gromov', 'ab_no_debias',
+     'Comparing the widths without truncating either', NOTRUNC),
 ]
 
 HEADER = """# {number}. {title}
@@ -182,7 +289,7 @@ checkpoint, so at most one is lost.
 Send back the final table. Pasting the output of the last cell is enough.
 """
 
-CONFIG = """# Fixed for this notebook. Notebook {number} of 21.
+CONFIG = """# Fixed for this notebook. Notebook {number} of 24.
 BRANCHES = {branches!r}
 
 SMOKE_FIRST = True

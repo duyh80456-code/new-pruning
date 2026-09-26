@@ -56,6 +56,9 @@ training loop rather than running it, so anything that lives only in
 | 19 | `kaggle_kd_19_bf_bg.ipynb` | `bf_warm10_plain`, `bg_warm25_plain` | What the warm-up is worth on its own | 73.90 / 73.78 |
 | 20 | `kaggle_kd_20_bh_bi.ipynb` | `bh_warm10_taylor`, `bi_warm25_taylor` | The same window, sorted by what removal would cost | 73.71 / 73.95 |
 | 21 | `kaggle_kd_21_k_bj.ipynb` | `k_seed2`, `bj_chain_only` | The noise on K, and the chain without the transport | free / free |
+| 22 | `kaggle_kd_22_q_r.ipynb` | `q_feature_mse`, `r_feature_mmd` | What the transport term actually bought | free / free |
+| 23 | `kaggle_kd_23_bm_bk.ipynb` | `bm_solo_full`, `bk_alpha_on_k` | The control never run, and the loss never tried under K | free / free |
+| 24 | `kaggle_kd_24_bl_ab.ipynb` | `bl_gromov`, `ab_no_debias` | Comparing the widths without truncating either | free / free |
 
 ## Held back
 
@@ -64,10 +67,8 @@ from a notebook by editing `BRANCHES`.
 
 * `ax_var_ground, ay_inverse_ground` - the same weighting by batch variance, and its reversal. Variance and activation disagree about a channel that is large and constant, so they are separate questions; this pair is the follow-up if row 16 moves anything.
 * `a_seed3` - a third seed of A. Held because the seed that matters is K, and that one has moved out of this list into row 21: ten unrelated perturbations of K now sit 0.28 to 0.55 below it, which is either ten knobs already optimal or one high draw, and only sigma tells them apart.
-* `z_eps_100, q_feature_mse` - controls for K. They are built to lose: blur the plan away, or forbid rematching, and see what is left. Y at eps 0.5 has since made most of z_eps_100's point for a quarter of the cost.
-* `r_feature_mmd` - a control from outside transport.
+* `z_eps_100` - a control built to lose: blur the plan away and see what is left. Y at eps 0.5 has since made most of its point for a quarter of the cost.
 * `j_feature_gram` - a control for whether nesting is what makes K work.
-* `ab_no_debias` - a control for whether the debiasing correction is load bearing.
 * `ap_logit_spread` - a test of the flatness diagnosis on branch C, which came last of twelve and is not going to reach K.
 
 ## Skipped

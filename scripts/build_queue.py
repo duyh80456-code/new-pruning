@@ -61,6 +61,12 @@ QUEUE = [
      'The same window, sorted by what removal would cost'),
     ('k_seed2', 'bj_chain_only',
      'The noise on K, and the chain without the transport'),
+    ('q_feature_mse', 'r_feature_mmd',
+     'What the transport term actually bought'),
+    ('bm_solo_full', 'bk_alpha_on_k',
+     'The control never run, and the loss never tried under K'),
+    ('bl_gromov', 'ab_no_debias',
+     'Comparing the widths without truncating either'),
 ]
 
 # ak_bures died in linalg.eigh three minutes in and the fix landed after,
@@ -96,14 +102,10 @@ HELD = [
      'unrelated perturbations of K now sit 0.28 to 0.55 below it, which '
      'is either ten knobs already optimal or one high draw, and only '
      'sigma tells them apart.'),
-    ('z_eps_100, q_feature_mse', 'controls for K. They are built to lose: '
-     'blur the plan away, or forbid rematching, and see what is left. Y '
-     'at eps 0.5 has since made most of z_eps_100\'s point for a quarter '
-     'of the cost.'),
-    ('r_feature_mmd', 'a control from outside transport.'),
+    ('z_eps_100', 'a control built to lose: blur the plan away and see '
+     'what is left. Y at eps 0.5 has since made most of its point for '
+     'a quarter of the cost.'),
     ('j_feature_gram', 'a control for whether nesting is what makes K work.'),
-    ('ab_no_debias', 'a control for whether the debiasing correction is '
-     'load bearing.'),
     ('ap_logit_spread', 'a test of the flatness diagnosis on branch C, '
      'which came last of twelve and is not going to reach K.'),
 ]

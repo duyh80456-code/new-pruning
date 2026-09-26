@@ -37,6 +37,7 @@ from utils.loss_ops import FeatureBuresLoss  # noqa: E402
 from utils.loss_ops import ClasswiseFeatureLoss  # noqa: E402
 from utils.loss_ops import FeatureChannelLoss  # noqa: E402
 from utils.loss_ops import FeatureWassersteinLoss  # noqa: E402
+from utils.loss_ops import FeatureGromovLoss  # noqa: E402
 
 REFERENCE = 'wasserstein'
 BATCHES = 4
@@ -89,6 +90,10 @@ def losses():
             align='prefix', p=1.0)),
         ('classwise', ClasswiseFeatureLoss(
             inner=FeatureWassersteinLoss(align='prefix'))),
+        ('gromov', FeatureGromovLoss(
+            eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),
+            n_iters=getattr(FLAGS, 'gromov_inner_iters', 50),
+            outer_iters=getattr(FLAGS, 'gromov_outer_iters', 5))),
         ('wasserstein', FeatureWassersteinLoss(
             eps=getattr(FLAGS, 'sinkhorn_eps', 0.2), **entropic)),
     ]
