@@ -708,25 +708,31 @@ def render():
       'sigma separates them, and it is the same measurement the bullet '
       'above asks for.')
     w('')
-    w('- And the warm-up family makes it ten. BD, BE, BF, BG, BH and '
-      'BI are K with a warm-up, four of them also with a permutation, '
-      'which shares nothing mechanically with a free-width draw or a '
-      'feature weight. They land at 73.96, 73.98, 73.90, 73.78, 73.71 '
-      'and 73.95. Ten perturbations of K now sit between 73.71 and '
-      '73.98 with a mean of 73.89, and K sits at 74.26 alone, 0.28 '
-      'clear of the best of them. Ten unrelated ways of nudging a '
-      'branch do not all land below it by accident. Either every one '
-      'of those knobs was already at its best setting, or K drew high '
-      'and this family is worth about 73.9. The second reading now '
-      'needs less explaining than the first, and the warm-up six '
-      'sharpen it: they differ from each other in the one thing this '
-      'report set out to test, they scatter across 0.27, and that '
-      'scatter is the closest thing to a sigma the table has. A gap '
-      'of 0.37 from their mean to K is larger than anything inside '
-      'the family. It is still not proof - all six trained their '
-      'narrow widths for 90 or 75 epochs rather than 99 - and the '
-      'measurement that would settle it is still a second seed of K, '
-      'which is now the single most valuable run on the list.')
+    w('- Whether K sits on a peak, and the shape of that question has '
+      'changed. Fourteen branches are now K with one knob moved in '
+      'directions that share nothing mechanically: the free widths '
+      'drawn narrower and wider, the feature weight halved and '
+      'doubled, six warm-up variants, and the four that touched the '
+      'optimizer, the teacher and the architecture. They run from '
+      '73.63 to 74.35 with a mean of 73.93.')
+    w('- What changed with BP is that K is no longer clear of them. '
+      'Ten perturbations used to sit entirely below K, which was the '
+      'strongest argument in this report that 74.26 was a high draw. '
+      'BP reads 74.35 and AW 74.32, so the top of the table is three '
+      'branches inside 0.09 of each other with nothing to separate '
+      'them. That is not evidence K was lucky and it is not evidence '
+      'it was not; it is the same unmeasured sigma, now sitting '
+      'between the first three rows instead of under one of them. A '
+      'second seed of K remains the single most valuable run on the '
+      'list, and it is now more valuable than before, because three '
+      'branches depend on it rather than one.')
+    w('- That the ranking at the top is currently unreadable. BP, AW, '
+      'K and X span 0.11 across four branches whose mechanisms have '
+      'nothing to do with each other - a per-width residual scalar, a '
+      'chained teacher, a transport term, and a blur setting. Four '
+      'unrelated mechanisms landing inside a tenth of a point is what '
+      'a saturated axis looks like, and reporting an order among them '
+      'would be reporting noise.')
     w('')
 
     with open(PAGE, 'w', encoding='utf-8') as handle:
