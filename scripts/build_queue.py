@@ -67,6 +67,10 @@ QUEUE = [
      'The control never run, and the loss never tried under K'),
     ('bl_gromov', 'ab_no_debias',
      'Comparing the widths without truncating either'),
+    ('bn_ensemble', 'bp_width_scalars',
+     'Who teaches, and the one place recalibration cannot reach'),
+    ('bq_equalize_half', 'bo_conv_averaged',
+     'The learning rate nobody set'),
 ]
 
 # ak_bures died in linalg.eigh three minutes in and the fix landed after,

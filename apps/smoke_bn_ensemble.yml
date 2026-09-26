@@ -1,0 +1,89 @@
+# =========================== Branch K ===========================
+# Transport at the feature level, between the two middle widths.
+#
+# Where the two roles the project kept separate were meant to meet:
+# geometry measured where RQ1 found it, applied between the pair of widths
+# that nothing else in the sandwich rule relates.
+#
+# The most speculative of the set, and the only one whose two halves both
+# have independent support.
+
+# machine
+num_gpus_per_job: 1
+num_cpus_per_job: 4
+memory_per_job: 30
+gpu_type: "nvidia-tesla-t4"
+
+# data
+dataset: data.cifar100
+data_transforms: data.cifar100
+data_loader: data.cifar100
+dataset_dir: data
+data_loader_workers: 2
+
+# info
+num_classes: 100
+image_size: 32
+topk: [1, 5]
+
+# optimizer
+optimizer: sgd
+momentum: 0.9
+weight_decay: 0.0005
+nesterov: True
+
+# Four losses are summed into one step and the KD terms are not bounded
+# the way cross entropy is, so one bad batch early can be unrecoverable.
+grad_clip: 5.0
+
+# lr
+lr: 0.2
+lr_scheduler: cosine_decaying
+lr_warmup: True
+lr_warmup_epochs: 1
+num_epochs: 2
+
+# model profiling
+profiling: [gpu]
+
+# pretrain, resume, test_only
+pretrained: ''
+resume: ''
+test_only: False
+
+random_seed: 1995
+batch_size: 64
+max_iters_per_epoch: 3
+reset_parameters: True
+
+# =========================== Override Settings ===========================
+log_dir: logs/smoke_bn_ensemble
+slimmable_training: True
+universally_slimmable_training: True
+num_sample_training: 4
+bn_cal_batch_num: 2
+calibrate_bn: true
+cumulative_bn_stats: true
+
+model: models.us_resnet
+width_mult: 1.0
+width_mult_list: [0.25, 1.0]
+width_mult_range: [0.25, 1.0]
+# widths that get a calibrated BN and an entry in the final table
+width_mult_list_test: [0.25, 0.5, 0.75, 1.0]
+
+# =========================== Distillation ===========================
+inplace_distill: True
+kd_loss: soft_ce
+sinkhorn_eps: 0.2
+sinkhorn_iters: 100
+sinkhorn_debiased: True
+cost_normalize: True
+horizontal_kd: True
+horizontal_weight: 1.0
+feature_kd: True
+feature_align: prefix
+feature_weight: 1.0
+horizontal_where: feature
+ensemble_teacher: True
+ensemble_weight: 1.0

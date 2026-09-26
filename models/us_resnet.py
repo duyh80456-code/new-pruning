@@ -1,5 +1,6 @@
 import math
 
+import torch
 import torch.nn as nn
 
 from .slimmable_ops import USBatchNorm2d, USConv2d, USLinear, make_divisible
@@ -31,8 +32,38 @@ class BasicBlock(nn.Module):
             self.shortcut = nn.Sequential()
         self.post_relu = nn.ReLU(inplace=True)
 
+        # One learnable scalar per tested width on the residual branch,
+        # NeFL's inconsistent step size. It sits at the one place per-width
+        # BN recalibration cannot reach: body and shortcut each end in a
+        # BatchNorm, but the tensor they are added into has none, so the
+        # branch-to-skip ratio on the residual stream drifts with width and
+        # nothing here corrects it. 8 blocks by 16 widths is 128 scalars.
+        # Init 1.0; NeFL reports larger initial values degrade.
+        if getattr(FLAGS, 'width_scalars', False):
+            self.branch_scale = nn.Parameter(
+                torch.ones(len(FLAGS.width_mult_list_test)))
+        else:
+            self.branch_scale = None
+        # set by model.apply the same way the slimmable ops get it; the
+        # default keeps a forward before the first apply from failing
+        self.width_mult = max(FLAGS.width_mult_list)
+
+    def _slot(self):
+        """which scalar this width uses
+
+        Training draws widths from a continuum, so a width lands on the
+        nearest of the sixteen tested slots. The sixteen evaluated widths
+        hit their own slot exactly, which is what the table reads.
+        """
+        widths = FLAGS.width_mult_list_test
+        here = self.width_mult
+        return min(range(len(widths)), key=lambda i: abs(widths[i] - here))
+
     def forward(self, x):
-        return self.post_relu(self.body(x) + self.shortcut(x))
+        body = self.body(x)
+        if self.branch_scale is not None:
+            body = body * self.branch_scale[self._slot()]
+        return self.post_relu(body + self.shortcut(x))
 
 
 class Model(nn.Module):

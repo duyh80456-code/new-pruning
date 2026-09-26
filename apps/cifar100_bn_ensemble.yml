@@ -1,0 +1,113 @@
+# =========================== Branch BN ===========================
+# K, and every sampled width learns from the mean of what all of them
+# said - the widest included.
+#
+# US-Net trains the widest width on the hard label alone and makes it the
+# sole teacher for the rest. Two ablations from two different fields put
+# that configuration near the bottom of the ones they tried. EED, on
+# ResNet-18 and CIFAR-100, reports the main classifier at 78.31 with
+# itself as the only teacher against 79.25 with the ensemble of all
+# exits plus itself, and the weakest exit contributed more than the
+# strongest. CoQuant ranks six teacher choices for multi-bit training
+# and puts always-the-highest fifth of six, behind a random higher
+# precision and behind the average ensemble.
+#
+# So this changes who teaches, not what the loss is. K's transport term
+# runs untouched at the feature tier; this sits at the logit tier and
+# replaces nothing - the existing inplace distillation still runs. It is
+# an addition with its own weight, which is how EED writes it.
+#
+# The part with no precedent here: the widest width becomes a student. In
+# US-Net it is the only width that never receives a soft target, and
+# forward_loss had no way to hand back its logits until this branch
+# needed them.
+#
+# Read a loss against K as the ensemble dragging the widest toward the
+# narrow widths, which is the failure mode this shape has.
+#
+# One thing about the number it prints. ens_loss is a soft cross entropy
+# against a detached mean, so its floor is the entropy of that mean, not
+# zero: it does not read as a distance to agreement and will not go to
+# zero however well the widths agree. The gradient is unaffected, because
+# the entropy of a detached target does not depend on the student, so
+# soft cross entropy and the KL differ here by a per-step constant. Read
+# ens_loss as a level, not as a residual.
+
+# machine
+num_gpus_per_job: 1
+num_cpus_per_job: 4
+memory_per_job: 30
+gpu_type: "nvidia-tesla-t4"
+
+# data
+dataset: data.cifar100
+data_transforms: data.cifar100
+data_loader: data.cifar100
+dataset_dir: data
+data_loader_workers: 2
+
+# info
+num_classes: 100
+image_size: 32
+topk: [1, 5]
+
+# optimizer
+optimizer: sgd
+momentum: 0.9
+weight_decay: 0.0005
+nesterov: True
+
+# Four losses are summed into one step and the KD terms are not bounded
+# the way cross entropy is, so one bad batch early can be unrecoverable.
+grad_clip: 5.0
+
+# lr
+lr: 0.2
+lr_scheduler: cosine_decaying
+lr_warmup: True
+lr_warmup_epochs: 5
+num_epochs: 100
+
+# model profiling
+profiling: [gpu]
+
+# pretrain, resume, test_only
+pretrained: ''
+resume: ''
+test_only: False
+
+random_seed: 1995
+batch_size: 256
+reset_parameters: True
+
+# =========================== Override Settings ===========================
+log_dir: logs/cifar100_bn_ensemble
+slimmable_training: True
+universally_slimmable_training: True
+num_sample_training: 4
+bn_cal_batch_num: 20
+calibrate_bn: true
+cumulative_bn_stats: true
+
+model: models.us_resnet
+width_mult: 1.0
+width_mult_list: [0.25, 1.0]
+width_mult_range: [0.25, 1.0]
+# widths that get a calibrated BN and an entry in the final table
+width_mult_list_test: [0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
+
+# =========================== Distillation ===========================
+inplace_distill: True
+kd_loss: soft_ce
+sinkhorn_eps: 0.2
+sinkhorn_iters: 100
+sinkhorn_debiased: True
+cost_normalize: True
+horizontal_kd: True
+horizontal_weight: 1.0
+feature_kd: True
+feature_align: prefix
+feature_weight: 1.0
+horizontal_where: feature
+ensemble_teacher: True
+ensemble_weight: 1.0

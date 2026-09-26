@@ -234,6 +234,108 @@ minimised at agreement, so the correction should be load bearing. Nobody
 has checked.
 """
 
+WHOTEACHES = """These two are the first branches in this project that add something to K
+without adding a term to the loss.
+
+Thirty three branches have been stacked on K and exactly one came out
+above it, by 0.06. Grouped by what they touched: ten changed the loss,
+eleven the loss and its weight, two the sampler, two the schedule, four
+the channel order, one the teacher. Nothing has ever touched the
+optimizer, the teacher's composition, the label, or added a parameter.
+So the loss is not where the room is.
+
+**BN** changes who teaches. US-Net trains the widest width on the hard
+label alone and makes it the sole teacher for every other width. Two
+ablations from different fields put that near the bottom of the choices
+they tried: EED, on ResNet-18 and CIFAR-100, has the main classifier at
+78.31 taught by itself against 79.25 taught by the ensemble of all exits
+plus itself - and the *weakest* exit contributed more than the strongest.
+CoQuant ranks six teacher choices for multi-bit training and puts
+always-the-highest fifth of six. Here every sampled width learns from the
+mean of what all four said, the widest included, which is the part with
+no precedent in this setting: in US-Net the widest is the only width that
+never receives a soft target, and forward_loss had no way to hand back
+its logits until this branch needed them. K's transport term runs
+untouched underneath.
+
+**BP** adds 128 parameters at the one place per-width BN recalibration
+provably cannot reach. body and shortcut each end in a BatchNorm, so
+their scales are pinned by gamma - but the tensor they are added into has
+no BatchNorm after it, and gamma and beta are shared across all sixteen
+widths, so the branch-to-skip ratio on the residual stream drifts with
+width and nothing corrects it. REPAIR states that on conv outputs alone
+it is "mathematically equivalent to resetting the BatchNorm statistics",
+and gets its extra mileage specifically from correcting residual-block
+outputs. NeFL makes one learnable step size per residual block private
+per submodel and reports +0.95 mean and +3.34 worst case on CIFAR-100
+ResNet-18. One scalar per block per tested width, init 1.0, so epoch zero
+is exactly K.
+
+BP prints `branch_scale <epoch> min/mean/max` every epoch. Those scalars
+get no weight decay - every one-dimensional parameter here gets zero - so
+nothing pulls them back toward 1.0 and a scalar drifting to zero turns
+its block into a bare identity. If this branch fails, that line is where
+it will be visible; send it back with the table.
+"""
+
+GRADSCALE = """Two branches about a learning rate nobody set.
+
+Prefix slicing makes the sandwich rule hand out unequal learning along
+the channel index, by counting alone. Output channel i receives a
+gradient from every sampled width whose channel count exceeds i, so with
+{1.00, 0.25, w1, w2} and w uniform on [0.25, 1.00] the expected number of
+updates per step is 4.00 for the first quarter of channels, drops to 3.00
+just above 0.25, and falls linearly to 1.00 at the last channel. Nothing
+in the loss intends that, and no branch here has ever addressed it.
+
+**BQ** divides each output channel's gradient by the square root of how
+many of that step's widths wrote to it. Gradient Equilibrium does exactly
+this correction on the depth axis - a parameter several exits traverse
+accumulates more terms, so divide by the count - and it has never been
+done on the channel axis.
+
+The exponent is the experiment, not the fix, because the literature
+disagrees with itself. Weight decay plus BatchNorm scale-invariance says
+the per-channel angular update converges to a value independent of
+gradient magnitude, which would cancel this without help - but relaxation
+takes about 1/(eta*lambda) steps, here roughly fifty epochs of a hundred
+with cosine decay shrinking the target the whole way, so any cancelling
+is partial. Against that, the one convergence theory covering
+nested-mask training requires no per-coordinate rescaling at all. q = 0.5
+is the midpoint; q = 0 is this branch's own control and is K exactly.
+
+**BO** is US-Net's own Appendix A, which proposes dividing each conv
+output by how many input channels are live, measures a slight gain on
+US-MobileNet v1, and does not adopt it by default. The paper also notes
+the constants "come for free since these constants can be merged into BN
+statistics after training" - and that sentence is why this is on the same
+notebook as BQ rather than with the normalization work. Every conv here
+is followed by BatchNorm, and a per-output-channel constant in front of
+BN is removed exactly by the per-width running statistics this project
+already recalibrates, so the scale is invisible in the forward pass at
+every point in training. What is left is the gradient: BN makes the
+preceding weights scale-invariant, so a width-dependent constant in front
+of it acts as a per-width effective learning rate. That reading is not in
+the paper; it is the only mechanism left once the forward pass is ruled
+out.
+
+The flag was already in slimmable_ops, inherited from upstream, reading
+an attribute USConv2d does not have - so switching it on raised
+AttributeError and nothing in this project had ever run it. Fixed and
+verified to give exactly C/k.
+
+One warning that applies to both, and to BN and BP on the notebook
+before. The branch suite cannot see any of these four: BQ and BO change
+gradients and scales that BatchNorm absorbs, BP is identical to K at
+initialisation, and the suite mimics the training loop rather than
+running it, so it never reaches the ensemble term. All four scored 22.6405
+or 22.6406 against K's 22.6405. Each was verified instead by running the
+real train.py on one card and by a direct check - 21 tensors' gradients
+changed with a largest divisor of exactly 2.000 for BQ, a measured ratio
+of exactly C/k for BO, 32 scalars all moved off 1.0 for BP, and a printed
+ens_loss for BN. The suite passing is not the evidence here.
+"""
+
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
     # whose results are already recorded. OFF_AXIS is kept because it is
@@ -256,6 +358,10 @@ QUEUE = [
      'The control never run, and the loss never tried under K', DIAGNOSTIC),
     (24, 'bl_gromov', 'ab_no_debias',
      'Comparing the widths without truncating either', NOTRUNC),
+    (25, 'bn_ensemble', 'bp_width_scalars',
+     'Who teaches, and the one place recalibration cannot reach', WHOTEACHES),
+    (26, 'bq_equalize_half', 'bo_conv_averaged',
+     'The learning rate nobody set', GRADSCALE),
 ]
 
 HEADER = """# {number}. {title}
@@ -289,7 +395,7 @@ checkpoint, so at most one is lost.
 Send back the final table. Pasting the output of the last cell is enough.
 """
 
-CONFIG = """# Fixed for this notebook. Notebook {number} of 24.
+CONFIG = """# Fixed for this notebook. Notebook {number} of 26.
 BRANCHES = {branches!r}
 
 SMOKE_FIRST = True

@@ -125,7 +125,23 @@ class USConv2d(nn.Conv2d):
             input, weight, bias, self.stride, self.padding,
             self.dilation, self.groups)
         if getattr(FLAGS, 'conv_averaged', False):
-            y = y * (max(self.in_channels_list) / self.in_channels)
+            # US-Net Appendix A: divide the output by how many input
+            # channels are live, so the pre-BN scale does not grow with
+            # width. Inherited from the upstream slimmable repo reading
+            # self.in_channels_list, which SlimmableConv2d has and
+            # USConv2d does not, so switching the flag on raised
+            # AttributeError and nothing here had ever run it.
+            #
+            # Worth knowing what it can and cannot be: every conv in this
+            # model is followed by BatchNorm, and a per-output-channel
+            # constant in front of BN is removed exactly by the
+            # per-width running statistics this project already
+            # recalibrates. The paper says as much - the constants
+            # "come for free since these constants can be merged into BN
+            # statistics after training". So this is forward-invisible at
+            # inference and whatever it does, it does through the
+            # gradient scale during training.
+            y = y * (self.in_channels_max / self.in_channels)
         return y
 
 

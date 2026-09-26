@@ -1,0 +1,102 @@
+# =========================== Branch BO ===========================
+# K with the conv output divided by how many input channels are live.
+#
+# This is US-Net's own Appendix A, which proposes exactly this and then
+# does not adopt it by default. The paper measures a slight gain on
+# US-MobileNet v1 - roughly 0.4 on the mean of four widths - and notes
+# the constants "come for free since these constants can be merged into
+# BN statistics after training".
+#
+# That last sentence is the interesting part. Every conv here is followed
+# by BatchNorm, and a per-output-channel constant in front of BN is
+# removed exactly by the per-width running statistics this project
+# already recalibrates. So the scale is invisible in the forward pass at
+# any point in training, and whatever it does it does through the
+# gradient: BN makes the preceding weights scale-invariant, so a
+# width-dependent constant in front of it acts as a per-width effective
+# learning rate on that conv. That reading is not in the paper; it is the
+# only mechanism left once the forward pass is ruled out.
+#
+# The flag existed in slimmable_ops, inherited from upstream, reading
+# self.in_channels_list - which SlimmableConv2d has and USConv2d does
+# not. Switching it on raised AttributeError, so nothing in this project
+# had ever run it. Fixed to in_channels_max and verified to give exactly
+# C/k.
+
+# machine
+num_gpus_per_job: 1
+num_cpus_per_job: 4
+memory_per_job: 30
+gpu_type: "nvidia-tesla-t4"
+
+# data
+dataset: data.cifar100
+data_transforms: data.cifar100
+data_loader: data.cifar100
+dataset_dir: data
+data_loader_workers: 2
+
+# info
+num_classes: 100
+image_size: 32
+topk: [1, 5]
+
+# optimizer
+optimizer: sgd
+momentum: 0.9
+weight_decay: 0.0005
+nesterov: True
+
+# Four losses are summed into one step and the KD terms are not bounded
+# the way cross entropy is, so one bad batch early can be unrecoverable.
+grad_clip: 5.0
+
+# lr
+lr: 0.2
+lr_scheduler: cosine_decaying
+lr_warmup: True
+lr_warmup_epochs: 5
+num_epochs: 100
+
+# model profiling
+profiling: [gpu]
+
+# pretrain, resume, test_only
+pretrained: ''
+resume: ''
+test_only: False
+
+random_seed: 1995
+batch_size: 256
+reset_parameters: True
+
+# =========================== Override Settings ===========================
+log_dir: logs/cifar100_bo_conv_averaged
+slimmable_training: True
+universally_slimmable_training: True
+num_sample_training: 4
+bn_cal_batch_num: 20
+calibrate_bn: true
+cumulative_bn_stats: true
+
+model: models.us_resnet
+width_mult: 1.0
+width_mult_list: [0.25, 1.0]
+width_mult_range: [0.25, 1.0]
+# widths that get a calibrated BN and an entry in the final table
+width_mult_list_test: [0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
+
+# =========================== Distillation ===========================
+inplace_distill: True
+kd_loss: soft_ce
+sinkhorn_eps: 0.2
+sinkhorn_iters: 100
+sinkhorn_debiased: True
+cost_normalize: True
+horizontal_kd: True
+horizontal_weight: 1.0
+feature_kd: True
+feature_align: prefix
+feature_weight: 1.0
+horizontal_where: feature
+conv_averaged: True

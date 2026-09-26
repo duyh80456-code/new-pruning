@@ -30,6 +30,7 @@ from utils.loss_ops import build_confusion_embedding, build_cost_matrix
 from utils.loss_ops import build_spread_criterion, get_classifier_weight
 from utils.loss_ops import width_gate
 from models.slimmable_ops import bn_calibration_init
+from models.slimmable_ops import make_divisible
 from utils.config import FLAGS
 from utils.meters import ScalarMeter, flush_scalar_meters
 
@@ -325,6 +326,11 @@ def get_meters(phase):
         # flushed, and an unfilled meter divides by zero there
         meters[str(max(FLAGS.width_mult_list))]['pair_loss'] = ScalarMeter(
             'train_pair_loss')
+    if (phase == 'train' and getattr(FLAGS, 'ensemble_teacher', False)
+            and getattr(FLAGS, 'slimmable_training', False)):
+        # same place and the same reason as pair_loss above
+        meters[str(max(FLAGS.width_mult_list))]['ens_loss'] = ScalarMeter(
+            'train_ens_loss')
     return meters
 
 
@@ -386,6 +392,49 @@ def lr_schedule_per_iteration(optimizer, epoch, batch_idx=0):
             param_group['lr'] = FLAGS.lr * mult
     else:
         pass
+
+
+def equalize_by_width_count(model, widths_train):
+    """divide each output channel's gradient by how many widths wrote to it
+
+    Gradient Equilibrium, from the depth-exit literature, moved onto the
+    channel axis. A parameter that several predictors traverse accumulates
+    more gradient terms than one only the largest touches, and the fix
+    there is to divide by that count. Prefix slicing makes the same thing
+    happen along the channel index: output channel i is written by every
+    sampled width whose channel count exceeds i, so with the sandwich rule
+    drawing {1.00, 0.25, w1, w2} the first quarter of channels is updated
+    four times a step and the last channel once.
+
+    The count is taken from the widths this step actually sampled, not
+    from the closed-form expectation, so nothing here assumes the sampler.
+
+    width_equalize_q is the exponent: 0 leaves the gradient alone and is
+    the default, 1 divides by the full count, and the point of a sweep is
+    that the one convergence theory covering nested-mask training says the
+    per-coordinate count does not need compensating at all. If the mean
+    over sixteen widths is flat in q, that theory is right here.
+    """
+    q = getattr(FLAGS, 'width_equalize_q', 0.0)
+    if not q:
+        return
+    for module in model.modules():
+        weight = getattr(module, 'weight', None)
+        if weight is None or weight.grad is None:
+            continue
+        out_max = getattr(module, 'out_channels_max', None)
+        if out_max is None:
+            out_max = getattr(module, 'out_features_max', None)
+        if out_max is None or out_max != weight.size(0):
+            # not a slimmable op, or not sliced on dim 0
+            continue
+        counts = weight.new_zeros(out_max)
+        for width in widths_train:
+            live = make_divisible(out_max * width)
+            counts[:live] += 1.0
+        counts.clamp_(min=1.0)
+        shape = [out_max] + [1] * (weight.dim() - 1)
+        weight.grad.div_(counts.pow(q).view(shape))
 
 
 def forward_loss(
@@ -454,9 +503,13 @@ def forward_loss(
         meter['loss'].cache(tensor[0])
     if return_soft_target:
         temperature = getattr(FLAGS, 'kd_temperature', 1.0)
-        return (loss,
-                torch.nn.functional.softmax(output / temperature, dim=1),
-                feature)
+        soft = torch.nn.functional.softmax(output / temperature, dim=1)
+        # the ensemble target needs the widest width's raw logits too: it
+        # is the only width US-Net never makes a student, and the logits
+        # are what a divergence takes on the student side
+        if return_output:
+            return loss, soft, feature, output
+        return loss, soft, feature
     if return_output:
         return loss, output, feature
     return loss
@@ -542,7 +595,8 @@ def run_one_epoch(
                     # once is arithmetically what the per-width backward did,
                     # it only costs memory
                     deferred = (pair_criterion is not None
-                                or feature_pair_criterion is not None)
+                                or feature_pair_criterion is not None
+                                or getattr(FLAGS, 'ensemble_teacher', False))
                     # the classwise form needs this batch's labels, set
                     # once a step the way the class cost matrix is
                     for term in (feature_criterion, feature_pair_criterion):
@@ -578,9 +632,10 @@ def run_one_epoch(
                         # this width learns from: the widest width
                         # normally, the previous one under teacher_chain.
                         if width_mult == max_width:
-                            loss, soft_target, teacher_feature = forward_loss(
+                            (loss, soft_target, teacher_feature,
+                             teacher_output) = forward_loss(
                                 model, criterion, input, target, meter,
-                                return_soft_target=True)
+                                return_soft_target=True, return_output=True)
                             if confusion is not None:
                                 confusion.update(soft_target.detach(), target)
                             # once a step, not once a width: the rows are
@@ -690,6 +745,32 @@ def run_one_epoch(
                             if is_master():
                                 meters[str(max_width)]['pair_loss'].cache(
                                     pair_loss.item())
+                        # every sampled width learns from the mean of
+                        # what all of them said, the widest included.
+                        # US-Net trains the widest on the hard label alone
+                        # and makes it the sole teacher; EED's ablation
+                        # puts that configuration last of the five it
+                        # tried, and CoQuant's puts always-the-widest
+                        # fifth of six. Both found the weakest member
+                        # carries information the strongest one does not.
+                        if (getattr(FLAGS, 'ensemble_teacher', False)
+                                and mid_outputs):
+                            hot = getattr(FLAGS, 'kd_temperature', 1.0)
+                            with torch.no_grad():
+                                probs = [soft_target] + [
+                                    torch.nn.functional.softmax(o / hot, dim=1)
+                                    for o in mid_outputs]
+                                mean_target = sum(probs) / len(probs)
+                            ens = 0.0
+                            for logits in [teacher_output] + mid_outputs:
+                                ens = ens + (hot * hot) * torch.mean(
+                                    soft_criterion(logits / hot, mean_target))
+                            ens = ens / (1 + len(mid_outputs))
+                            losses.append(
+                                getattr(FLAGS, 'ensemble_weight', 1.0) * ens)
+                            if is_master():
+                                meters[str(max_width)]['ens_loss'].cache(
+                                    ens.item())
                         loss = sum(losses)
                         loss.backward()
                 else:
@@ -730,6 +811,7 @@ def run_one_epoch(
             clip = getattr(FLAGS, 'grad_clip', 0)
             if clip:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+            equalize_by_width_count(model, widths_train)
             optimizer.step()
             if is_master() and getattr(FLAGS, 'slimmable_training', False):
                 for width_mult in sorted(FLAGS.width_mult_list, reverse=True):
@@ -1008,6 +1090,19 @@ def train_val_test():
                 shown = 'l1'
             print('prefix_sorted {} {} {:.4f}'.format(
                 epoch, shown, channel_reorder.report(model_wrapper, shown)))
+        if getattr(FLAGS, 'width_scalars', False):
+            # These have no weight decay - every one-dimensional parameter
+            # gets zero - so nothing pulls them back toward 1.0, and a
+            # scalar drifting to zero turns its block into a bare
+            # identity. Printed per epoch so that failure is legible in a
+            # pasted log instead of showing up only as a bad table.
+            scales = [p for n, p in model_wrapper.named_parameters()
+                      if n.endswith('branch_scale')]
+            if scales:
+                flat = torch.cat([s.detach().flatten() for s in scales])
+                print('branch_scale {} min {:.4f} mean {:.4f} max {:.4f}'
+                      .format(epoch, float(flat.min()), float(flat.mean()),
+                              float(flat.max())))
         if epoch == getattr(FLAGS, 'reorder_epoch', -1):
             if getattr(FLAGS, 'reorder_by', 'l1') == 'taylor':
                 # The Taylor score needs a gradient on the gains, and
