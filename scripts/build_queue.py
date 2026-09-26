@@ -71,6 +71,8 @@ QUEUE = [
      'Who teaches, and the one place recalibration cannot reach'),
     ('bq_equalize_half', 'bo_conv_averaged',
      'The learning rate nobody set'),
+    ('br_a300', 'bs_k300',
+     'The same two branches, three times the schedule'),
 ]
 
 # ak_bures died in linalg.eigh three minutes in and the fix landed after,

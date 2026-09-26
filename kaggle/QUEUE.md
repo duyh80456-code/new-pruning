@@ -61,6 +61,7 @@ training loop rather than running it, so anything that lives only in
 | 24 | `kaggle_kd_24_bl_ab.ipynb` | `bl_gromov`, `ab_no_debias` | Comparing the widths without truncating either | free / free |
 | 25 | `kaggle_kd_25_bn_bp.ipynb` | `bn_ensemble`, `bp_width_scalars` | Who teaches, and the one place recalibration cannot reach | free / free |
 | 26 | `kaggle_kd_26_bq_bo.ipynb` | `bq_equalize_half`, `bo_conv_averaged` | The learning rate nobody set | free / free |
+| 27 | `kaggle_kd_27_br_bs.ipynb` | `br_a300`, `bs_k300` | The same two branches, three times the schedule | free / free |
 
 ## Held back
 

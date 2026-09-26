@@ -336,6 +336,57 @@ of exactly C/k for BO, 32 scalars all moved off 1.0 for BP, and a printed
 ens_loss for BN. The suite passing is not the evidence here.
 """
 
+LONGER = """This notebook changes one number and nothing else: 100 epochs becomes
+300, for **A** and for **K**. It is the first time this project has
+questioned its own training budget.
+
+Two reasons, and the second is the one that makes it more than a
+formality.
+
+**100 epochs is short for CIFAR-100.** CRD trains at 240, the standard
+pytorch-cifar100 ResNet-18 baseline at 200. The protocol gap is not
+small: WRN-40-1 scores 71.98 at 240 epochs against 69.11 at 200, the same
+architecture either way. Every number in this table was read at 100.
+
+**And a slimmable network dilutes its budget in a way a single network
+does not.** make_divisible with divisor 8 collapses the uniform draw on
+[0.25, 1.00] to exactly **90 distinct networks** - not a continuum, ninety
+- and the sandwich rule activates four of them per step. So an
+intermediate width sees on the order of 2/(90-2) of the total, about
+**2.3 epochs out of 100**. Tripling the budget triples that.
+
+Scala prices this axis directly: dropping from 13 granularities to 4 at a
+fixed 300 epochs buys +1.6 at width 0.50 and +0.7 at 0.75. They stop at
+13; this project sits at 90. HydraViT reports the same shape from the
+other side - their many-subnet penalty is 0.7 points at 300 epochs and
+gone by 800.
+
+**Read the result against the 100-epoch rows, not against each other.**
+If A and K both gain about the same, the budget was simply short and every
+delta this project has measured survives with a better baseline underneath
+it. If K's margin over A shrinks, then part of that +0.75 was K
+*converging faster* rather than converging better - a different claim, and
+one the current table cannot distinguish. Either answer changes what the
+paper says.
+
+## This one will not fit in a single session
+
+Projected from the 100-epoch runs: **A about 8 hours, K about 15 hours.**
+Both exceed one session, K by a factor of three.
+
+Every epoch writes a checkpoint, so use the resume path rather than
+starting over: when the session times out, attach its output to a fresh
+copy of this notebook and put the logs directory in `RESUME_FROM`. Expect
+roughly two rounds for A and three for K. The two branches run on
+separate cards, so the rounds happen in parallel and the pair needs about
+three sessions in total, not five.
+
+If that is more than you want to spend, say so before starting - 200
+epochs matches the standard CIFAR-100 protocol, halves K to about two
+rounds, and still doubles the per-width budget. It is a weaker test of the
+granularity hypothesis but a real one.
+"""
+
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
     # whose results are already recorded. OFF_AXIS is kept because it is
@@ -362,6 +413,8 @@ QUEUE = [
      'Who teaches, and the one place recalibration cannot reach', WHOTEACHES),
     (26, 'bq_equalize_half', 'bo_conv_averaged',
      'The learning rate nobody set', GRADSCALE),
+    (27, 'br_a300', 'bs_k300',
+     'The same two branches, three times the schedule', LONGER),
 ]
 
 HEADER = """# {number}. {title}
@@ -395,7 +448,7 @@ checkpoint, so at most one is lost.
 Send back the final table. Pasting the output of the last cell is enough.
 """
 
-CONFIG = """# Fixed for this notebook. Notebook {number} of 26.
+CONFIG = """# Fixed for this notebook. Notebook {number} of 27.
 BRANCHES = {branches!r}
 
 SMOKE_FIRST = True
