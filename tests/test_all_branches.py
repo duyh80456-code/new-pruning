@@ -131,12 +131,21 @@ def check_single():
                 if confusion is not None:
                     confusion.update(teacher_prob.detach(), target)
                 continue
-            loss = (temperature ** 2) * torch.mean(
-                soft(out / temperature, teacher_prob.detach()))
-            if feature is not None:
-                loss = loss + getattr(FLAGS, 'feature_weight', 1.0) * (
-                    width_gate(width) * feature(
-                        features, tuple(t.detach() for t in teacher_feature)))
+            if teacher_prob is None:
+                # A narrow-first curriculum returns [low] alone, so no
+                # width at least as wide as this one has run and there is
+                # no soft target to match. train.py falls back to the hard
+                # label in the same case; this mimic has to as well, or
+                # the check fails on a branch that trains fine.
+                loss = torch.mean(criterion(out, target))
+            else:
+                loss = (temperature ** 2) * torch.mean(
+                    soft(out / temperature, teacher_prob.detach()))
+                if feature is not None:
+                    loss = loss + getattr(FLAGS, 'feature_weight', 1.0) * (
+                        width_gate(width) * feature(
+                            features,
+                            tuple(t.detach() for t in teacher_feature)))
             losses.append(loss)
             if width != low:
                 mids.append(out)

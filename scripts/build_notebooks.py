@@ -387,6 +387,60 @@ rounds, and still doubles the per-width budget. It is a weaker test of the
 granularity hypothesis but a real one.
 """
 
+OTHERWAY = """The curriculum axis has one measured direction and it lost.
+
+Six branches here train width 1.00 alone for the first 10 or 25 epochs
+and then admit the narrow end. BF, BG, BD, BE, BH and BI average **-0.38
+against K**. Large-first is answered.
+
+This notebook is the other direction: **width 0.25 alone for the first 25
+epochs**, then the full sandwich. The argument is about which subnet ends
+up coherent. GrowTAS reports that a large subnet extended from a trained
+small one inherits the small one's layer-wise structure, while a small one
+cropped out of a trained large one shows "significantly lower cosine
+similarity in the deeper layers" - cropping discards dependencies the
+depth had learned. If that holds, this project has had the order
+backwards for 51 runs.
+
+**BU is the curriculum alone.** Nothing is frozen; the narrow end simply
+goes first.
+
+**BT adds the freeze.** After epoch 25 the gradient is zeroed over the
+block the width-0.25 subnet owns - conv and linear weights, and the BN
+scale and bias over the same channels, because otherwise the narrow
+subnet keeps drifting one affine parameter at a time and the branch would
+not test what it claims.
+
+The freeze is lighter than it sounds: that block is **710,576 of
+11,210,432 weights, 6.3 per cent**. The wider widths keep the rest. And
+the frozen part is exactly the prefix every width reads, which is where
+the widths disagree.
+
+Read the pair against **BF and BG**, not against K alone. Those are the
+same intervention pointed the other way, so the four rows together are
+the curriculum axis rather than two more branches on the pile.
+
+## Two things to be honest about
+
+**The literature points the other way on who needs protecting.** Thirteen
+measurements across representations, LLMs, ViTs, CNNs and quantization say
+the small end is *rescued* by weight sharing and the large end pays for
+it. If that is right here, settling the narrow end first protects
+something that is not broken while constraining the end that is. BU
+against BT is what separates "the order helped" from "the freezing
+helped", and either could come out negative.
+
+**This pair found two latent bugs, and both were unreachable until now.**
+Every sampler in this project has returned the widest width first or
+alone, so `chain_target` was always set by the time the narrower widths
+read it. Returning [low] alone raised `UnboundLocalError` on the first
+step of the real loop, and then the same assumption failed a second time
+inside the branch suite's mimic. Both now fall back to the hard label when
+no wider width has run, which is the correct semantics rather than a
+patch. The suite reads 4.5859 for these two against K's 22.6405, so
+unlike the last four branches it does see them.
+"""
+
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
     # whose results are already recorded. OFF_AXIS is kept because it is
@@ -415,6 +469,8 @@ QUEUE = [
      'The learning rate nobody set', GRADSCALE),
     (27, 'br_a300', 'bs_k300',
      'The same two branches, three times the schedule', LONGER),
+    (28, 'bu_narrow_first', 'bt_narrow_first_frozen',
+     'The narrow end first, and then held still', OTHERWAY),
 ]
 
 HEADER = """# {number}. {title}
@@ -448,7 +504,7 @@ checkpoint, so at most one is lost.
 Send back the final table. Pasting the output of the last cell is enough.
 """
 
-CONFIG = """# Fixed for this notebook. Notebook {number} of 27.
+CONFIG = """# Fixed for this notebook. Notebook {number} of 28.
 BRANCHES = {branches!r}
 
 SMOKE_FIRST = True

@@ -925,6 +925,16 @@ def training_widths(epoch, low, high):
     rather than inline in the loop so a test can see it; the loop could
     not be checked without running a full epoch.
     """
+    if epoch < getattr(FLAGS, 'narrow_first_epochs', 0):
+        # The opposite curriculum to narrow_start_epoch below: the narrow
+        # end alone first, so the shared prefix is settled by the width
+        # that depends on it most before any wider width is allowed to
+        # move it. GrowTAS's argument is that a large subnet extended
+        # from a trained small one keeps the small one's layer-wise
+        # structure, while a small one cropped out of a trained large one
+        # loses it in the deeper layers. Large-first is measured here and
+        # lost: the six warm-up branches average -0.38 against K.
+        return [low]
     if epoch < getattr(FLAGS, 'narrow_start_epoch', 0):
         return [high]
     free = [sample_width(low, high)

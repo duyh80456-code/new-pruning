@@ -31,6 +31,7 @@ from utils.loss_ops import build_spread_criterion, get_classifier_weight
 from utils.loss_ops import width_gate
 from models.slimmable_ops import bn_calibration_init
 from models.slimmable_ops import make_divisible
+from models.slimmable_ops import USBatchNorm2d, USConv2d, USLinear
 from utils.config import FLAGS
 from utils.meters import ScalarMeter, flush_scalar_meters
 
@@ -394,6 +395,47 @@ def lr_schedule_per_iteration(optimizer, epoch, batch_idx=0):
         pass
 
 
+def freeze_narrow_prefix(model, epoch):
+    """hold the narrow subnet still once it has been trained alone
+
+    requires_grad cannot mask part of a tensor, so the block the narrow
+    width owns is zeroed in the gradient instead, after backward and
+    after clipping. The block is exactly the prefix every wider width
+    also reads, which is where the widths disagree; freezing the width
+    0.25 block on this model locks 6.3 per cent of the weights and
+    leaves the rest free, so the constraint is much lighter than it
+    sounds.
+
+    Off unless freeze_prefix_at is set, and inert during the phase that
+    trains the narrow end, since there is nothing to protect yet.
+
+    BN scale and bias are frozen over the same channels. Without that the
+    narrow subnet still drifts, one affine parameter at a time, and the
+    branch would not be testing what it says it tests.
+    """
+    width = getattr(FLAGS, 'freeze_prefix_at', 0.0)
+    if not width or epoch < getattr(FLAGS, 'narrow_first_epochs', 0):
+        return
+    for module in model.modules():
+        if isinstance(module, (USConv2d, USLinear)):
+            weight = module.weight
+            if weight.grad is None:
+                continue
+            us = getattr(module, 'us', [True, True])
+            out = (make_divisible(weight.size(0) * width) if us[1]
+                   else weight.size(0))
+            inp = (make_divisible(weight.size(1) * width) if us[0]
+                   else weight.size(1))
+            weight.grad[:out, :inp] = 0.0
+            if module.bias is not None and module.bias.grad is not None:
+                module.bias.grad[:out] = 0.0
+        elif isinstance(module, USBatchNorm2d):
+            live = make_divisible(module.num_features_max * width)
+            for tensor in (module.weight, module.bias):
+                if tensor is not None and tensor.grad is not None:
+                    tensor.grad[:live] = 0.0
+
+
 def equalize_by_width_count(model, widths_train):
     """divide each output channel's gradient by how many widths wrote to it
 
@@ -607,6 +649,14 @@ def run_one_epoch(
                     mid_features = []
                     mid_widths = []
                     teacher_feature = None
+                    # No teacher until a width at least as wide as this
+                    # one has run. Every sampler until now returned the
+                    # widest width first or alone, so this was always set
+                    # by the time the else branch below read it; a
+                    # narrow-first curriculum returns [low] alone and
+                    # nothing sets it, which is an UnboundLocalError on
+                    # the first step rather than a wrong number.
+                    chain_target = None
                     for width_mult in widths_train:
                         # the sandwich rule
                         if width_mult in [max_width, min_width]:
@@ -648,7 +698,8 @@ def run_one_epoch(
                                     * spread_criterion(
                                         get_classifier_weight(model)))
                         else:
-                            if getattr(FLAGS, 'inplace_distill', False):
+                            if (getattr(FLAGS, 'inplace_distill', False)
+                                    and chain_target is not None):
                                 loss, output, feature = forward_loss(
                                     model, criterion, input, target, meter,
                                     soft_target=chain_target.detach(),
@@ -812,6 +863,7 @@ def run_one_epoch(
             if clip:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
             equalize_by_width_count(model, widths_train)
+            freeze_narrow_prefix(model, epoch)
             optimizer.step()
             if is_master() and getattr(FLAGS, 'slimmable_training', False):
                 for width_mult in sorted(FLAGS.width_mult_list, reverse=True):

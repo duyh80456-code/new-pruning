@@ -73,6 +73,8 @@ QUEUE = [
      'The learning rate nobody set'),
     ('br_a300', 'bs_k300',
      'The same two branches, three times the schedule'),
+    ('bu_narrow_first', 'bt_narrow_first_frozen',
+     'The narrow end first, and then held still'),
 ]
 
 # ak_bures died in linalg.eigh three minutes in and the fix landed after,

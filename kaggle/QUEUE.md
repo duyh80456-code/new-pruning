@@ -59,9 +59,10 @@ training loop rather than running it, so anything that lives only in
 | 22 | `kaggle_kd_22_q_r.ipynb` | `q_feature_mse`, `r_feature_mmd` | What the transport term actually bought | free / free |
 | 23 | `kaggle_kd_23_bm_bk.ipynb` | `bm_solo_full`, `bk_alpha_on_k` | The control never run, and the loss never tried under K | free / free |
 | 24 | `kaggle_kd_24_bl_ab.ipynb` | `bl_gromov`, `ab_no_debias` | Comparing the widths without truncating either | free / free |
-| 25 | `kaggle_kd_25_bn_bp.ipynb` | `bn_ensemble`, `bp_width_scalars` | Who teaches, and the one place recalibration cannot reach | free / free |
-| 26 | `kaggle_kd_26_bq_bo.ipynb` | `bq_equalize_half`, `bo_conv_averaged` | The learning rate nobody set | free / free |
+| 25 | `kaggle_kd_25_bn_bp.ipynb` | `bn_ensemble`, `bp_width_scalars` | Who teaches, and the one place recalibration cannot reach | 73.93 / 74.35 |
+| 26 | `kaggle_kd_26_bq_bo.ipynb` | `bq_equalize_half`, `bo_conv_averaged` | The learning rate nobody set | 73.63 / 74.16 |
 | 27 | `kaggle_kd_27_br_bs.ipynb` | `br_a300`, `bs_k300` | The same two branches, three times the schedule | free / free |
+| 28 | `kaggle_kd_28_bu_bt.ipynb` | `bu_narrow_first`, `bt_narrow_first_frozen` | The narrow end first, and then held still | free / free |
 
 ## Held back
 
