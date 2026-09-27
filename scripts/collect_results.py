@@ -646,25 +646,52 @@ def render():
       'are A and K at 300, the only pair measured at a second budget, and '
       'they do not agree with the rest of the table about what K is.')
     w('')
-    w('| | at 100 | at 300 | change | minutes |')
-    w('|---|---|---|---|---|')
+    w('| | top-1 at 100 | at 300 | change | NLL at 100 | at 300 | minutes |')
+    w('|---|---|---|---|---|---|---|')
     for short, long in (('a_kl', 'br_a300'), ('k_feature_pair', 'bs_k300')):
         lo, hi = by_name[short], by_name[long]
-        w('| {} | {:.2f} | {:.2f} | **{:+.2f}** | {} to {} |'.format(
-            lo['letter'], mean(lo['top1']), mean(hi['top1']),
-            mean(hi['top1']) - mean(lo['top1']),
-            lo['minutes'], hi['minutes']))
+        w('| {} | {:.2f} | {:.2f} | **{:+.2f}** | {:.3f} | {:.3f} | {} to {} |'
+          .format(lo['letter'], mean(lo['top1']), mean(hi['top1']),
+                  mean(hi['top1']) - mean(lo['top1']),
+                  nll_mean(lo), nll_mean(hi),
+                  lo['minutes'], hi['minutes']))
     w('')
     a100, k100 = by_name['a_kl'], by_name['k_feature_pair']
     a300, k300 = by_name['br_a300'], by_name['bs_k300']
     ahead100 = sum(1 for x, y in zip(k100['top1'], a100['top1']) if x > y)
     ahead300 = sum(1 for x, y in zip(k300['top1'], a300['top1']) if x > y)
-    w('K is ahead of A at {}/16 widths at 100 epochs and at '
-      '{}/16 at 300. The mean gap goes from {:+.2f} to {:+.2f}: the '
-      'headline of this report inverts when the schedule is tripled.'
+    nll100 = sum(1 for x, y in zip(k100['nll'], a100['nll']) if x < y)
+    nll300 = sum(1 for x, y in zip(k300['nll'], a300['nll']) if x < y)
+    w('On top-1, K is ahead of A at {}/16 widths at 100 epochs and at '
+      '{}/16 at 300, and the mean gap goes from {:+.2f} to {:+.2f}. That '
+      'much inverts when the schedule is tripled.'
       .format(ahead100, ahead300,
               mean(k100['top1']) - mean(a100['top1']),
               mean(k300['top1']) - mean(a300['top1'])))
+    w('')
+    w('On NLL it does not invert, and reading this pair on accuracy alone '
+      'is what makes K look beaten. K is better calibrated than A at '
+      '{}/16 widths at 100 epochs and at {}/16 at 300, and the margin '
+      '**widens** with the longer schedule, {:+.3f} to {:+.3f}. So at 300 '
+      'epochs K does not lose to A, it trades: {:.2f} of top-1 for '
+      '{:.3f} of NLL. Given that accuracy here resolves to 0.10 and NLL '
+      'to 0.001, that is not an obviously good trade for A.'
+      .format(nll100, nll300,
+              nll_mean(k100) - nll_mean(a100),
+              nll_mean(k300) - nll_mean(a300),
+              mean(a300['top1']) - mean(k300['top1']),
+              nll_mean(a300) - nll_mean(k300)))
+    w('')
+    w('What A buys the extra accuracy with is visible in the same column. '
+      'A at 300 epochs reads {:.3f} of NLL against {:.3f} at 100: its '
+      'calibration gets substantially worse while its accuracy improves, '
+      'which is the signature of a network that has memorised the '
+      'training set - train error at the widest width ends at 0.02 per '
+      'cent - and is now confidently wrong on what it misses. The '
+      'transport term is not a classification term, so it constrains how '
+      'far the logits can saturate, and that is the most plausible reason '
+      'K resists this while A does not.'
+      .format(nll_mean(a300), nll_mean(a100)))
     w('')
     w('The shape is what makes it mechanical rather than a bad seed. What '
       'the extra 200 epochs bought each branch, by width:')
@@ -706,14 +733,19 @@ def render():
       'neither 300-epoch run is the best branch at a single one of the '
       'sixteen widths, and adding both leaves the per-width envelope '
       'unchanged. And it does not say the loss work was wasted compute, '
-      'because that comparison runs the other way: K reaches {:.2f} in {} '
-      'minutes where A needs {} minutes to reach {:.2f}, so the transport '
-      'term buys more than tripling the budget of the baseline does, at '
-      '{:.0f} per cent of the wall-clock. What it does not do is '
-      'compound. K at 300 costs {} minutes and gives back {:.2f}.'
+      'because that comparison runs the other way, and on both metrics at '
+      'once. K at 100 epochs beats A at 300 on top-1, {:.2f} against '
+      '{:.2f}; on NLL, {:.3f} against {:.3f}, better at all sixteen '
+      'widths; and on wall-clock, {} minutes against {}, or {:.0f} per '
+      'cent. There is no axis on which A at 300 epochs wins that '
+      'comparison, so the transport term buys more than tripling the '
+      'budget of the baseline does. What it does not do is compound: K '
+      'at 300 costs {} minutes to fall back to {:.2f} on top-1, though it '
+      'keeps its advantage on NLL.'
       .format(mean(k100['top1']), mean(a100['top1']),
-              mean(k100['top1']), k100['minutes'],
-              a300['minutes'], mean(a300['top1']),
+              mean(k100['top1']), mean(a300['top1']),
+              nll_mean(k100), nll_mean(a300),
+              k100['minutes'], a300['minutes'],
               100.0 * k100['minutes'] / a300['minutes'],
               k300['minutes'], mean(k300['top1'])))
     w('')

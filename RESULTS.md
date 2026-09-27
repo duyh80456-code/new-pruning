@@ -592,12 +592,16 @@ Six per cent of the available ordering is left at width 1.00 and three at 0.50, 
 
 Every other number on this page was read at 100 epochs. BR and BS are A and K at 300, the only pair measured at a second budget, and they do not agree with the rest of the table about what K is.
 
-| | at 100 | at 300 | change | minutes |
-|---|---|---|---|---|
-| A | 73.52 | 74.13 | **+0.61** | 165 to 495 |
-| K | 74.26 | 73.91 | **-0.35** | 299 to 849 |
+| | top-1 at 100 | at 300 | change | NLL at 100 | at 300 | minutes |
+|---|---|---|---|---|---|---|
+| A | 73.52 | 74.13 | **+0.61** | 1.361 | 1.518 | 165 to 495 |
+| K | 74.26 | 73.91 | **-0.35** | 1.127 | 1.178 | 299 to 849 |
 
-K is ahead of A at 16/16 widths at 100 epochs and at 4/16 at 300. The mean gap goes from +0.75 to -0.22: the headline of this report inverts when the schedule is tripled.
+On top-1, K is ahead of A at 16/16 widths at 100 epochs and at 4/16 at 300, and the mean gap goes from +0.75 to -0.22. That much inverts when the schedule is tripled.
+
+On NLL it does not invert, and reading this pair on accuracy alone is what makes K look beaten. K is better calibrated than A at 16/16 widths at 100 epochs and at 16/16 at 300, and the margin **widens** with the longer schedule, -0.234 to -0.340. So at 300 epochs K does not lose to A, it trades: 0.22 of top-1 for 0.340 of NLL. Given that accuracy here resolves to 0.10 and NLL to 0.001, that is not an obviously good trade for A.
+
+What A buys the extra accuracy with is visible in the same column. A at 300 epochs reads 1.518 of NLL against 1.361 at 100: its calibration gets substantially worse while its accuracy improves, which is the signature of a network that has memorised the training set - train error at the widest width ends at 0.02 per cent - and is now confidently wrong on what it misses. The transport term is not a classification term, so it constrains how far the logits can saturate, and that is the most plausible reason K resists this while A does not.
 
 The shape is what makes it mechanical rather than a bad seed. What the extra 200 epochs bought each branch, by width:
 
@@ -614,7 +618,7 @@ A gains at fifteen of sixteen widths. K gains below 0.50 and loses above it, mon
 
 The training log says why, and it is visible without another run. The transport term does not decay. Over the last fifty-three epochs of BS the logged `pair_loss` stays between 0.135 and 0.162 while both task losses collapse: cross-entropy at the widest width falls 0.0111 to 0.0026, and at the narrowest 0.2000 to 0.0574. The share of the objective carried by the transport term therefore goes from 42 per cent to 70 per cent without the term itself changing. Late in a long schedule K is mostly matching features between two widths with almost no classification signal left to hold it in place, and the widest width, which carries no transport term of its own and only pays for the others, is where that costs the most.
 
-Three things this does not say. It does not retract K at 100 epochs: 74.26 against 73.52, ahead at all sixteen widths, stands as measured. It does not say longer is better in general, because neither 300-epoch run is the best branch at a single one of the sixteen widths, and adding both leaves the per-width envelope unchanged. And it does not say the loss work was wasted compute, because that comparison runs the other way: K reaches 74.26 in 299 minutes where A needs 495 minutes to reach 74.13, so the transport term buys more than tripling the budget of the baseline does, at 60 per cent of the wall-clock. What it does not do is compound. K at 300 costs 849 minutes and gives back 73.91.
+Three things this does not say. It does not retract K at 100 epochs: 74.26 against 73.52, ahead at all sixteen widths, stands as measured. It does not say longer is better in general, because neither 300-epoch run is the best branch at a single one of the sixteen widths, and adding both leaves the per-width envelope unchanged. And it does not say the loss work was wasted compute, because that comparison runs the other way, and on both metrics at once. K at 100 epochs beats A at 300 on top-1, 74.26 against 74.13; on NLL, 1.127 against 1.518, better at all sixteen widths; and on wall-clock, 299 minutes against 495, or 60 per cent. There is no axis on which A at 300 epochs wins that comparison, so the transport term buys more than tripling the budget of the baseline does. What it does not do is compound: K at 300 costs 849 minutes to fall back to 73.91 on top-1, though it keeps its advantage on NLL.
 
 One caveat on that wall-clock reading, because it is the most favourable sentence in this section. A was never run at 200 epochs, so there is no measurement of A at the 299-minute budget K used; the comparison above is against A at 300, which spent more. That direction is the honest one, but the matched point is missing and it is a cheap run.
 
