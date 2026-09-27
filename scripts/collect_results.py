@@ -426,21 +426,32 @@ def render():
     letter_of = {r['name']: r['letter'] for r in runs}
 
     def diff(settings, base):
-        return [(k, v) for k, v in sorted(settings.items())
-                if base.get(k) != v and k != 'log_dir']
+        # Both directions. A key the ancestor sets and the branch omits
+        # is a difference too, and leaving it out of the count let a
+        # branch be matched to an ancestor it had nothing to do with:
+        # BR is A with a longer schedule, and against the one-directional
+        # diff it read as I, because dropping I's feature terms was free.
+        changed = [(k, v) for k, v in sorted(settings.items())
+                   if base.get(k) != v and k != 'log_dir']
+        dropped = [(k, base[k]) for k in sorted(base)
+                   if k not in settings and k != 'log_dir']
+        return changed, dropped
 
     for run in ranked:
         settings = config_keys(run['name'])
         if settings is None:
             continue
-        best_name, best_changed = None, None
+        best_name, best_changed, best_dropped = None, None, None
         for name, base in ancestors:
             if name == run['name']:
                 continue
-            changed = diff(settings, base)
-            if best_changed is None or len(changed) < len(best_changed):
-                best_name, best_changed = name, changed
-        if not best_changed:
+            changed, dropped = diff(settings, base)
+            if (best_changed is None
+                    or len(changed) + len(dropped)
+                    < len(best_changed) + len(best_dropped)):
+                best_name = name
+                best_changed, best_dropped = changed, dropped
+        if not best_changed and not best_dropped:
             w('**{}** - {}. Identical to {} in config; they differ by '
               'seed.'.format(run['letter'], run['what'],
                              letter_of.get(best_name, best_name)))
@@ -459,6 +470,9 @@ def render():
             text = explain(key, value)
             w('* `{}: {}`{}'.format(
                 key, value, ' - ' + text if text else ''))
+        for key, value in best_dropped:
+            w('* `{}` not set, against `{}` in {}'.format(
+                key, value, letter_of.get(best_name, best_name)))
         w('')
 
     w('## Which channels the prefix holds')
@@ -626,6 +640,101 @@ def render():
       'seven contradict.')
     w('')
 
+    w('## What the epoch budget decides')
+    w('')
+    w('Every other number on this page was read at 100 epochs. BR and BS '
+      'are A and K at 300, the only pair measured at a second budget, and '
+      'they do not agree with the rest of the table about what K is.')
+    w('')
+    w('| | at 100 | at 300 | change | minutes |')
+    w('|---|---|---|---|---|')
+    for short, long in (('a_kl', 'br_a300'), ('k_feature_pair', 'bs_k300')):
+        lo, hi = by_name[short], by_name[long]
+        w('| {} | {:.2f} | {:.2f} | **{:+.2f}** | {} to {} |'.format(
+            lo['letter'], mean(lo['top1']), mean(hi['top1']),
+            mean(hi['top1']) - mean(lo['top1']),
+            lo['minutes'], hi['minutes']))
+    w('')
+    a100, k100 = by_name['a_kl'], by_name['k_feature_pair']
+    a300, k300 = by_name['br_a300'], by_name['bs_k300']
+    ahead100 = sum(1 for x, y in zip(k100['top1'], a100['top1']) if x > y)
+    ahead300 = sum(1 for x, y in zip(k300['top1'], a300['top1']) if x > y)
+    w('K is ahead of A at {}/16 widths at 100 epochs and at '
+      '{}/16 at 300. The mean gap goes from {:+.2f} to {:+.2f}: the '
+      'headline of this report inverts when the schedule is tripled.'
+      .format(ahead100, ahead300,
+              mean(k100['top1']) - mean(a100['top1']),
+              mean(k300['top1']) - mean(a300['top1'])))
+    w('')
+    w('The shape is what makes it mechanical rather than a bad seed. What '
+      'the extra 200 epochs bought each branch, by width:')
+    w('')
+    w('| width | A | K |')
+    w('|---|---|---|')
+    for index, width in enumerate(widths):
+        if index % 3 and width != 1.00:
+            continue
+        w('| {:.2f} | {:+.2f} | {:+.2f} |'.format(
+            width,
+            a300['top1'][index] - a100['top1'][index],
+            k300['top1'][index] - k100['top1'][index]))
+    w('')
+    w('A gains at fifteen of sixteen widths. K gains below 0.50 and loses '
+      'above it, monotonically, all the way to {:+.2f} at the widest '
+      'width, where it drops from {:.2f} to {:.2f}. Training the same '
+      'branch three times longer costs it more than a point exactly where '
+      'the network has the most capacity.'.format(
+          k300['top1'][-1] - k100['top1'][-1],
+          k100['top1'][-1], k300['top1'][-1]))
+    w('')
+    w('The training log says why, and it is visible without another run. '
+      'The transport term does not decay. Over the last fifty-three '
+      'epochs of BS the logged `pair_loss` stays between 0.135 and 0.162 '
+      'while both task losses collapse: cross-entropy at the widest width '
+      'falls 0.0111 to 0.0026, and at the narrowest 0.2000 to 0.0574. The '
+      'share of the objective carried by the transport term therefore '
+      'goes from 42 per cent to 70 per cent without the term itself '
+      'changing. Late in a long schedule K is mostly matching features '
+      'between two widths with almost no classification signal left to '
+      'hold it in place, and the widest width, which carries no transport '
+      'term of its own and only pays for the others, is where that costs '
+      'the most.')
+    w('')
+    w('Three things this does not say. It does not retract K at 100 '
+      'epochs: {:.2f} against {:.2f}, ahead at all sixteen widths, stands '
+      'as measured. It does not say longer is better in general, because '
+      'neither 300-epoch run is the best branch at a single one of the '
+      'sixteen widths, and adding both leaves the per-width envelope '
+      'unchanged. And it does not say the loss work was wasted compute, '
+      'because that comparison runs the other way: K reaches {:.2f} in {} '
+      'minutes where A needs {} minutes to reach {:.2f}, so the transport '
+      'term buys more than tripling the budget of the baseline does, at '
+      '{:.0f} per cent of the wall-clock. What it does not do is '
+      'compound. K at 300 costs {} minutes and gives back {:.2f}.'
+      .format(mean(k100['top1']), mean(a100['top1']),
+              mean(k100['top1']), k100['minutes'],
+              a300['minutes'], mean(a300['top1']),
+              100.0 * k100['minutes'] / a300['minutes'],
+              k300['minutes'], mean(k300['top1'])))
+    w('')
+    w('One caveat on that wall-clock reading, because it is the most '
+      'favourable sentence in this section. A was never run at 200 '
+      'epochs, so there is no measurement of A at the {}-minute budget K '
+      'used; the comparison above is against A at 300, which spent more. '
+      'That direction is the honest one, but the matched point is missing '
+      'and it is a cheap run.'.format(k100['minutes']))
+    w('')
+    w('The repair is already in the repository and has never been pointed '
+      'at K. `width_gate` in `utils/loss_ops.py` implements '
+      '`weight_schedule: narrow`, which fades an extra term out toward '
+      'the wide widths, and its docstring was written to predict exactly '
+      'this shape: that every intervention here helps the narrow end and '
+      'costs something at the wide one. The flag appears in two configs, '
+      'L and N, both at 100 epochs, where the cost at the wide end had '
+      'not yet grown large enough to see. K at 300 with the term '
+      'scheduled off above the middle is the run this section asks for.')
+    w('')
+
     w('## Not settled')
     w('')
     w('- Whether F is ahead of A at all. The accuracy gap is at the '
@@ -663,7 +772,9 @@ def render():
       'not the mean: AW is ahead of K at eight widths out of sixteen, '
       'behind at eight, scattered from -0.26 to +0.71. A real gain '
       'does not look like that. K against A is ahead at all sixteen, '
-      'which is what one does look like. On this evidence AW ties K '
+      'which is what one does look like - at 100 epochs, and the '
+      'budget section above is where that stops being true. On '
+      'this evidence AW ties K '
       'and the ordering between them is a coin.')
     w('- What AW is still worth, and a correction to what this page '
       'said about it. AW is not a second route to K. Diff the two '
