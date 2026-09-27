@@ -89,6 +89,19 @@ def make_divisible(v, divisor=8, min_value=1):
     return new_v
 
 
+def isolated(width_mult):
+    """Scala's isolated activation: the narrowest width takes the last
+    channels of every layer instead of the first
+
+    Zhang et al., NeurIPS 2024. Their models_scala.py slices weight[-k:]
+    at the smallest ratio and weight[:k] everywhere else, so the narrowest
+    subnet shares no leading channels with the widths just above it. At
+    the widest the two slices are the same tensor.
+    """
+    return (getattr(FLAGS, 'isolate_smallest', False)
+            and width_mult == FLAGS.width_mult_range[0])
+
+
 class USConv2d(nn.Conv2d):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1,
                  padding=0, dilation=1, groups=1, depthwise=False, bias=True,
@@ -116,9 +129,18 @@ class USConv2d(nn.Conv2d):
                 * self.width_mult
                 / self.ratio[1]) * self.ratio[1]
         self.groups = self.in_channels if self.depthwise else 1
-        weight = self.weight[:self.out_channels, :self.in_channels, :, :]
+        if isolated(self.width_mult):
+            if self.depthwise:
+                raise NotImplementedError(
+                    'isolate_smallest is not written for depthwise convs')
+            rows = slice(self.weight.size(0) - self.out_channels, None)
+            cols = slice(self.weight.size(1) - self.in_channels, None)
+        else:
+            rows = slice(0, self.out_channels)
+            cols = slice(0, self.in_channels)
+        weight = self.weight[rows, cols, :, :]
         if self.bias is not None:
-            bias = self.bias[:self.out_channels]
+            bias = self.bias[rows]
         else:
             bias = self.bias
         y = nn.functional.conv2d(
@@ -161,9 +183,15 @@ class USLinear(nn.Linear):
         if self.us[1]:
             self.out_features = make_divisible(
                 self.out_features_max * self.width_mult)
-        weight = self.weight[:self.out_features, :self.in_features]
+        if isolated(self.width_mult):
+            rows = slice(self.weight.size(0) - self.out_features, None)
+            cols = slice(self.weight.size(1) - self.in_features, None)
+        else:
+            rows = slice(0, self.out_features)
+            cols = slice(0, self.in_features)
+        weight = self.weight[rows, cols]
         if self.bias is not None:
-            bias = self.bias[:self.out_features]
+            bias = self.bias[rows]
         else:
             bias = self.bias
         return nn.functional.linear(input, weight, bias)
@@ -193,6 +221,12 @@ class USBatchNorm2d(nn.BatchNorm2d):
         bias = self.bias
         c = make_divisible(
             self.num_features_max * self.width_mult / self.ratio) * self.ratio
+        if isolated(self.width_mult):
+            # the affine half moves with the channels; the running
+            # statistics do not need to, because the narrowest width has
+            # its own BN slot and nothing else reads it
+            weight = weight[weight.size(0) - c:]
+            bias = bias[bias.size(0) - c:]
         momentum = self.momentum
         if self.width_mult in FLAGS.width_mult_list:
             idx = FLAGS.width_mult_list.index(self.width_mult)

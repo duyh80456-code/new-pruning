@@ -942,9 +942,32 @@ def training_widths(epoch, low, high):
         return [getattr(FLAGS, 'narrow_first_width', low)]
     if epoch < getattr(FLAGS, 'narrow_start_epoch', 0):
         return [high]
+    if getattr(FLAGS, 'width_sampling', 'uniform') == 'stable':
+        return [high, low] + stable_widths(low, high)
     free = [sample_width(low, high)
             for _ in range(getattr(FLAGS, 'num_sample_training', 2) - 2)]
     return [high, low] + free
+
+
+def stable_widths(low, high):
+    """Scala's stable sampling: one free width from each half of the range
+
+    Their engine draws width_3q on the grid from the midpoint up to one
+    step short of the widest, and width_2q from one step above the
+    narrowest to one step short of the midpoint, so the two free widths
+    never land close together. Their grid step is 0.0625, which gives
+    their 13 evaluated widths; stable_granularity 0.05 gives this
+    project's 16, so every width it trains is one the table reads.
+    """
+    if getattr(FLAGS, 'num_sample_training', 2) != 4:
+        raise ValueError('stable sampling draws exactly two free widths')
+    step = getattr(FLAGS, 'stable_granularity', 0.05)
+    low_i = int(round(low / step))
+    high_i = int(round(high / step))
+    mid_i = int(math.floor((low + high) / 2.0 / step + 1e-9))
+    upper = random.randint(mid_i, high_i - 1) * step
+    lower = random.randint(low_i + 1, mid_i - 1) * step
+    return [round(upper, 10), round(lower, 10)]
 
 
 def width_gate(width_mult):

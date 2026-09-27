@@ -178,6 +178,20 @@ LEGEND = [
      'for uniform'),
     ('width_sampling=macs', 'the same draw made flat in compute. MACs '
      'measured at width^1.965 here, so this leans toward the wide end'),
+    ('ema_teacher_decay', 'DS-Net: the students learn from an '
+     'exponential moving average of the network at its widest'),
+    ('resolution_list', 'MutualNet: every width but the widest sees the '
+     'batch at one of these resolutions, chosen at random'),
+    ('width_sampling=stable', 'Scala: one free width from each half of '
+     'the range, on a grid'),
+    ('stable_granularity', 'the grid step for stable sampling'),
+    ('student_ce_weight', 'Scala: every student also takes the hard label '
+     'at this weight'),
+    ('isolate_smallest', 'Scala: the narrowest width takes the last '
+     'channels of every layer instead of the first'),
+    ('conflict_from_epoch', 'NASViT: from this epoch, a subnet gradient '
+     'that conflicts with the widest one is scaled up before the two are '
+     'added'),
     ('teacher_chain', 'each width learns from the next larger one in the '
      'batch instead of every width learning from the widest'),
     ('num_sample_training', 'how many widths are run per step, the '

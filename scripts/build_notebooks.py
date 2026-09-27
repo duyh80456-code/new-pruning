@@ -537,6 +537,48 @@ first epoch lines give the real rate: K's `train` line prints seconds per
 epoch, and 100 of them is the run.
 """
 
+PUBLISHED = """Every branch in this table so far is this project's own idea. A paper
+needs the other column too: what the methods other people published in
+the US-Net line score **on this protocol**, not what they reported on
+theirs. ResNet-18, CIFAR-100, 100 epochs, batch 256, sixteen widths read
+after BN post-statistics, seed 1995 - exactly what A and K were run
+under.
+
+Four methods across notebooks 31 and 32, each implemented from the
+authors' **released code** rather than from the paper alone. Where the
+two disagree the code wins, and each config lists what had to change to
+fit a width-only ResNet-18 on CIFAR:
+
+| | method | from | what it adds to US-Net |
+|---|---|---|---|
+| BZ | DS-Net | CVPR 2021, changlin31/DS-Net | students learn from an EMA of the network, decay 0.997 |
+| CA | MutualNet | ECCV 2020, taoyang1122/MutualNet | every width but the widest sees a random resolution from [32, 28, 24, 20] |
+| CB | Scala | NeurIPS 2024, BeSpontaneous/Scala-pytorch | narrowest width on the last channels, stable sampling, progressive KD, label on every student, 10 warm-up epochs |
+| CC | NASViT | ICLR 2022, facebookresearch/NASViT | AlphaNet's loss plus a boost to subnet gradients that conflict with the widest, from epoch 25 |
+
+Two more published methods are already covered: AlphaNet is **B**
+(73.08, measured), and IPKD-TA - each width taught by the next larger
+one - is **BJ**, in notebook 21 and not yet run.
+
+**What was checked before this reached you.** Every earlier branch still
+gives a bit-identical gradient on a fixed batch, old code against new.
+Each flag was then shown to act inside train.py's own loop: DS-Net adds
+one gradient-free forward of the EMA network, MutualNet's widths saw
+sizes 20, 20 and 28 while the widest saw 32, Scala trains only the widest
+during warm-up and 1.00, 0.95, 0.50, 0.25 afterwards, and NASViT matches
+B to 3e-8 before epoch 25 and departs from it after. NASViT's merge
+matches the Constraint class from their repository to 5e-7 over 150
+random tensors.
+
+**How to read it.** Against A (73.52) and against K (74.26). A method
+that beats A but not K means K is ahead of published work on this
+protocol; one that beats K is the new reference. One seed each, so a gap
+under about 0.3 to either says nothing on its own.
+
+Each notebook should fit in one session: A took 165 minutes and B 167,
+and none of these adds more than one gradient-free forward per step.
+"""
+
 MULTI_SESSION = {27, 30}
 
 QUEUE = [
@@ -573,6 +615,10 @@ QUEUE = [
      'How much to settle first, and for how long', SETTLE_HOW_MUCH),
     (30, 'bx_a_r50', 'by_k_r50',
      'A and K on ResNet-50', DEEPER),
+    (31, 'bz_dsnet', 'ca_mutualnet',
+     'Published methods on this protocol: DS-Net and MutualNet', PUBLISHED),
+    (32, 'cb_scala', 'cc_nasvit',
+     'Published methods on this protocol: Scala and NASViT', PUBLISHED),
 ]
 
 HEADER = """# {number}. {title}
@@ -711,7 +757,8 @@ FILTER_NOW = chr(10).join([
 
 SUITES_NOW = chr(10).join([
     "          'tests/test_kd_variants.py',",
-    "          'tests/test_channel_reorder.py']"])
+    "          'tests/test_channel_reorder.py',",
+    "          'tests/test_published_methods.py']"])
 
 for number, left, right, title, preamble in QUEUE:
     nb = json.loads(json.dumps(template))

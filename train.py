@@ -1,3 +1,4 @@
+import copy
 import importlib
 import os
 import time
@@ -479,6 +480,99 @@ def equalize_by_width_count(model, widths_train):
         weight.grad.div_(counts.pow(q).view(shape))
 
 
+_EMA = {}
+
+
+def ema_teacher(model):
+    """DS-Net's target network, made on first use
+
+    In-place ensemble bootstrapping (Li et al., CVPR 2021): the students
+    learn from an exponential moving average of the network rather than
+    from the network itself. Kept as timm's ModelEma keeps it, the whole
+    state dict with buffers, and run in eval mode as theirs is. Their
+    released supernet config sets model_ema_decay 0.997, stepped once per
+    optimizer step, and ensemble_ib false - the ensemble for the narrowest
+    width that the paper describes is off in the code they released, so
+    it is off here too.
+    """
+    decay = getattr(FLAGS, 'ema_teacher_decay', 0.0)
+    if not decay:
+        return None
+    if 'net' not in _EMA:
+        _EMA['net'] = copy.deepcopy(model)
+        for p in _EMA['net'].parameters():
+            p.requires_grad_(False)
+    return _EMA['net']
+
+
+@torch.no_grad()
+def ema_target(teacher, input, width_mult):
+    """the EMA network's soft prediction at one width"""
+    teacher.eval()
+    teacher.apply(lambda m: setattr(m, 'width_mult', width_mult))
+    output = teacher(input)
+    if isinstance(output, tuple):
+        output = output[0]
+    hot = getattr(FLAGS, 'kd_temperature', 1.0)
+    return torch.nn.functional.softmax(output / hot, dim=1)
+
+
+@torch.no_grad()
+def update_ema_teacher(model):
+    net = _EMA.get('net')
+    if net is None:
+        return
+    decay = FLAGS.ema_teacher_decay
+    online = model.state_dict()
+    for name, value in net.state_dict().items():
+        if value.dtype.is_floating_point:
+            value.mul_(decay).add_(online[name], alpha=1.0 - decay)
+        else:
+            value.copy_(online[name])
+
+
+class GradientConflict(object):
+    """NASViT's treatment of a subnet gradient that fights the widest one
+
+    Gong et al., ICLR 2022, as misc/constrain_opt.py in their release does
+    it. The widest width's gradient is held aside, the other widths
+    accumulate theirs, and the two are merged per parameter tensor. From
+    conflict_from_epoch on, a subnet gradient whose inner product with the
+    widest one is negative is scaled up by clamp(-<g_s, g_l> / |g_s|^2,
+    0, 2) before the widest one is added back. Before it the two are just
+    summed, the ordinary gradient: their main.py switches this on at epoch
+    100 of 400.
+    """
+    def __init__(self):
+        self.held = {}
+
+    @torch.no_grad()
+    def hold(self, model):
+        self.held = {}
+        for p in model.parameters():
+            if p.grad is not None:
+                self.held[p] = p.grad.clone()
+                p.grad = None
+
+    @torch.no_grad()
+    def merge(self, model, epoch):
+        active = epoch >= FLAGS.conflict_from_epoch
+        for p in model.parameters():
+            largest = self.held.get(p)
+            if largest is None:
+                continue
+            if p.grad is None:
+                p.grad = largest
+                continue
+            if active:
+                inner = (p.grad * largest).sum()
+                step = torch.clamp(
+                    -inner / (1e-6 + p.grad.pow(2).sum()), min=0.0, max=2.0)
+                p.grad.add_(p.grad * step)
+            p.grad.add_(largest)
+        self.held = {}
+
+
 def pair_term(pair_criterion, feature_pair_criterion,
               left_output, left_feature, right_output, right_feature):
     """the horizontal term between two co-sampled widths, before gating"""
@@ -535,6 +629,12 @@ def forward_loss(
                 weight = weight / weight.mean().clamp_min(1e-12)
             per_sample = per_sample * weight
         loss = (temperature * temperature) * torch.mean(per_sample)
+        # Scala's noise calibration: every student also takes the label,
+        # weighted 1.0 in their release, so a teacher that is wrong early
+        # is not the only thing it hears
+        ce_weight = getattr(FLAGS, 'student_ce_weight', 0.0)
+        if ce_weight:
+            loss = loss + ce_weight * torch.mean(criterion(output, target))
     else:
         loss = torch.mean(criterion(output, target))
     # topk
@@ -688,6 +788,14 @@ def run_one_epoch(
                     # and a T4 has 15.
                     split = deferred and getattr(
                         FLAGS, 'split_pair_backward', False)
+                    conflict = None
+                    if getattr(FLAGS, 'conflict_from_epoch', None) is not None:
+                        if deferred:
+                            raise ValueError(
+                                'conflict_from_epoch needs the widest '
+                                'width to backward on its own, and a '
+                                'deferred step sums every width first')
+                        conflict = GradientConflict()
                     if split:
                         if getattr(FLAGS, 'ensemble_teacher', False):
                             raise ValueError(
@@ -758,23 +866,49 @@ def run_one_epoch(
                             # shared by every width, so charging it four
                             # times would only rescale it
                             chain_target = soft_target
+                            teacher_net = ema_teacher(model)
+                            if teacher_net is not None:
+                                chain_target = ema_target(
+                                    teacher_net, input, width_mult)
                             if spread_criterion is not None:
                                 loss = loss + (
                                     getattr(FLAGS, 'spread_weight', 0.0)
                                     * spread_criterion(
                                         get_classifier_weight(model)))
                         else:
+                            # MutualNet (Yang et al., ECCV 2020): the
+                            # widest width keeps the full image and every
+                            # other width takes one of resolution_list at
+                            # random, resized as their InputList does it.
+                            # Their CIFAR config is [32, 28, 24, 20].
+                            width_input = input
+                            sizes = getattr(FLAGS, 'resolution_list', None)
+                            if sizes:
+                                if split:
+                                    raise ValueError(
+                                        'resolution_list and '
+                                        'split_pair_backward read the '
+                                        'partner at different sizes')
+                                size = sizes[random.randint(
+                                    0, len(sizes) - 1)]
+                                if size != input.size(-1):
+                                    width_input = (
+                                        torch.nn.functional.interpolate(
+                                            input, (size, size),
+                                            mode='bilinear',
+                                            align_corners=True))
                             if (getattr(FLAGS, 'inplace_distill', False)
                                     and chain_target is not None):
                                 loss, output, feature = forward_loss(
-                                    model, criterion, input, target, meter,
+                                    model, criterion, width_input, target,
+                                    meter,
                                     soft_target=chain_target.detach(),
                                     soft_criterion=soft_criterion,
                                     return_output=True)
                             else:
                                 loss, output, feature = forward_loss(
-                                    model, criterion, input, target, meter,
-                                    return_output=True)
+                                    model, criterion, width_input, target,
+                                    meter, return_output=True)
                             if getattr(FLAGS, 'teacher_chain', False):
                                 # the next width down learns from this one
                                 # rather than from the widest, so the gap
@@ -836,6 +970,11 @@ def run_one_epoch(
                             losses.append(loss)
                         else:
                             loss.backward()
+                            if (conflict is not None
+                                    and width_mult == max_width):
+                                conflict.hold(model)
+                    if conflict is not None:
+                        conflict.merge(model, epoch)
                     if split and split_pairs and is_master():
                         meters[str(max_width)]['pair_loss'].cache(
                             (split_logged / len(split_pairs)).item())
@@ -952,6 +1091,7 @@ def run_one_epoch(
             equalize_by_width_count(model, widths_train)
             freeze_narrow_prefix(model, epoch)
             optimizer.step()
+            update_ema_teacher(model)
             if is_master() and getattr(FLAGS, 'slimmable_training', False):
                 for width_mult in sorted(FLAGS.width_mult_list, reverse=True):
                     meter = meters[str(width_mult)]
@@ -1154,6 +1294,9 @@ def train_val_test():
         lr_scheduler.last_epoch = last_epoch
         best_val = checkpoint['best_val']
         train_meters, val_meters = checkpoint['meters']
+        if checkpoint.get('ema_teacher') is not None:
+            ema_teacher(model_wrapper).load_state_dict(
+                checkpoint['ema_teacher'])
         print('Loaded checkpoint {} at epoch {}.'.format(
             FLAGS.log_dir, last_epoch))
     else:
@@ -1326,6 +1469,8 @@ def train_val_test():
                     'last_epoch': epoch,
                     'best_val': best_val,
                     'meters': (train_meters, val_meters),
+                    'ema_teacher': (_EMA['net'].state_dict()
+                                    if 'net' in _EMA else None),
                 },
                 os.path.join(FLAGS.log_dir, 'latest_checkpoint.pt'))
 
