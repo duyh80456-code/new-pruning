@@ -547,9 +547,29 @@ branch suite mimics the training loop rather than running it, so for
 these branches the smoke step below is what actually exercises the new
 code. Do not skip it.
 
-If the session times out partway, attach its output to a new copy and
-name the logs directory in `RESUME_FROM`. Every epoch writes a
-checkpoint, so at most one is lost.
+If the session times out partway, carry it forward rather than starting
+over. Every epoch writes a checkpoint, so at most one is lost, and the
+learning-rate schedule is restored with it - resuming does not restart
+the cosine.
+
+1. Save Version on the timed-out session, so its output persists.
+2. Make a fresh copy of this notebook.
+3. Add data -> Notebook Output -> pick that session.
+4. Set `RESUME_FROM` to the directory that *contains* `cifar100_<branch>`,
+   then Save & Run All.
+
+That directory is in one of two places depending on how the session
+ended, because the copy at the bottom of this notebook only runs if the
+session got that far:
+
+    finished the last cell   /kaggle/input/<slug>/logs
+    killed mid-training      /kaggle/input/<slug>/new-pruning/logs
+
+If in doubt, run `!find /kaggle/input -name latest_checkpoint.pt` in a
+scratch cell and take the parent of the parent. A correct path prints
+`restored cifar100_<branch>` and then `Loaded checkpoint ... at epoch N`;
+if you see `starting from scratch` instead, the path is wrong and the run
+will silently begin again at epoch 1.
 
 ## When it finishes
 
