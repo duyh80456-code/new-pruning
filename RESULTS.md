@@ -206,7 +206,7 @@ K, with:
 
 A, with:
 
-* `num_epochs: 300`
+* `num_epochs: 300` - the training budget; every row without this line trained for 100 epochs
 
 **AQ** - K transporting the two widths' class means rather than their samples
 
@@ -278,7 +278,7 @@ K, with:
 
 K, with:
 
-* `num_epochs: 300`
+* `num_epochs: 300` - the training budget; every row without this line trained for 100 epochs
 
 **BF** - K, narrow end held back 10 epochs, nothing permuted: the control for BD and BH
 

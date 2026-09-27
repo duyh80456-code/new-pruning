@@ -149,6 +149,9 @@ LEGEND = [
     ('feature_weight', 'the weight on the feature terms, set by matching '
      'gradient norms rather than loss values'),
     ('horizontal_weight', 'the weight on the horizontal term'),
+    ('depth=50', 'ResNet-50: bottleneck blocks [3, 4, 6, 3], 23.7M parameters and 2.34 times the MACs of ResNet-18 at every width'),
+    ('num_epochs', 'the training budget; every row without this line '
+     'trained for 100 epochs'),
     ('weight_schedule=narrow', 'the extra term is faded out toward the '
      'wide widths, where it was measured to hurt'),
     ('sinkhorn_eps', 'the entropic blur. Small collapses the plan onto a '

@@ -491,6 +491,54 @@ The suite reads 4.5719 for BV and 4.5859 for BW against K's 22.6405, so
 it does see both of these.
 """
 
+DEEPER = """The same two branches, **A** and **K**, on a network with twice the
+capacity. Everything else - 100 epochs, batch 256, learning rate 0.2,
+sixteen widths, seed - is what every ResNet-18 row used.
+
+**Why.** ResNet-18 is 11.2M parameters asked to be ninety different
+networks at once, and the nesting tax this project measured lands at the
+wide end: the full network is the one held back by having to contain all
+the others. More capacity is the direct test of whether that is a
+capacity limit. The slimmable line reports ResNet-50 on ImageNet at 100
+epochs, the same budget as here.
+
+**What changed in the code.** `depth: 50` swaps the basic block for the
+bottleneck, [3, 4, 6, 3], 23.7M parameters, a 2048-wide final feature.
+`depth` defaults to 18, and the ResNet-18 state dict is unchanged key for
+key, so no earlier branch builds anything different.
+
+K needed one more change to fit. It kept all four widths' graphs alive
+until the end of the step, which on ResNet-50 at batch 256 is 19.3 GB, and
+a T4 has 15. Only the pair term needs two widths at once, and its gradient
+splits exactly into one part through each side, so under
+`split_pair_backward` each width takes its part with the partner detached
+and is freed. Checked through train.py's own loop on a fixed batch: the
+gradient matches the old path to a relative 4e-8 on both depths, a
+deliberately broken split reads 2e-1, and the peak falls to 6.7 GB. It
+costs one forward without a graph per step. The flag is on in BY only.
+
+**How to read it.** BY against BX, not against the ResNet-18 rows - the
+"vs A" column in the final table is against ResNet-18's A, which is a
+different network. Two questions: does K's lead over A at 100 epochs
+survive the larger network, and does its NLL lead at every width.
+
+## K will need a second session
+
+ResNet-50 costs 2.34 times the MACs of ResNet-18 at every width. Scaled
+from the ResNet-18 runs, **A should take roughly 6 to 8 hours and K 12 to
+16**, so A finishes in one session and K will not. When the session ends,
+resume K exactly as in notebook 27: attach this session's output, set
+`RESUME_FROM`, run again. Only K will have work left; A's checkpoint is
+already at its last epoch, so it will calibrate, print its table and exit
+in a minute.
+
+These times are an estimate from MACs, not a measurement on a T4. The
+first epoch lines give the real rate: K's `train` line prints seconds per
+epoch, and 100 of them is the run.
+"""
+
+MULTI_SESSION = {27, 30}
+
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
     # whose results are already recorded. OFF_AXIS is kept because it is
@@ -523,6 +571,8 @@ QUEUE = [
      'The narrow end first, and then held still', OTHERWAY),
     (29, 'bv_half_first_frozen', 'bw_narrow10_frozen',
      'How much to settle first, and for how long', SETTLE_HOW_MUCH),
+    (30, 'bx_a_r50', 'by_k_r50',
+     'A and K on ResNet-50', DEEPER),
 ]
 
 HEADER = """# {number}. {title}
@@ -576,7 +626,7 @@ will silently begin again at epoch 1.
 Send back the final table. Pasting the output of the last cell is enough.
 """
 
-CONFIG = """# Fixed for this notebook. Notebook {number} of 29.
+CONFIG = """# Fixed for this notebook. Notebook {number} of {total}.
 BRANCHES = {branches!r}
 
 SMOKE_FIRST = True
@@ -674,11 +724,19 @@ for number, left, right, title, preamble in QUEUE:
         cell['source'] = source(body) if body.strip() else cell['source']
     body = HEADER.format(number=number, title=title,
                          preamble=preamble)
+    # 27 and 30 do not fit in one session and say so below the header;
+    # the header should not promise otherwise above it
+    if number in MULTI_SESSION:
+        body = body.replace(
+            'in a single session of roughly three to five\nhours.',
+            'over more than one session - see below for\nhow to carry it '
+            'forward.')
     for branch in (left, right):
         body += '## `{}`\n\n{}\n\n'.format(branch, banner(branch))
     nb['cells'][0]['source'] = source(body + FOOTER)
     nb['cells'][1]['source'] = source(CONFIG.format(
-        number=number, branches=[left, right]))
+        number=number, total=max(entry[0] for entry in QUEUE),
+        branches=[left, right]))
     name = 'kaggle_kd_{:02d}_{}_{}.ipynb'.format(
         number, left.split('_')[0], right.split('_')[0])
     with io.open(os.path.join(KAGGLE, name), 'w',

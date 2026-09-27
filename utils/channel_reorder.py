@@ -51,6 +51,16 @@ def collect(model):
     """
     net = _unwrap(model)
     features = net.features
+    # Every index below is a BasicBlock position: body[3] is its second
+    # conv and body[4] the BN after it. On a bottleneck body[3] is the
+    # 3x3 and the output BN is body[7], so the same walk would permute
+    # the wrong tensors and nothing downstream would notice.
+    odd = sorted({type(m).__name__ for m in features
+                  if hasattr(m, 'body') and type(m).__name__ != 'BasicBlock'})
+    if odd:
+        raise NotImplementedError(
+            'channel reordering knows the BasicBlock layout only, '
+            'not {}'.format(', '.join(odd)))
     stem_conv, stem_bn = features[0][0], features[0][1]
 
     # Walked in the order the forward pass runs, because that is the only

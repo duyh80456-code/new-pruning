@@ -479,6 +479,22 @@ def equalize_by_width_count(model, widths_train):
         weight.grad.div_(counts.pow(q).view(shape))
 
 
+def pair_term(pair_criterion, feature_pair_criterion,
+              left_output, left_feature, right_output, right_feature):
+    """the horizontal term between two co-sampled widths, before gating"""
+    here = 0.0
+    if pair_criterion is not None:
+        # the same temperature, on both sides: two students that have each
+        # memorized the data have as little to say to each other as a
+        # memorized teacher has to say to either
+        hot = getattr(FLAGS, 'kd_temperature', 1.0)
+        here = here + (hot * hot) * torch.mean(
+            pair_criterion(left_output / hot, right_output / hot))
+    if feature_pair_criterion is not None:
+        here = here + feature_pair_criterion(left_feature, right_feature)
+    return here
+
+
 def forward_loss(
         model, criterion, input, target, meter, soft_target=None,
         soft_criterion=None, return_soft_target=False, return_acc=False,
@@ -657,7 +673,57 @@ def run_one_epoch(
                     # nothing sets it, which is an UnboundLocalError on
                     # the first step rather than a wrong number.
                     chain_target = None
-                    for width_mult in widths_train:
+                    # One graph at a time instead of one per width. The
+                    # pair term is the only thing that needs two widths
+                    # alive together, and its gradient splits exactly into
+                    # a part through each side: dP(a, b) is dP/da da plus
+                    # dP/db db. So each width can take its own part with
+                    # the partner detached and be freed at once - the
+                    # deferred gradient, up to the order floats are added
+                    # in. The cost is the partner's value before the
+                    # partner has run: one forward without a graph per
+                    # pair. A width in the middle keeps no BN statistics,
+                    # so that forward has no side effects. ResNet-50 needs
+                    # this: K deferred four graphs to 19.3 GB at batch 256
+                    # and a T4 has 15.
+                    split = deferred and getattr(
+                        FLAGS, 'split_pair_backward', False)
+                    if split:
+                        if getattr(FLAGS, 'ensemble_teacher', False):
+                            raise ValueError(
+                                'split_pair_backward cannot serve '
+                                'ensemble_teacher, whose target reads every '
+                                'width through its graph at once')
+                        deferred = False
+                        # the pairing the deferred path computes: the
+                        # non-teacher widths in run order, re-sorted
+                        # ascending under teacher_chain
+                        order = [i for i, w in enumerate(widths_train)
+                                 if w != max_width]
+                        if getattr(FLAGS, 'teacher_chain', False):
+                            order = sorted(order,
+                                           key=lambda i: widths_train[i])
+                        split_pairs = [
+                            (order[i], order[j]) for i, j in
+                            horizontal_pairs(
+                                [widths_train[k] for k in order])]
+                        pairs_at = {}
+                        for pair in split_pairs:
+                            for i in pair:
+                                pairs_at.setdefault(i, []).append(pair)
+                        # the later of each pair is read ahead, for the
+                        # earlier one to be charged against
+                        known = {}
+                        with torch.no_grad():
+                            for i in sorted({max(pair)
+                                             for pair in split_pairs}):
+                                model.apply(lambda m: setattr(
+                                    m, 'width_mult', widths_train[i]))
+                                ahead = model(input)
+                                known[i] = (ahead if isinstance(ahead, tuple)
+                                            else (ahead, None))
+                        split_logged = 0.0
+                    for position, width_mult in enumerate(widths_train):
                         # the sandwich rule
                         if width_mult in [max_width, min_width]:
                             model.apply(
@@ -729,6 +795,34 @@ def run_one_epoch(
                                         feature,
                                         tuple(t.detach()
                                               for t in teacher_feature)))
+                            if split and position in pairs_at:
+                                share = 0.0
+                                for left, right in pairs_at[position]:
+                                    one = ((output, feature)
+                                           if left == position
+                                           else known[left])
+                                    two = ((output, feature)
+                                           if right == position
+                                           else known[right])
+                                    gated = width_gate(0.5 * (
+                                        widths_train[left]
+                                        + widths_train[right])) * pair_term(
+                                            pair_criterion,
+                                            feature_pair_criterion,
+                                            one[0], one[1], two[0], two[1])
+                                    share = share + gated
+                                    # logged once, by whichever side runs
+                                    # second
+                                    if position == max(left, right):
+                                        split_logged = (split_logged
+                                                        + gated.detach())
+                                loss = loss + (
+                                    getattr(FLAGS, 'horizontal_weight', 1.0)
+                                    * share / len(split_pairs))
+                                known[position] = (
+                                    output.detach(),
+                                    None if feature is None else tuple(
+                                        t.detach() for t in feature))
                             # every width but the teacher is a peer of
                             # every other: none of them stands in a
                             # teacher-student relation to another, which is
@@ -742,6 +836,9 @@ def run_one_epoch(
                             losses.append(loss)
                         else:
                             loss.backward()
+                    if split and split_pairs and is_master():
+                        meters[str(max_width)]['pair_loss'].cache(
+                            (split_logged / len(split_pairs)).item())
                     if deferred:
                         if getattr(FLAGS, 'teacher_chain', False):
                             # the loop ran widest first; horizontal_pairs
@@ -755,20 +852,10 @@ def run_one_epoch(
                         pair_loss = 0.0
                         pairs = horizontal_pairs(mid_widths)
                         for left, right in pairs:
-                            here = 0.0
-                            if pair_criterion is not None:
-                                # the same temperature, on both sides: two
-                                # students that have each memorized the data
-                                # have as little to say to each other as a
-                                # memorized teacher has to say to either
-                                hot = getattr(FLAGS, 'kd_temperature', 1.0)
-                                here = here + (hot * hot) * torch.mean(
-                                    pair_criterion(
-                                        mid_outputs[left] / hot,
-                                        mid_outputs[right] / hot))
-                            if feature_pair_criterion is not None:
-                                here = here + feature_pair_criterion(
-                                    mid_features[left], mid_features[right])
+                            here = pair_term(
+                                pair_criterion, feature_pair_criterion,
+                                mid_outputs[left], mid_features[left],
+                                mid_outputs[right], mid_features[right])
                             # each pair spans two widths, so the schedule
                             # reads the middle of that pair, not of the set
                             pair_loss = pair_loss + width_gate(

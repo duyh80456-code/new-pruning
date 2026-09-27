@@ -7,20 +7,11 @@ from .slimmable_ops import USBatchNorm2d, USConv2d, USLinear, make_divisible
 from utils.config import FLAGS
 
 
-class BasicBlock(nn.Module):
-    def __init__(self, inp, outp, stride):
-        super(BasicBlock, self).__init__()
-        assert stride in [1, 2]
+class _Residual(nn.Module):
+    """body(x) + shortcut(x), then a ReLU; the two block types differ only
+    in the body"""
 
-        self.body = nn.Sequential(
-            USConv2d(inp, outp, 3, stride, 1, bias=False),
-            USBatchNorm2d(outp),
-            nn.ReLU(inplace=True),
-
-            USConv2d(outp, outp, 3, 1, 1, bias=False),
-            USBatchNorm2d(outp),
-        )
-
+    def _finish(self, inp, outp, stride):
         # Both branches slim by the same width_mult, so their channel counts
         # agree at every width and the identity shortcut stays valid.
         if stride != 1 or inp != outp:
@@ -66,27 +57,76 @@ class BasicBlock(nn.Module):
         return self.post_relu(body + self.shortcut(x))
 
 
+class BasicBlock(_Residual):
+    def __init__(self, inp, outp, stride):
+        super(BasicBlock, self).__init__()
+        assert stride in [1, 2]
+
+        self.body = nn.Sequential(
+            USConv2d(inp, outp, 3, stride, 1, bias=False),
+            USBatchNorm2d(outp),
+            nn.ReLU(inplace=True),
+
+            USConv2d(outp, outp, 3, 1, 1, bias=False),
+            USBatchNorm2d(outp),
+        )
+        self._finish(inp, outp, stride)
+
+
+class Bottleneck(_Residual):
+    """1x1 down, 3x3, 1x1 up by four: the ResNet-50 block
+
+    The stride sits on the 3x3, as in torchvision, rather than on the first
+    1x1 as in the original paper. mid and outp are both built at the
+    widest width and slimmed by the same multiplier at run time, so the
+    four-to-one ratio holds at every width up to make_divisible rounding.
+    """
+    def __init__(self, inp, mid, outp, stride):
+        super(Bottleneck, self).__init__()
+        assert stride in [1, 2]
+
+        self.body = nn.Sequential(
+            USConv2d(inp, mid, 1, 1, 0, bias=False),
+            USBatchNorm2d(mid),
+            nn.ReLU(inplace=True),
+
+            USConv2d(mid, mid, 3, stride, 1, bias=False),
+            USBatchNorm2d(mid),
+            nn.ReLU(inplace=True),
+
+            USConv2d(mid, outp, 1, 1, 0, bias=False),
+            USBatchNorm2d(outp),
+        )
+        self._finish(inp, outp, stride)
+
+
 class Model(nn.Module):
     """universally slimmable ResNet for 32x32 inputs
 
     The CIFAR stem: 3x3 stride 1 and no max pool, so the four stages see
-    32, 16, 8 and 4 pixels. Depth [2, 2, 2, 2] is ResNet-18.
+    32, 16, 8 and 4 pixels. `depth` picks the block: 18 is [2, 2, 2, 2]
+    basic blocks and the default, so every config written before this
+    flag builds exactly what it built before; 50 is [3, 4, 6, 3]
+    bottlenecks, four times as wide at the output of every stage.
     """
     def __init__(self, num_classes=100, input_size=32):
         super(Model, self).__init__()
 
+        depth = getattr(FLAGS, 'depth', 18)
+        counts = {18: [2, 2, 2, 2], 50: [3, 4, 6, 3]}
+        if depth not in counts:
+            raise ValueError('us_resnet has depth 18 or 50, not {}'.format(
+                depth))
         # c, n, s
         self.block_setting = [
-            [64, 2, 1],
-            [128, 2, 2],
-            [256, 2, 2],
-            [512, 2, 2],
-        ]
+            [c, n, s] for (c, s), n in zip(
+                [(64, 1), (128, 2), (256, 2), (512, 2)], counts[depth])]
+        expansion = 4 if depth == 50 else 1
 
         width_mult = FLAGS.width_mult_range[-1]
         assert input_size % 8 == 0
         channels = make_divisible(64 * width_mult)
-        self.outp = make_divisible(512 * width_mult)
+        self.outp = make_divisible(512 * expansion * width_mult)
 
         # The stem takes RGB, which does not slim, hence us=[False, True].
         features = [nn.Sequential(
@@ -96,10 +136,16 @@ class Model(nn.Module):
         )]
 
         for c, n, s in self.block_setting:
-            outp = make_divisible(c * width_mult)
+            outp = make_divisible(c * expansion * width_mult)
             for i in range(n):
-                features.append(
-                    BasicBlock(channels, outp, s if i == 0 else 1))
+                stride = s if i == 0 else 1
+                if expansion == 1:
+                    block = BasicBlock(channels, outp, stride)
+                else:
+                    block = Bottleneck(channels,
+                                       make_divisible(c * width_mult),
+                                       outp, stride)
+                features.append(block)
                 channels = outp
 
         features.append(nn.AdaptiveAvgPool2d(1))

@@ -1,0 +1,93 @@
+# =========================== Branch BX ===========================
+# A on ResNet-50: US-Net as published, bottleneck blocks, 100 epochs.
+#
+# Why ResNet-50. Everything else in this table is ResNet-18, 11.2M
+# parameters asked to be ninety different networks at once, and the
+# nesting tax this project measured lands at the wide end - the full
+# network is the one constrained by having to contain all the others.
+# More capacity is the direct test of whether that tax is a capacity
+# limit. The slimmable line reports its ResNet-50 results on ImageNet at
+# 100 epochs, the same budget as here, and shared weights there beat
+# individually trained networks by 1.2 at 0.25x and tie in the middle.
+#
+# `depth: 50` swaps the basic block for the bottleneck, [3, 4, 6, 3],
+# 23.7M parameters, final feature 2048 wide. It costs 2.34 times the
+# MACs of ResNet-18 at every width (1298M against 555M at 1.00x, 81M
+# against 35M at 0.25x), so expect roughly that factor on the clock and a
+# resume across sessions. Nothing else changes: the feature transport
+# divides its cost by the spread of the clouds, so it is dimensionless
+# and K's feature weight of 1.0 carries over to the wider feature
+# without recalibration.
+#
+# Read BX against BY first, not against the ResNet-18 rows. The question
+# is whether K's lead over A at 100 epochs, and its NLL lead at every
+# width, survive a network with twice the capacity.
+
+num_gpus_per_job: 1
+num_cpus_per_job: 4
+memory_per_job: 30
+gpu_type: "nvidia-tesla-t4"
+
+# data
+dataset: data.cifar100
+data_transforms: data.cifar100
+data_loader: data.cifar100
+dataset_dir: data
+data_loader_workers: 2
+
+# info
+num_classes: 100
+image_size: 32
+topk: [1, 5]
+
+# optimizer
+optimizer: sgd
+momentum: 0.9
+weight_decay: 0.0005
+nesterov: True
+
+# Four losses are summed into one step and the KD terms are not bounded
+# the way cross entropy is, so one bad batch early can be unrecoverable.
+grad_clip: 5.0
+
+# lr
+lr: 0.2
+lr_scheduler: cosine_decaying
+lr_warmup: True
+lr_warmup_epochs: 1
+num_epochs: 2
+
+# model profiling
+profiling: [gpu]
+
+# pretrain, resume, test_only
+pretrained: ''
+resume: ''
+test_only: False
+
+random_seed: 1995
+batch_size: 64
+max_iters_per_epoch: 3
+reset_parameters: True
+
+# =========================== Override Settings ===========================
+log_dir: logs/smoke_bx_a_r50
+slimmable_training: True
+universally_slimmable_training: True
+num_sample_training: 4
+bn_cal_batch_num: 2
+calibrate_bn: true
+cumulative_bn_stats: true
+
+model: models.us_resnet
+depth: 50
+width_mult: 1.0
+width_mult_list: [0.25, 1.0]
+width_mult_range: [0.25, 1.0]
+# widths that get a calibrated BN and an entry in the final table
+width_mult_list_test: [0.25, 0.5, 0.75, 1.0]
+
+# =========================== Distillation ===========================
+inplace_distill: True
+kd_loss: soft_ce
+horizontal_kd: False
