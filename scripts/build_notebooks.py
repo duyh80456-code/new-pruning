@@ -560,6 +560,13 @@ Two more published methods are already covered: AlphaNet is **B**
 (73.08, measured), and IPKD-TA - each width taught by the next larger
 one - is **BJ**, in notebook 21 and not yet run.
 
+**Only peer-reviewed work is counted.** Every method here was accepted
+at the venue named, checked against the arXiv comment or journal field or
+the authors' own repository. SortedNet and Slimmable Pruned Networks are
+left out because they are still preprints; Joslim (non-uniform widths),
+SlimCLR and US3L (self-supervised), MatFormer (Transformer FFNs) and the
+NAS supernets are accepted but do not measure what this table measures.
+
 **What was checked before this reached you.** Every earlier branch still
 gives a bit-identical gradient on a fixed batch, old code against new.
 Each flag was then shown to act inside train.py's own loop: DS-Net adds
