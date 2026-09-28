@@ -161,6 +161,21 @@ class Model(nn.Module):
             index += count
             self.stage_ends['stage{}'.format(stage + 1)] = index
 
+        # SOLAR (WACV 2026) gives every subnet its own classifier over a
+        # shared backbone. Its subnets are a fixed handful; here the width
+        # is continuous, so the range is cut into head_groups equal bands
+        # and each band gets one head. The band holding the widest width
+        # keeps the name classifier, so head_groups 1 is the model as it
+        # was, key for key. The narrow heads are registered first on
+        # purpose: get_classifier_weight takes the last Linear it meets,
+        # and that has to stay the widest width's head, the one the
+        # teacher reads.
+        groups = getattr(FLAGS, 'head_groups', 1)
+        if groups > 1:
+            self.narrow_heads = nn.ModuleList([
+                USLinear(self.outp, num_classes, us=[True, False])
+                for _ in range(groups - 1)])
+
         # us=[True, False]: the input side slims with the width, the number
         # of classes does not. Teacher and student therefore share these
         # rows, which is what the class cost matrix in utils/loss_ops.py
@@ -171,10 +186,22 @@ class Model(nn.Module):
         if FLAGS.reset_parameters:
             self.reset_parameters()
 
+    def head(self):
+        """the classifier for the width the model is set to"""
+        if not hasattr(self, 'narrow_heads'):
+            return self.classifier
+        groups = len(self.narrow_heads) + 1
+        low, high = FLAGS.width_mult_range
+        width = self.classifier[0].width_mult
+        band = min(int((width - low) / (high - low) * groups), groups - 1)
+        if band == groups - 1:
+            return self.classifier
+        return self.narrow_heads[band]
+
     def forward(self, x):
         if not getattr(FLAGS, 'return_features', False):
             x = self.features(x)
-            return self.classifier(x.view(-1, x.size()[1]))
+            return self.head()(x.view(-1, x.size()[1]))
 
         # A tap is a stage name or 'final'. Everything but 'final' is a
         # spatial map, averaged over space so that one transport cost
@@ -190,7 +217,7 @@ class Model(nn.Module):
                 collected[wanted[index]] = x.mean(dim=(2, 3))
         x = x.view(-1, x.size()[1])
         collected['final'] = x
-        return self.classifier(x), tuple(collected[name] for name in taps)
+        return self.head()(x), tuple(collected[name] for name in taps)
 
     def reset_parameters(self):
         for m in self.modules():

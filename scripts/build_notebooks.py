@@ -598,7 +598,79 @@ forward. One run per card, so each notebook should fit in one session.
 Notebook 32 has one method and leaves the second card idle.
 """
 
-MULTI_SESSION = {27, 30}
+HEADS = """A and K on ResNet-50 again, each with **one classifier per band of
+widths** instead of one classifier for every width. Everything else is BX
+and BY from notebook 30, so **notebook 30 has to come back first**: CH is
+read against BX and CI against BY.
+
+**Where it comes from.** SOLAR (WACV 2026) gives every subnet of a
+once-for-all network its own classifier over the shared backbone and
+reports better accuracy and better calibration: the subnets stop fighting
+over one set of logit weights. Its subnets are a fixed eight. Here the
+width is continuous, so one head per width is impossible. `head_groups: 4`
+cuts 0.25 to 1.00 into four equal bands - at the test widths 0.25-0.40,
+0.45-0.60, 0.65-0.80, 0.85-1.00, four to a band - and each band has its
+own head. The network still runs at any width. This is an adaptation of
+SOLAR, not SOLAR, and should be written up that way.
+
+**What else it touches.** Nothing. The widest band's head keeps the name
+`classifier`, so the teacher, the class cost matrix and the state dict of
+every earlier branch are unchanged; `head_groups` defaults to 1, which
+builds the model it always did. The three extra heads add 0.6M parameters
+to 23.7M. The two middle heads train only on steps where a free width
+lands in their band, about 44 per cent of steps each.
+
+**What was checked.** tests/test_head_groups.py: the sixteen test widths
+fall four to a band, a backward at 0.25, 0.50, 0.70 and 1.00 reaches its
+own head and no other, width 0.25 reads a different head from 1.00, and
+the class cost matrix still reads the widest head. With the head selection
+broken on purpose it fails. Peak memory at batch 256: CH 9.47 GB, CI
+9.38 GB, both under the 15 GB of a T4.
+
+**How to read it.** Two questions. Does a head per band help A - if so the
+shared classifier was a bottleneck. And does it add to K, or does K's
+transport already relieve the same thing. Look at NLL as well as top-1:
+SOLAR's claim is calibration, and so is K's clearest one.
+
+## K will need a second session
+
+As in notebook 30: A should take roughly 6 to 8 hours and K 12 to 16, so
+CH finishes in one session and CI will not. When the session ends, attach
+its output, set `RESUME_FROM` and run again; CH will calibrate, print its
+table and exit in a minute.
+"""
+
+HEAD_SWEEP = """How many classifier heads. Notebook 33 splits the width range into
+four bands with a head each; these split it into **2, 8 and 16**, on A
+only, so that with BX (one head) and CH (four) the number of heads is
+swept at 1, 2, 4, 8, 16. **Notebook 30 has to come back first**, and
+notebook 33 is the one that says whether heads help at all.
+
+| | heads | test widths per head | a middle head trains on |
+|---|---|---|---|
+| BX | 1 | 16 | every step |
+| CJ | 2 | 8 | every step |
+| CH | 4 | 4 | about 44% of steps |
+| CK | 8 | 2 | about 23% of steps |
+| CL | 16 | 1 | about 12% of steps |
+
+The trade is in the last two columns. More heads let each band of widths
+set its own logit weights, and give each head fewer updates, because the
+sandwich rule runs only two free widths a step. At 16 every test width
+has its own head and a middle one is trained one step in eight - if that
+starves it, CL will show it at the middle widths first. The network runs
+at any width at every setting; only the bands move.
+
+Why on A and not K: A is half the time of K, and the sweep only has to
+find the number. The best one goes on K afterwards; CI in notebook 33 is
+already K with four.
+
+Each branch is A with one flag changed, so each finishes in one session,
+roughly 6 to 8 hours. Notebook 35 runs CL alone and leaves the second
+card idle.
+"""
+
+MULTI_SESSION = {27, 30, 33}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -638,6 +710,12 @@ QUEUE = [
      'Published methods on ResNet-50: DS-Net and Scala', PUBLISHED),
     (32, 'cg_nasvit_r50', None,
      'Published methods on ResNet-50: NASViT', PUBLISHED),
+    (33, 'ch_a_heads4_r50', 'ci_k_heads4_r50',
+     'A classifier per band of widths, on A and K', HEADS),
+    (34, 'cj_a_heads2_r50', 'ck_a_heads8_r50',
+     'How many heads: 2 and 8', HEAD_SWEEP),
+    (35, 'cl_a_heads16_r50', None,
+     'How many heads: 16', HEAD_SWEEP),
 ]
 
 HEADER = """# {number}. {title}
@@ -788,7 +866,8 @@ SUITES_NOW = chr(10).join([
     "          'tests/test_kd_variants.py',",
     "          'tests/test_channel_reorder.py',",
     "          'tests/test_published_methods.py',",
-    "          'tests/test_freeze.py']"])
+    "          'tests/test_freeze.py',",
+    "          'tests/test_head_groups.py']"])
 
 for number, left, right, title, preamble in QUEUE:
     nb = json.loads(json.dumps(template))
@@ -808,7 +887,7 @@ for number, left, right, title, preamble in QUEUE:
             'in a single session of roughly three to five\nhours.',
             'over more than one session - see below for\nhow to carry it '
             'forward.')
-    elif preamble is PUBLISHED:
+    elif preamble is PUBLISHED or preamble is HEAD_SWEEP:
         body = body.replace('three to five\nhours', 'six to nine\nhours')
     # a notebook may hold one branch and leave the second card idle
     branches = [branch for branch in (left, right) if branch]

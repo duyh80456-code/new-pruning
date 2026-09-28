@@ -187,6 +187,9 @@ LEGEND = [
      'at this weight'),
     ('isolate_smallest', 'Scala: the narrowest width takes the last '
      'channels of every layer instead of the first'),
+    ('head_groups', 'SOLAR, made continuous: the width range is cut into '
+     'this many equal bands and each band has its own classifier over the '
+     'shared backbone'),
     ('conflict_from_epoch', 'NASViT: from this epoch, a subnet gradient '
      'that conflicts with the widest one is scaled up before the two are '
      'added'),
