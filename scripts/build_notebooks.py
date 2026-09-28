@@ -762,16 +762,27 @@ FILTER_NOW = chr(10).join([
     "                line.startswith(('  ', ')', 'Model(', 'Total', 'Item'))",
     "                or not line.strip()):"])
 
+# The template carries on with zero GPUs and only fails at the first
+# .cuda() in the smoke step, after the dataset has been fetched. Notebook
+# 30 lost half an hour that way with Accelerator left at None.
+GPU_WAS = "if n_gpu < len(BRANCHES):"
+GPU_NOW = chr(10).join([
+    "if n_gpu == 0:",
+    "    raise SystemExit('No GPU in this session. Set Accelerator to '",
+    "                     'GPU T4 x2 in the notebook settings and run again.')",
+    "if n_gpu < len(BRANCHES):"])
+
 SUITES_NOW = chr(10).join([
     "          'tests/test_kd_variants.py',",
     "          'tests/test_channel_reorder.py',",
-    "          'tests/test_published_methods.py']"])
+    "          'tests/test_published_methods.py',",
+    "          'tests/test_freeze.py']"])
 
 for number, left, right, title, preamble in QUEUE:
     nb = json.loads(json.dumps(template))
     for cell in nb['cells']:
         body = ''.join(cell['source'])
-        for old, new in ((SUITES_WAS, SUITES_NOW),
+        for old, new in ((SUITES_WAS, SUITES_NOW), (GPU_WAS, GPU_NOW),
                          (QUIET_WAS, QUIET_NOW),
                          (FILTER_WAS, FILTER_NOW)):
             body = body.replace(old, new)

@@ -784,6 +784,50 @@ def render():
       'scheduled off above the middle is the run this section asks for.')
     w('')
 
+    w('## The curriculum axis, both directions')
+    w('')
+    k = by_name['k_feature_pair']
+    wide_first = [by_name[n] for n in ('bf_warm10_plain', 'bg_warm25_plain',
+                                       'bd_warm10_sort', 'be_warm25_sort',
+                                       'bh_warm10_taylor', 'bi_warm25_taylor')
+                  if n in by_name]
+    bu = by_name.get('bu_narrow_first')
+    if bu and wide_first:
+        gaps = [mean(r['top1']) - mean(k['top1']) for r in wide_first]
+        w('Six branches train width 1.00 alone first and then admit the '
+          'narrow end; they sit between {:+.2f} and {:+.2f} against K, mean '
+          '{:+.2f}. BU is the other direction, width 0.25 alone for the first '
+          '25 epochs, and it reads {:.2f}: {:+.2f} against K, {:+.2f} against '
+          'A, and behind K at {} of the sixteen widths. It does not even help '
+          'the width it trained first, {:+.2f} against K at 0.25, and it '
+          'costs most at the wide end. GrowTAS predicted the opposite; the '
+          'weight-sharing literature, which says the narrow end is not the '
+          'part that needs protecting, predicted this. Both directions of '
+          'the curriculum lose, the narrow-first one by about three times as '
+          'much, so the axis is closed.'.format(
+              min(gaps), max(gaps), sum(gaps) / len(gaps),
+              mean(bu['top1']), mean(bu['top1']) - mean(k['top1']),
+              mean(bu['top1']) - mean(reference['top1']),
+              sum(1 for x, y in zip(bu['top1'], k['top1']) if x > y),
+              bu['top1'][0] - k['top1'][0]))
+        w('')
+    if 'bt_narrow_first_frozen' in by_name:
+        w('BT is in the table and is not a result. It was meant to be BU with '
+          'the width-0.25 block held still after epoch 25, and the freeze '
+          'only zeroed the gradient. SGD adds weight decay to the gradient '
+          'inside the step and momentum carries it, so the block shrank '
+          'toward zero for 75 epochs: width 0.25 ended at chance, 1.18 per '
+          'cent with loss ln(100), and every wider width lost about four '
+          'points because the prefix they all read was being erased. The '
+          'check that shipped with it measured the gradient, not the '
+          'weights. The freeze now writes the block back after the step, '
+          'and tests/test_freeze.py checks the weights are bit-identical '
+          'after three real steps, having first shown they move without '
+          'it. BT has not been rerun; with BU already {:+.2f} against K, a '
+          'freeze on top of it is not a good use of a session.'.format(
+              mean(bu['top1']) - mean(k['top1']) if bu else float('nan')))
+        w('')
+
     w('## Not settled')
     w('')
     w('- Whether F is ahead of A at all. The accuracy gap is at the '

@@ -413,10 +413,19 @@ def freeze_narrow_prefix(model, epoch):
     BN scale and bias are frozen over the same channels. Without that the
     narrow subnet still drifts, one affine parameter at a time, and the
     branch would not be testing what it says it tests.
+
+    Zeroing the gradient is not a freeze on its own. SGD adds
+    weight_decay * w to the gradient inside step() and momentum carries it
+    on, so a block with zero gradient still shrinks toward zero: BT ran
+    like that and its width 0.25 ended at chance, 1.18 per cent, loss
+    ln(100). So this also returns the frozen values, and restore_frozen
+    writes them back after the step. The gradient is still zeroed so the
+    momentum buffer does not fill with the other widths' updates.
     """
+    held = []
     width = getattr(FLAGS, 'freeze_prefix_at', 0.0)
     if not width or epoch < getattr(FLAGS, 'narrow_first_epochs', 0):
-        return
+        return held
     for module in model.modules():
         if isinstance(module, (USConv2d, USLinear)):
             weight = module.weight
@@ -428,13 +437,24 @@ def freeze_narrow_prefix(model, epoch):
             inp = (make_divisible(weight.size(1) * width) if us[0]
                    else weight.size(1))
             weight.grad[:out, :inp] = 0.0
+            held.append((weight, (slice(0, out), slice(0, inp))))
             if module.bias is not None and module.bias.grad is not None:
                 module.bias.grad[:out] = 0.0
+                held.append((module.bias, (slice(0, out),)))
         elif isinstance(module, USBatchNorm2d):
             live = make_divisible(module.num_features_max * width)
             for tensor in (module.weight, module.bias):
                 if tensor is not None and tensor.grad is not None:
                     tensor.grad[:live] = 0.0
+                    held.append((tensor, (slice(0, live),)))
+    return [(t, i, t.detach()[i].clone()) for t, i in held]
+
+
+@torch.no_grad()
+def restore_frozen(held):
+    """put the frozen block back exactly as it was before the step"""
+    for tensor, index, value in held:
+        tensor[index] = value
 
 
 def equalize_by_width_count(model, widths_train):
@@ -1089,8 +1109,9 @@ def run_one_epoch(
             if clip:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
             equalize_by_width_count(model, widths_train)
-            freeze_narrow_prefix(model, epoch)
+            held = freeze_narrow_prefix(model, epoch)
             optimizer.step()
+            restore_frozen(held)
             update_ema_teacher(model)
             if is_master() and getattr(FLAGS, 'slimmable_training', False):
                 for width_mult in sorted(FLAGS.width_mult_list, reverse=True):
