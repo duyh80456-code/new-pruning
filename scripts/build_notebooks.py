@@ -540,50 +540,62 @@ epoch, and 100 of them is the run.
 PUBLISHED = """Every branch in this table so far is this project's own idea. A paper
 needs the other column too: what the methods other people published in
 the US-Net line score **on this protocol**, not what they reported on
-theirs. ResNet-18, CIFAR-100, 100 epochs, batch 256, sixteen widths read
-after BN post-statistics, seed 1995 - exactly what A and K were run
-under.
+theirs. **ResNet-50**, CIFAR-100, 100 epochs, batch 256, sixteen widths
+read after BN post-statistics, seed 1995 - exactly what BX and BY, A and
+K on ResNet-50 in notebook 30, were run under.
 
-Four methods across notebooks 31 and 32, each implemented from the
+**Notebook 30 has to come back first.** These three are read against BX
+and BY, and without them there is nothing on ResNet-50 to read them
+against. The ResNet-18 rows, A and K included, are a different network.
+
+Three methods across notebooks 31 and 32, each implemented from the
 authors' **released code** rather than from the paper alone. Where the
 two disagree the code wins, and each config lists what had to change to
-fit a width-only ResNet-18 on CIFAR:
+fit a width-only ResNet on CIFAR:
 
 | | method | from | what it adds to US-Net |
 |---|---|---|---|
-| BZ | DS-Net | CVPR 2021, changlin31/DS-Net | students learn from an EMA of the network, decay 0.997 |
-| CA | MutualNet | ECCV 2020, taoyang1122/MutualNet | every width but the widest sees a random resolution from [32, 28, 24, 20] |
-| CB | Scala | NeurIPS 2024, BeSpontaneous/Scala-pytorch | narrowest width on the last channels, stable sampling, progressive KD, label on every student, 10 warm-up epochs |
-| CC | NASViT | ICLR 2022, facebookresearch/NASViT | AlphaNet's loss plus a boost to subnet gradients that conflict with the widest, from epoch 25 |
+| CD | DS-Net | CVPR 2021, changlin31/DS-Net | students learn from an EMA of the network, decay 0.997 |
+| CF | Scala | NeurIPS 2024, BeSpontaneous/Scala-pytorch | narrowest width on the last channels, stable sampling, progressive KD, label on every student, 10 warm-up epochs |
+| CG | NASViT | ICLR 2022, facebookresearch/NASViT | AlphaNet's loss plus a boost to subnet gradients that conflict with the widest, from epoch 25 |
 
-Two more published methods are already covered: AlphaNet is **B**
-(73.08, measured), and IPKD-TA - each width taught by the next larger
-one - is **BJ**, in notebook 21 and not yet run.
-
-**Only peer-reviewed work is counted.** Every method here was accepted
-at the venue named, checked against the arXiv comment or journal field or
-the authors' own repository. SortedNet and Slimmable Pruned Networks are
-left out because they are still preprints; Joslim (non-uniform widths),
-SlimCLR and US3L (self-supervised), MatFormer (Transformer FFNs) and the
-NAS supernets are accepted but do not measure what this table measures.
+**Only peer-reviewed work, and only width.** Every method here was
+accepted at the venue named, checked against the arXiv comment or
+journal field or the authors' own repository. SortedNet and Slimmable
+Pruned Networks are left out because they are still preprints. MutualNet
+is left out because it trains every width at a random input resolution,
+and this table holds the input fixed at 32. NASViT's own supernet also
+samples resolution; only its gradient-conflict rule is taken here, at
+32. Joslim (non-uniform widths), SlimCLR and US3L (self-supervised),
+MatFormer (Transformer FFNs) and the NAS supernets are accepted but do
+not measure what this table measures. AlphaNet (**B**) and IPKD-TA
+(**BJ**) exist only on ResNet-18.
 
 **What was checked before this reached you.** Every earlier branch still
 gives a bit-identical gradient on a fixed batch, old code against new.
-Each flag was then shown to act inside train.py's own loop: DS-Net adds
-one gradient-free forward of the EMA network, MutualNet's widths saw
-sizes 20, 20 and 28 while the widest saw 32, Scala trains only the widest
+Each flag was shown to act inside train.py's own loop: DS-Net adds one
+gradient-free forward of the EMA network, Scala trains only the widest
 during warm-up and 1.00, 0.95, 0.50, 0.25 afterwards, and NASViT matches
 B to 3e-8 before epoch 25 and departs from it after. NASViT's merge
 matches the Constraint class from their repository to 5e-7 over 150
-random tensors.
+random tensors. Each config differs from its ResNet-18 twin only in
+`depth: 50` and its log directory.
 
-**How to read it.** Against A (73.52) and against K (74.26). A method
-that beats A but not K means K is ahead of published work on this
-protocol; one that beats K is the new reference. One seed each, so a gap
-under about 0.3 to either says nothing on its own.
+**Memory.** Peak allocated at batch 256 on ResNet-50, measured on a
+16 GB card with Scala's warm-up and NASViT's conflict start moved to
+epoch 0 so the expensive path is the one measured: DS-Net 9.55 GB,
+Scala 9.38 GB, NASViT 9.55 GB, against 9.47 GB for A. A T4
+has 15 GB.
 
-Each notebook should fit in one session: A took 165 minutes and B 167,
-and none of these adds more than one gradient-free forward per step.
+**How to read it.** Against BX and BY. A method that beats BX but not BY
+means K is ahead of published work on this protocol; one that beats BY
+is the new reference. One seed each, so a gap under about 0.3 to either
+says nothing on its own.
+
+**Time.** Scaled from A on ResNet-18 by the 2.34 times the MACs, each
+should take roughly 6 to 9 hours, DS-Net the longest for its extra
+forward. One run per card, so each notebook should fit in one session.
+Notebook 32 has one method and leaves the second card idle.
 """
 
 MULTI_SESSION = {27, 30}
@@ -622,10 +634,10 @@ QUEUE = [
      'How much to settle first, and for how long', SETTLE_HOW_MUCH),
     (30, 'bx_a_r50', 'by_k_r50',
      'A and K on ResNet-50', DEEPER),
-    (31, 'bz_dsnet', 'ca_mutualnet',
-     'Published methods on this protocol: DS-Net and MutualNet', PUBLISHED),
-    (32, 'cb_scala', 'cc_nasvit',
-     'Published methods on this protocol: Scala and NASViT', PUBLISHED),
+    (31, 'cd_dsnet_r50', 'cf_scala_r50',
+     'Published methods on ResNet-50: DS-Net and Scala', PUBLISHED),
+    (32, 'cg_nasvit_r50', None,
+     'Published methods on ResNet-50: NASViT', PUBLISHED),
 ]
 
 HEADER = """# {number}. {title}
@@ -796,16 +808,23 @@ for number, left, right, title, preamble in QUEUE:
             'in a single session of roughly three to five\nhours.',
             'over more than one session - see below for\nhow to carry it '
             'forward.')
-    for branch in (left, right):
+    elif preamble is PUBLISHED:
+        body = body.replace('three to five\nhours', 'six to nine\nhours')
+    # a notebook may hold one branch and leave the second card idle
+    branches = [branch for branch in (left, right) if branch]
+    if len(branches) == 1:
+        body = body.replace('Two branches, one per card,',
+                            'One branch, on one card,')
+    for branch in branches:
         body += '## `{}`\n\n{}\n\n'.format(branch, banner(branch))
     nb['cells'][0]['source'] = source(body + FOOTER)
     nb['cells'][1]['source'] = source(CONFIG.format(
         number=number, total=max(entry[0] for entry in QUEUE),
-        branches=[left, right]))
-    name = 'kaggle_kd_{:02d}_{}_{}.ipynb'.format(
-        number, left.split('_')[0], right.split('_')[0])
+        branches=branches))
+    name = 'kaggle_kd_{:02d}_{}.ipynb'.format(
+        number, '_'.join(branch.split('_')[0] for branch in branches))
     with io.open(os.path.join(KAGGLE, name), 'w',
                  encoding='utf-8', newline='\n') as handle:
         json.dump(nb, handle, indent=1, ensure_ascii=False)
         handle.write('\n')
-    print('{:32} {:18} {}'.format(name, left, right))
+    print('{:32} {:18} {}'.format(name, left, right or ''))

@@ -896,38 +896,17 @@ def run_one_epoch(
                                     * spread_criterion(
                                         get_classifier_weight(model)))
                         else:
-                            # MutualNet (Yang et al., ECCV 2020): the
-                            # widest width keeps the full image and every
-                            # other width takes one of resolution_list at
-                            # random, resized as their InputList does it.
-                            # Their CIFAR config is [32, 28, 24, 20].
-                            width_input = input
-                            sizes = getattr(FLAGS, 'resolution_list', None)
-                            if sizes:
-                                if split:
-                                    raise ValueError(
-                                        'resolution_list and '
-                                        'split_pair_backward read the '
-                                        'partner at different sizes')
-                                size = sizes[random.randint(
-                                    0, len(sizes) - 1)]
-                                if size != input.size(-1):
-                                    width_input = (
-                                        torch.nn.functional.interpolate(
-                                            input, (size, size),
-                                            mode='bilinear',
-                                            align_corners=True))
                             if (getattr(FLAGS, 'inplace_distill', False)
                                     and chain_target is not None):
                                 loss, output, feature = forward_loss(
-                                    model, criterion, width_input, target,
+                                    model, criterion, input, target,
                                     meter,
                                     soft_target=chain_target.detach(),
                                     soft_criterion=soft_criterion,
                                     return_output=True)
                             else:
                                 loss, output, feature = forward_loss(
-                                    model, criterion, width_input, target,
+                                    model, criterion, input, target,
                                     meter, return_output=True)
                             if getattr(FLAGS, 'teacher_chain', False):
                                 # the next width down learns from this one

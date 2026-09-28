@@ -180,8 +180,6 @@ LEGEND = [
      'measured at width^1.965 here, so this leans toward the wide end'),
     ('ema_teacher_decay', 'DS-Net: the students learn from an '
      'exponential moving average of the network at its widest'),
-    ('resolution_list', 'MutualNet: every width but the widest sees the '
-     'batch at one of these resolutions, chosen at random'),
     ('width_sampling=stable', 'Scala: one free width from each half of '
      'the range, on a grid'),
     ('stable_granularity', 'the grid step for stable sampling'),
