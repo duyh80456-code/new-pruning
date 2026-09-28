@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 
 
@@ -215,10 +216,53 @@ class USBatchNorm2d(nn.BatchNorm2d):
         # batch and a single counter would advance len(width_mult_list)
         # times per batch
         self.calibration_batches = [0] * len(FLAGS.width_mult_list)
+        # The scale and shift as continuous functions of the width.
+        # US-Net shares one gamma and one beta across every width and
+        # recalibrates only the running statistics, so whatever a width
+        # needs from the affine half it cannot have. BP gave each of the
+        # sixteen test widths one private scalar per residual branch,
+        # snapped to the nearest slot, and came out on top of the table.
+        # This is the same freedom made continuous and per channel: an
+        # offset to gamma and to beta at each of affine_knots evenly
+        # spaced widths, interpolated linearly in between, so every width
+        # in the range has its own affine and neighbouring widths have
+        # nearly the same one. The offsets start at zero, so epoch zero
+        # is the plain model. They are one-dimensional per knot, so
+        # get_optimizer leaves them out of weight decay the way it leaves
+        # out gamma and beta.
+        knots = getattr(FLAGS, 'affine_knots', 0)
+        if knots:
+            if knots < 2:
+                raise ValueError('affine_knots needs at least two knots')
+            self.knot_weight = nn.ParameterList([
+                nn.Parameter(torch.zeros(num_features))
+                for _ in range(knots)])
+            self.knot_bias = nn.ParameterList([
+                nn.Parameter(torch.zeros(num_features))
+                for _ in range(knots)])
+        else:
+            self.knot_weight = None
+            self.knot_bias = None
+
+    def knot_mix(self):
+        """how much each knot contributes at this width: a hat function
+        of the distance to it, so at most two are non-zero and they sum
+        to one"""
+        low, high = FLAGS.width_mult_range
+        count = len(self.knot_weight)
+        spot = (self.width_mult - low) / (high - low) * (count - 1)
+        spot = min(max(spot, 0.0), count - 1.0)
+        return [max(0.0, 1.0 - abs(spot - j)) for j in range(count)]
 
     def forward(self, input):
         weight = self.weight
         bias = self.bias
+        if self.knot_weight is not None:
+            for share, dw, db in zip(self.knot_mix(), self.knot_weight,
+                                     self.knot_bias):
+                if share:
+                    weight = weight + share * dw
+                    bias = bias + share * db
         c = make_divisible(
             self.num_features_max * self.width_mult / self.ratio) * self.ratio
         if isolated(self.width_mult):

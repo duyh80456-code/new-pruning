@@ -524,17 +524,13 @@ survive the larger network, and does its NLL lead at every width.
 
 ## K will need a second session
 
-ResNet-50 costs 2.34 times the MACs of ResNet-18 at every width. Scaled
-from the ResNet-18 runs, **A should take roughly 6 to 8 hours and K 12 to
-16**, so A finishes in one session and K will not. When the session ends,
-resume K exactly as in notebook 27: attach this session's output, set
-`RESUME_FROM`, run again. Only K will have work left; A's checkpoint is
-already at its last epoch, so it will calibrate, print its table and exit
-in a minute.
-
-These times are an estimate from MACs, not a measurement on a T4. The
-first epoch lines give the real rate: K's `train` line prints seconds per
-epoch, and 100 of them is the run.
+The first session measured it on two T4s: **A took 643 minutes, about
+10.7 hours, and K runs at about 8 minutes an epoch**, about 14 hours in
+all. K reached epoch 77 when the session ended. Resume it exactly as in
+notebook 27: attach that session's output, set `RESUME_FROM`, run again.
+About 23 epochs of K are left, roughly three and a half hours. A's
+checkpoint is already at its last epoch, so it will calibrate, print its
+table and exit in a minute.
 """
 
 PUBLISHED = """Every branch in this table so far is this project's own idea. A paper
@@ -592,10 +588,12 @@ means K is ahead of published work on this protocol; one that beats BY
 is the new reference. One seed each, so a gap under about 0.3 to either
 says nothing on its own.
 
-**Time.** Scaled from A on ResNet-18 by the 2.34 times the MACs, each
-should take roughly 6 to 9 hours, DS-Net the longest for its extra
-forward. One run per card, so each notebook should fit in one session.
-Notebook 32 has one method and leaves the second card idle.
+**Time.** Notebook 30 measured A on ResNet-50 at 10.7 hours on a T4.
+Scala and NASViT cost about what A does. DS-Net adds one gradient-free
+forward of the widest width every step and will finish close to the
+12-hour limit or past it; if the session ends first, resume as in
+notebook 30 - attach the output, set `RESUME_FROM`, run again. Notebook
+32 has one method and leaves the second card idle.
 """
 
 HEADS = """A and K on ResNet-50 again, each with **one classifier per band of
@@ -634,8 +632,8 @@ SOLAR's claim is calibration, and so is K's clearest one.
 
 ## K will need a second session
 
-As in notebook 30: A should take roughly 6 to 8 hours and K 12 to 16, so
-CH finishes in one session and CI will not. When the session ends, attach
+Notebook 30 measured A at 10.7 hours and K at about 8 minutes an epoch,
+about 14 hours, so CH finishes in one session and CI will not. When the session ends, attach
 its output, set `RESUME_FROM` and run again; CH will calibrate, print its
 table and exit in a minute.
 """
@@ -665,12 +663,55 @@ Why on A and not K: A is half the time of K, and the sweep only has to
 find the number. The best one goes on K afterwards; CI in notebook 33 is
 already K with four.
 
-Each branch is A with one flag changed, so each finishes in one session,
-roughly 6 to 8 hours. Notebook 35 runs CL alone and leaves the second
+Each branch is A with one flag changed, so each takes about what A did
+in notebook 30, 10.7 hours, inside one session. Notebook 35 runs CL alone and leaves the second
 card idle.
 """
 
-MULTI_SESSION = {27, 30, 33}
+KNOTS = """K and A on ResNet-50 with **every BN scale and shift a continuous
+function of the width**. The candidate for a second contribution next to
+the transport term. **Notebook 30 has to come back first**: CM is read
+against BY and CN against BX.
+
+**Why.** US-Net shares one gamma and one beta across every width and
+recalibrates only the running statistics after training. Whatever a width
+needs from the affine half of BN, it cannot have. BP gave each of the
+sixteen test widths one private scalar per residual branch, snapped to the
+nearest slot, and is the top of the ResNet-18 table at 74.35 - 0.09 over K,
+inside the noise, but the only branch above it.
+
+**What.** `affine_knots: 4` puts an offset to gamma and to beta at widths
+0.25, 0.50, 0.75 and 1.00 and interpolates linearly in between. Every width
+in the range has its own affine, neighbouring widths have nearly the same
+one, and nothing is snapped to a slot, so the network stays continuous in
+width. It covers BP, since scaling the last BN of a residual body scales
+the body. 0.21M parameters on 23.7M. The offsets start at zero, so epoch
+zero is BX or BY exactly, and they stay out of weight decay like gamma and
+beta.
+
+**What was checked.** tests/test_affine_knots.py: the knot shares sum to
+one and move continuously with the width; with zero offsets every width is
+the plain model bit for bit; a backward at 0.30, 0.70, 0.80 and 1.00
+reaches exactly the two knots around it; an offset at the first knot
+changes 0.25 and 0.30 and leaves 0.50 and 1.00 exactly alone; the offsets
+are out of weight decay; a channel permutation carries them along. Broken
+on purpose in two places, it fails in both. Every earlier branch still
+steps to the loss it did. Peak memory at batch 256: CM 9.38 GB, CN
+9.46 GB, under the 15 GB of a T4.
+
+**How to read it.** If CM beats BY at most widths and on NLL, this goes in
+the paper next to K. If CN gains as much as CM, the effect does not need
+the transport. One seed each: a gap under about 0.3 says nothing, and a
+positive one earns a second seed before it is written up.
+
+## K will need a second session
+
+Notebook 30 measured A at 10.7 hours and K at about 14: CN finishes in
+one session, CM will not. When the session
+ends, attach its output, set `RESUME_FROM` and run again.
+"""
+
+MULTI_SESSION = {27, 30, 33, 36}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -716,6 +757,8 @@ QUEUE = [
      'How many heads: 2 and 8', HEAD_SWEEP),
     (35, 'cl_a_heads16_r50', None,
      'How many heads: 16', HEAD_SWEEP),
+    (36, 'cm_k_knots4_r50', 'cn_a_knots4_r50',
+     'Every BN scale and shift a continuous function of width', KNOTS),
 ]
 
 HEADER = """# {number}. {title}
@@ -867,7 +910,8 @@ SUITES_NOW = chr(10).join([
     "          'tests/test_channel_reorder.py',",
     "          'tests/test_published_methods.py',",
     "          'tests/test_freeze.py',",
-    "          'tests/test_head_groups.py']"])
+    "          'tests/test_head_groups.py',",
+    "          'tests/test_affine_knots.py']"])
 
 for number, left, right, title, preamble in QUEUE:
     nb = json.loads(json.dumps(template))
@@ -888,7 +932,7 @@ for number, left, right, title, preamble in QUEUE:
             'over more than one session - see below for\nhow to carry it '
             'forward.')
     elif preamble is PUBLISHED or preamble is HEAD_SWEEP:
-        body = body.replace('three to five\nhours', 'six to nine\nhours')
+        body = body.replace('three to five\nhours', 'ten to twelve\nhours')
     # a notebook may hold one branch and leave the second card idle
     branches = [branch for branch in (left, right) if branch]
     if len(branches) == 1:

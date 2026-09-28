@@ -181,6 +181,12 @@ def apply(group, order, optimizer=None):
             _move(bn.weight, order, 0, optimizer)
         if bn.bias is not None:
             _move(bn.bias, order, 0, optimizer)
+        # the per-knot offsets belong to the same channels as gamma and
+        # beta, so they move with them
+        for knots in (getattr(bn, 'knot_weight', None),
+                      getattr(bn, 'knot_bias', None)):
+            for knot in knots or []:
+                _move(knot, order, 0, optimizer)
         # The per-width running statistics cannot be permuted into
         # anything meaningful: a channel that moves from index 300 to
         # index 5 now needs statistics in the width-0.25 copy, which

@@ -187,6 +187,9 @@ LEGEND = [
      'at this weight'),
     ('isolate_smallest', 'Scala: the narrowest width takes the last '
      'channels of every layer instead of the first'),
+    ('affine_knots', 'every BN scale and shift is a continuous '
+     'function of the width: an offset at each of this many evenly spaced '
+     'knots, interpolated linearly between them, zero at the start'),
     ('head_groups', 'SOLAR, made continuous: the width range is cut into '
      'this many equal bands and each band has its own classifier over the '
      'shared backbone'),
