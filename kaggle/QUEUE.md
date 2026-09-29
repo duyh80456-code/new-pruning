@@ -1,21 +1,13 @@
 # The queue
 
-Every notebook in this directory runs two branches, one per card, in a
-session of roughly three to five hours. Take a row, run the file as it
-is, and say which number you took.
+Every notebook runs one branch per card. Rows up to 28 are ResNet-18
+and have come back; from 30 on every run is ResNet-50, where A takes
+about 10.7 hours on a T4 and K about 14, so a K branch needs a second
+session. Take a row with a free slot, run the file as it is, and say
+which number you took.
 
-Rows 1 to 12 all ask the same question - can a different transport term
-beat K - and the answer has settled at no. Rows 13 to 15 leave that
-axis: they change where the sandwich rule samples, which samples KD
-attends to, and which width teaches which. None of them touches the
-transport term, so they compose with K rather than competing with it.
-
-K stands at 74.26 against 73.52 for A, ahead at all sixteen widths.
-That is the number to pass. The result column carries each branch's
-mean accuracy once it has come back, so take a row with a free slot.
-`ak_bures` crashed three minutes into its session on a numerical bug
-that is now fixed, so it has never actually been tried. It is queued
-in row 15, not row 3.
+On ResNet-50, K stands at 77.26 against 76.86 for A, ahead at 15 of 16
+widths, one seed each. Notebook 39 is the second seed.
 
 ## How to run one
 
@@ -50,38 +42,32 @@ training loop rather than running it, so anything that lives only in
 | 13 | `kaggle_kd_13_as_at.ipynb` | `as_log_widths`, `at_macs_widths` | Where the sandwich rule spends its free samples | 73.93 / 73.96 |
 | 14 | `kaggle_kd_14_au_av.ipynb` | `au_entropy_kd`, `av_confidence_kd` | Which samples the teacher still has something to say about | 73.00 / 30.46 |
 | 15 | `kaggle_kd_15_aw_ak.ipynb` | `aw_teacher_chain`, `ak_bures` | A chain of teachers, and the Gaussian form that never ran | 74.32 / 73.56 |
-| 16 | `kaggle_kd_16_az_ba.ipynb` | `az_act_ground`, `ba_taylor_ground` | Charge the channels for what they carry | _skipped_ |
-| 17 | `kaggle_kd_17_bb_bc.ipynb` | `bb_reorder_l1`, `bc_reorder_read` | Which channels the narrow subnet gets | _skipped_ |
 | 18 | `kaggle_kd_18_bd_be.ipynb` | `bd_warm10_sort`, `be_warm25_sort` | Make a window, then sort inside it | 73.96 / 73.98 |
 | 19 | `kaggle_kd_19_bf_bg.ipynb` | `bf_warm10_plain`, `bg_warm25_plain` | What the warm-up is worth on its own | 73.90 / 73.78 |
 | 20 | `kaggle_kd_20_bh_bi.ipynb` | `bh_warm10_taylor`, `bi_warm25_taylor` | The same window, sorted by what removal would cost | 73.71 / 73.95 |
-| 21 | `kaggle_kd_21_k_bj.ipynb` | `k_seed2`, `bj_chain_only` | The noise on K, and the chain without the transport | free / free |
-| 22 | `kaggle_kd_22_q_r.ipynb` | `q_feature_mse`, `r_feature_mmd` | What the transport term actually bought | free / free |
-| 23 | `kaggle_kd_23_bm_bk.ipynb` | `bm_solo_full`, `bk_alpha_on_k` | The control never run, and the loss never tried under K | free / free |
-| 24 | `kaggle_kd_24_bl_ab.ipynb` | `bl_gromov`, `ab_no_debias` | Comparing the widths without truncating either | free / free |
 | 25 | `kaggle_kd_25_bn_bp.ipynb` | `bn_ensemble`, `bp_width_scalars` | Who teaches, and the one place recalibration cannot reach | 73.93 / 74.35 |
 | 26 | `kaggle_kd_26_bq_bo.ipynb` | `bq_equalize_half`, `bo_conv_averaged` | The learning rate nobody set | 73.63 / 74.16 |
-| 27 | `kaggle_kd_27_br_bs.ipynb` | `br_a300`, `bs_k300` | The same two branches, three times the schedule | free / free |
-| 28 | `kaggle_kd_28_bu_bt.ipynb` | `bu_narrow_first`, `bt_narrow_first_frozen` | The narrow end first, and then held still | free / free |
-| 29 | `kaggle_kd_29_bv_bw.ipynb` | `bv_half_first_frozen`, `bw_narrow10_frozen` | How much to settle first, and for how long | free / free |
+| 27 | `kaggle_kd_27_br_bs.ipynb` | `br_a300`, `bs_k300` | The same two branches, three times the schedule | 74.13 / 73.91 |
+| 28 | `kaggle_kd_28_bu_bt.ipynb` | `bu_narrow_first`, `bt_narrow_first_frozen` | The narrow end first, and then held still | 72.81 / 64.39 |
+| 30 | `kaggle_kd_30_bx_by.ipynb` | `bx_a_r50`, `by_k_r50` | A and K on ResNet-50 | 76.86 / 77.26 |
+| 38 | `kaggle_kd_38_cp_ci.ipynb` | `cp_k_no_kd_r50`, `ci_k_heads4_r50` | K without KL, and K with a head per band of widths | free / free |
+| 39 | `kaggle_kd_39_cr_cq.ipynb` | `cr_k_r50_seed2`, `cq_a_r50_seed2` | A and K on ResNet-50, second seed | free / free |
 
 ## Held back
 
-These have configs in `apps/` and are not queued. Any of them runs
-from a notebook by editing `BRANCHES`.
+These have configs in `apps/` and no notebook. To run one, add a row
+for it at the end of QUEUE in scripts/build_notebooks.py.
 
-* `ax_var_ground, ay_inverse_ground` - the same weighting by batch variance, and its reversal. Variance and activation disagree about a channel that is large and constant, so they are separate questions; this pair is the follow-up if row 16 moves anything.
-* `a_seed3` - a third seed of A. Held because the seed that matters is K, and that one has moved out of this list into row 21: ten unrelated perturbations of K now sit 0.28 to 0.55 below it, which is either ten knobs already optimal or one high draw, and only sigma tells them apart.
+* `ax_var_ground, ay_inverse_ground` - the same weighting by batch variance, and its reversal. Variance and activation disagree about a channel that is large and constant, so they are separate questions; ResNet-18, and the pair it followed up was never run.
+* `a_seed3` - a third seed of A on ResNet-18. The seed question has moved to ResNet-50, notebook 39.
 * `z_eps_100` - a control built to lose: blur the plan away and see what is left. Y at eps 0.5 has since made most of its point for a quarter of the cost.
 * `j_feature_gram` - a control for whether nesting is what makes K work.
 * `ap_logit_spread` - a test of the flatness diagnosis on branch C, which came last of twelve and is not going to reach K.
-
-## Skipped
-
-Still numbered, because renumbering would rename notebooks that are already pushed.
-
-* **row 16** - the transport term charges every channel the same and these would have weighted it, by activation and by the Taylor score. Set aside for the channel-ordering axis rather than answered. The configs and the notebook are there if it comes back.
-* **row 17** - superseded by 18. It permutes at epoch 10, an epoch nothing measured can justify, and the reason it cannot is that US-Net has no window to name: the prefix taking gradient at every width is what makes a criterion meaningful and also what sorts it. 18 makes the window instead. The one thing 17 alone would have produced, the prefix_sorted trajectory under an ordinary schedule, comes out of 19 from the end of its warm-up onward.
+* `az_act_ground, ba_taylor_ground, bb_reorder_l1, bc_reorder_read, k_seed2, bj_chain_only, q_feature_mse, r_feature_mmd, bm_solo_full, bk_alpha_on_k, bl_gromov, ab_no_debias, bv_half_first_frozen, bw_narrow10_frozen` - ResNet-18 branches whose notebooks (16, 17, 21 to 24, 29) were removed unrun. Every new run is on ResNet-50, so any of these that comes back comes back as a ResNet-50 twin of BX or BY in a new notebook at the end.
+* `cd_dsnet_r50, cf_scala_r50, cg_nasvit_r50` - the published methods on ResNet-50, notebooks 31 and 32, removed unrun. Needed for the paper once the ResNet-50 results settle.
+* `ch_a_heads4_r50, cj_a_heads2_r50, ck_a_heads8_r50, cl_a_heads16_r50` - band heads on A and the head-count sweep, notebooks 33 to 35, removed unrun. CI in notebook 38 asks first whether heads help K.
+* `cm_k_knots4_r50, cn_a_knots4_r50` - BN scale and shift continuous in width, notebook 36, removed unrun.
+* `co_ce_only_r50` - US-Net with KD off, the floor under CP; notebook 37 removed unrun, and its other half, CP, is in notebook 38.
 
 ## Dropped on evidence
 

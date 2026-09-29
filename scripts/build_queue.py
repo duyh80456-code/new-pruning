@@ -11,113 +11,72 @@ being run - one for branches held back, one for branches dropped - and
 a reader had to find both to learn the same thing. They are one section
 here.
 """
+import ast
 import io
 import json
 import os
+import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-QUEUE = [
-    ('af_all_pairs', 'ae_k_plus_f',
-     'Couple every pair of students, and put K and F together'),
-    ('ah_everything', 'ag_five_widths',
-     'All of it at once, and more students to pair'),
-    ('ai_channel', 'ak_bures',
-     'Transport along the shared channels, and the Gaussian closed form'),
-    ('ao_spread', 'ar_k_temp4',
-     'Give the metric some geometry, and the teacher something to say'),
-    ('m_all_stages', 'aq_classwise',
-     'Transport at every depth, and between class positions'),
-    ('al_bures_diag', 'am_sliced_max',
-     'Variances without directions, and the worst projection'),
-    ('aj_channel_p1', 'an_sliced_p1',
-     'An absolute gap instead of a squared one, on both'),
-    ('v_unbalanced', 's_feature_sliced',
-     'Let mass go unmatched, and solve it the cheap way'),
-    ('ac_weight_half', 'ad_weight_double',
-     'Is K on a plateau or on a peak'),
-    ('y_eps_050', 'w_eps_002',
-     'Blurrier and nearly hard, the two ends of the axis'),
-    ('x_eps_010', 'aa_cosine_ground',
-     'One step of blur, and direction instead of distance'),
-    ('t_sliced_32', 'u_sliced_512',
-     'How many directions stand in for a plan'),
-    ('as_log_widths', 'at_macs_widths',
-     'Where the sandwich rule spends its free samples'),
-    ('au_entropy_kd', 'av_confidence_kd',
-     'Which samples the teacher still has something to say about'),
-    ('aw_teacher_chain', 'ak_bures',
-     'A chain of teachers, and the Gaussian form that never ran'),
-    ('az_act_ground', 'ba_taylor_ground',
-     'Charge the channels for what they carry'),
-    ('bb_reorder_l1', 'bc_reorder_read',
-     'Which channels the narrow subnet gets'),
-    ('bd_warm10_sort', 'be_warm25_sort',
-     'Make a window, then sort inside it'),
-    ('bf_warm10_plain', 'bg_warm25_plain',
-     'What the warm-up is worth on its own'),
-    ('bh_warm10_taylor', 'bi_warm25_taylor',
-     'The same window, sorted by what removal would cost'),
-    ('k_seed2', 'bj_chain_only',
-     'The noise on K, and the chain without the transport'),
-    ('q_feature_mse', 'r_feature_mmd',
-     'What the transport term actually bought'),
-    ('bm_solo_full', 'bk_alpha_on_k',
-     'The control never run, and the loss never tried under K'),
-    ('bl_gromov', 'ab_no_debias',
-     'Comparing the widths without truncating either'),
-    ('bn_ensemble', 'bp_width_scalars',
-     'Who teaches, and the one place recalibration cannot reach'),
-    ('bq_equalize_half', 'bo_conv_averaged',
-     'The learning rate nobody set'),
-    ('br_a300', 'bs_k300',
-     'The same two branches, three times the schedule'),
-    ('bu_narrow_first', 'bt_narrow_first_frozen',
-     'The narrow end first, and then held still'),
-    ('bv_half_first_frozen', 'bw_narrow10_frozen',
-     'How much to settle first, and for how long'),
-]
+NOTEBOOK = re.compile(r'kaggle_kd_(\d+)_\w+\.ipynb$')
+BRANCHES = re.compile(r"BRANCHES = (\[[^\]]*\])")
 
-# ak_bures died in linalg.eigh three minutes in and the fix landed after,
-# so it has never been tried. It is in two rows and only the second is
-# meant to be run; keyed by row so the table says which.
-RERUN = {(3, 'ak_bures'): 'moved to 15',
-         (15, 'ak_bures'): '**rerun**'}
 
-# Rows kept in place so the numbering and the notebook filenames stay
-# aligned, but not to be run. Renumbering would rename files that are
-# already pushed and break every reference to them.
-SKIPPED = {
-    16: 'the transport term charges every channel the same and these '
-        'would have weighted it, by activation and by the Taylor score. '
-        'Set aside for the channel-ordering axis rather than answered. '
-        'The configs and the notebook are there if it comes back.',
-    17: 'superseded by 18. It permutes at epoch 10, an epoch nothing '
-        'measured can justify, and the reason it cannot is that US-Net '
-        'has no window to name: the prefix taking gradient at every '
-        'width is what makes a criterion meaningful and also what sorts '
-        'it. 18 makes the window instead. The one thing 17 alone would '
-        'have produced, the prefix_sorted trajectory under an ordinary '
-        'schedule, comes out of 19 from the end of its warm-up onward.',
-}
+def notebooks():
+    """(number, filename, branches, title) for every numbered notebook
+
+    Read off the files rather than kept in a list beside them. The list
+    this replaced numbered its rows by position, drifted from the files,
+    and showed notebooks that had come back as free.
+    """
+    found = []
+    folder = os.path.join(ROOT, 'kaggle')
+    for name in sorted(os.listdir(folder)):
+        match = NOTEBOOK.match(name)
+        if not match:
+            continue
+        with io.open(os.path.join(folder, name), encoding='utf-8') as handle:
+            cells = json.load(handle)['cells']
+        header = ''.join(cells[0]['source']).split('\n')[0]
+        title = header.split('. ', 1)[1] if '. ' in header else header
+        config = ''.join(cells[1]['source'])
+        branches = ast.literal_eval(BRANCHES.search(config).group(1))
+        found.append((int(match.group(1)), name, branches, title))
+    return found
+
 
 HELD = [
     ('ax_var_ground, ay_inverse_ground', 'the same weighting by batch '
      'variance, and its reversal. Variance and activation disagree about '
      'a channel that is large and constant, so they are separate '
-     'questions; this pair is the follow-up if row 16 moves anything.'),
-    ('a_seed3', 'a third seed of A. Held because the seed that matters '
-     'is K, and that one has moved out of this list into row 21: ten '
-     'unrelated perturbations of K now sit 0.28 to 0.55 below it, which '
-     'is either ten knobs already optimal or one high draw, and only '
-     'sigma tells them apart.'),
+     'questions; ResNet-18, and the pair it followed up was never run.'),
+    ('a_seed3', 'a third seed of A on ResNet-18. The seed question has '
+     'moved to ResNet-50, notebook 39.'),
     ('z_eps_100', 'a control built to lose: blur the plan away and see '
      'what is left. Y at eps 0.5 has since made most of its point for '
      'a quarter of the cost.'),
     ('j_feature_gram', 'a control for whether nesting is what makes K work.'),
     ('ap_logit_spread', 'a test of the flatness diagnosis on branch C, '
      'which came last of twelve and is not going to reach K.'),
+    ('az_act_ground, ba_taylor_ground, bb_reorder_l1, bc_reorder_read, '
+     'k_seed2, bj_chain_only, q_feature_mse, r_feature_mmd, bm_solo_full, '
+     'bk_alpha_on_k, bl_gromov, ab_no_debias, bv_half_first_frozen, '
+     'bw_narrow10_frozen', 'ResNet-18 branches whose notebooks (16, 17, 21 '
+     'to 24, 29) were removed unrun. Every new run is on ResNet-50, so any '
+     'of these that comes back comes back as a ResNet-50 twin of BX or BY '
+     'in a new notebook at the end.'),
+    ('cd_dsnet_r50, cf_scala_r50, cg_nasvit_r50', 'the published methods '
+     'on ResNet-50, notebooks 31 and 32, removed unrun. Needed for the '
+     'paper once the ResNet-50 results settle.'),
+    ('ch_a_heads4_r50, cj_a_heads2_r50, ck_a_heads8_r50, cl_a_heads16_r50',
+     'band heads on A and the head-count sweep, notebooks 33 to 35, '
+     'removed unrun. CI in notebook 38 asks first whether heads help K.'),
+    ('cm_k_knots4_r50, cn_a_knots4_r50', 'BN scale and shift continuous in '
+     'width, notebook 36, removed unrun.'),
+    ('co_ce_only_r50', 'US-Net with KD off, the floor under CP; notebook '
+     '37 removed unrun, and its other half, CP, is in notebook 38.'),
 ]
 
 DROPPED = [
@@ -160,56 +119,32 @@ def main():
     mean = {r['name']: sum(r['top1']) / len(r['top1'])
             for r in store['runs']}
 
-    def cell(number, branch):
-        if branch in mean:
-            return '{:.2f}'.format(mean[branch])
-        return RERUN.get((number, branch), 'free')
-
     rows, free = [], 0
-    for number, (left, right, asks) in enumerate(QUEUE, start=1):
-        if number in SKIPPED:
-            result = '_skipped_'
-        else:
-            result = '{} / {}'.format(cell(number, left),
-                                      cell(number, right))
-            if 'free' in result:
-                free += 1
-        rows.append(
-            '| {} | `kaggle_kd_{:02d}_{}_{}.ipynb` | `{}`, `{}` | {} | {} |'
-            .format(number, number, left.split('_')[0],
-                    right.split('_')[0], left, right, asks, result))
+    for number, name, branches, title in notebooks():
+        result = ' / '.join('{:.2f}'.format(mean[b]) if b in mean
+                            else 'free' for b in branches)
+        if 'free' in result:
+            free += 1
+        rows.append('| {} | `{}` | {} | {} | {} |'.format(
+            number, name, ', '.join('`{}`'.format(b) for b in branches),
+            title, result))
 
     out = [
         '# The queue',
         '',
-        'Every notebook in this directory runs two branches, one per card,'
-        ' in a',
-        'session of roughly three to five hours. Take a row, run the file'
-        ' as it',
-        'is, and say which number you took.',
+        'Every notebook runs one branch per card. Rows up to 28 are'
+        ' ResNet-18',
+        'and have come back; from 30 on every run is ResNet-50, where A'
+        ' takes',
+        'about 10.7 hours on a T4 and K about 14, so a K branch needs a'
+        ' second',
+        'session. Take a row with a free slot, run the file as it is, and'
+        ' say',
+        'which number you took.',
         '',
-        'Rows 1 to 12 all ask the same question - can a different'
-        ' transport term',
-        'beat K - and the answer has settled at no. Rows 13 to 15 leave'
-        ' that',
-        'axis: they change where the sandwich rule samples, which samples'
-        ' KD',
-        'attends to, and which width teaches which. None of them touches'
-        ' the',
-        'transport term, so they compose with K rather than competing'
-        ' with it.',
-        '',
-        'K stands at 74.26 against 73.52 for A, ahead at all sixteen'
-        ' widths.',
-        'That is the number to pass. The result column carries each'
-        ' branch\'s',
-        'mean accuracy once it has come back, so take a row with a free'
-        ' slot.',
-        '`ak_bures` crashed three minutes into its session on a numerical'
-        ' bug',
-        'that is now fixed, so it has never actually been tried. It is'
-        ' queued',
-        'in row 15, not row 3.',
+        'On ResNet-50, K stands at 77.26 against 76.86 for A, ahead at 15'
+        ' of 16',
+        'widths, one seed each. Notebook 39 is the second seed.',
         '',
         '## How to run one',
         '',
@@ -236,16 +171,12 @@ def main():
     ]
     out += rows
     out += ['', '## Held back', '',
-            'These have configs in `apps/` and are not queued. Any of'
-            ' them runs',
-            'from a notebook by editing `BRANCHES`.', '']
+            'These have configs in `apps/` and no notebook. To run one,'
+            ' add a row',
+            'for it at the end of QUEUE in scripts/build_notebooks.py.',
+            '']
     for names, why in HELD:
         out.append('* `{}` - {}'.format(names, why))
-    out += ['', '## Skipped', '',
-            'Still numbered, because renumbering would rename notebooks '
-            'that are already pushed.', '']
-    for number, why in sorted(SKIPPED.items()):
-        out.append('* **row {}** - {}'.format(number, why))
     out += ['', '## Dropped on evidence', '']
     for names, why in DROPPED:
         out.append('* `{}` - {}'.format(names, why))
@@ -254,7 +185,7 @@ def main():
     path = os.path.join(ROOT, 'kaggle', 'QUEUE.md')
     with io.open(path, 'w', encoding='utf-8', newline='\n') as handle:
         handle.write('\n'.join(out) + '\n')
-    print('wrote {} rows, {} with a free slot'.format(len(QUEUE), free))
+    print('wrote {} rows, {} with a free slot'.format(len(rows), free))
     return 0
 
 

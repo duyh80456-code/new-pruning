@@ -808,30 +808,18 @@ one session, CR will not. When the session ends, attach its output, set
 and a half hours are left.
 """
 
-MULTI_SESSION = {27, 30, 33, 36, 37, 38, 39}
+MULTI_SESSION = {27, 30, 38, 39}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
     # whose results are already recorded. OFF_AXIS is kept because it is
     # what they say.
-    (16, 'az_act_ground', 'ba_taylor_ground',
-     'Charge the channels for what they carry', ON_AXIS),
-    (17, 'bb_reorder_l1', 'bc_reorder_read',
-     'Which channels the narrow subnet gets', REORDER),
     (18, 'bd_warm10_sort', 'be_warm25_sort',
      'Make a window, then sort inside it', WARM),
     (19, 'bf_warm10_plain', 'bg_warm25_plain',
      'What the warm-up is worth on its own', WARM),
     (20, 'bh_warm10_taylor', 'bi_warm25_taylor',
      'The same window, sorted by what removal would cost', WARM),
-    (21, 'k_seed2', 'bj_chain_only',
-     'The noise on K, and the chain without the transport', SETTLE),
-    (22, 'q_feature_mse', 'r_feature_mmd',
-     'What the transport term actually bought', CONTROLS),
-    (23, 'bm_solo_full', 'bk_alpha_on_k',
-     'The control never run, and the loss never tried under K', DIAGNOSTIC),
-    (24, 'bl_gromov', 'ab_no_debias',
-     'Comparing the widths without truncating either', NOTRUNC),
     (25, 'bn_ensemble', 'bp_width_scalars',
      'Who teaches, and the one place recalibration cannot reach', WHOTEACHES),
     (26, 'bq_equalize_half', 'bo_conv_averaged',
@@ -840,24 +828,8 @@ QUEUE = [
      'The same two branches, three times the schedule', LONGER),
     (28, 'bu_narrow_first', 'bt_narrow_first_frozen',
      'The narrow end first, and then held still', OTHERWAY),
-    (29, 'bv_half_first_frozen', 'bw_narrow10_frozen',
-     'How much to settle first, and for how long', SETTLE_HOW_MUCH),
     (30, 'bx_a_r50', 'by_k_r50',
      'A and K on ResNet-50', DEEPER),
-    (31, 'cd_dsnet_r50', 'cf_scala_r50',
-     'Published methods on ResNet-50: DS-Net and Scala', PUBLISHED),
-    (32, 'cg_nasvit_r50', None,
-     'Published methods on ResNet-50: NASViT', PUBLISHED),
-    (33, 'ch_a_heads4_r50', 'ci_k_heads4_r50',
-     'A classifier per band of widths, on A and K', HEADS),
-    (34, 'cj_a_heads2_r50', 'ck_a_heads8_r50',
-     'How many heads: 2 and 8', HEAD_SWEEP),
-    (35, 'cl_a_heads16_r50', None,
-     'How many heads: 16', HEAD_SWEEP),
-    (36, 'cm_k_knots4_r50', 'cn_a_knots4_r50',
-     'Every BN scale and shift a continuous function of width', KNOTS),
-    (37, 'cp_k_no_kd_r50', 'co_ce_only_r50',
-     'Wasserstein without KD, and the floor under it', NOKD),
     (38, 'cp_k_no_kd_r50', 'ci_k_heads4_r50',
      'K without KL, and K with a head per band of widths',
      NOKD_AND_HEADS),
