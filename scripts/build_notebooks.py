@@ -786,7 +786,29 @@ checkpoints. Notebook 30 reached epoch 77 of K in the first session, so
 expect the resumed session to need about three and a half hours.
 """
 
-MULTI_SESSION = {27, 30, 33, 36, 37, 38}
+SEED2_R50 = """A and K on ResNet-50 again, at **seed 2026** instead of 1995 - the
+seed the ResNet-18 repeats used. Nothing else differs from BX and BY.
+
+**Why this before anything new.** On ResNet-50, K beat A 77.26 against
+76.86: +0.40 on the mean, ahead at 15 of 16 widths. That is one run of
+each. The gap is about the size of the seed noise measured on ResNet-18,
+so as it stands it is a single draw. A second pair turns it into a gap
+with a spread, which is the first thing a reviewer asks for, and which
+every other ResNet-50 comparison in this queue is read against.
+
+**How to read it.** CR against CQ first: does K still lead, and at the
+same middle widths (0.35-0.70) where BY led. Then all four together:
+the mean gap over two seeds and how far the two draws sit apart.
+
+## K will need a second session
+
+As in notebook 30, where A took 10.7 hours and K about 14: CQ finishes in
+one session, CR will not. When the session ends, attach its output, set
+`RESUME_FROM` to the logs directory inside it, and run again; about three
+and a half hours are left.
+"""
+
+MULTI_SESSION = {27, 30, 33, 36, 37, 38, 39}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -839,6 +861,8 @@ QUEUE = [
     (38, 'cp_k_no_kd_r50', 'ci_k_heads4_r50',
      'K without KL, and K with a head per band of widths',
      NOKD_AND_HEADS),
+    (39, 'cr_k_r50_seed2', 'cq_a_r50_seed2',
+     'A and K on ResNet-50, second seed', SEED2_R50),
 ]
 
 HEADER = """# {number}. {title}
