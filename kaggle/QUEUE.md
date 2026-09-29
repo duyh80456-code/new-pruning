@@ -7,7 +7,7 @@ session. Take a row with a free slot, run the file as it is, and say
 which number you took.
 
 On ResNet-50, K stands at 77.26 against 76.86 for A, ahead at 15 of 16
-widths, one seed each. Notebook 39 is the second seed.
+widths, one seed each. Notebook 32 is the second seed.
 
 ## How to run one
 
@@ -50,8 +50,8 @@ training loop rather than running it, so anything that lives only in
 | 27 | `kaggle_kd_27_br_bs.ipynb` | `br_a300`, `bs_k300` | The same two branches, three times the schedule | 74.13 / 73.91 |
 | 28 | `kaggle_kd_28_bu_bt.ipynb` | `bu_narrow_first`, `bt_narrow_first_frozen` | The narrow end first, and then held still | 72.81 / 64.39 |
 | 30 | `kaggle_kd_30_bx_by.ipynb` | `bx_a_r50`, `by_k_r50` | A and K on ResNet-50 | 76.86 / 77.26 |
-| 38 | `kaggle_kd_38_cp_ci.ipynb` | `cp_k_no_kd_r50`, `ci_k_heads4_r50` | K without KL, and K with a head per band of widths | free / free |
-| 39 | `kaggle_kd_39_cr_cq.ipynb` | `cr_k_r50_seed2`, `cq_a_r50_seed2` | A and K on ResNet-50, second seed | free / free |
+| 31 | `kaggle_kd_31_cp_ci.ipynb` | `cp_k_no_kd_r50`, `ci_k_heads4_r50` | K without KL, and K with a head per band of widths | free / free |
+| 32 | `kaggle_kd_32_cr_cq.ipynb` | `cr_k_r50_seed2`, `cq_a_r50_seed2` | A and K on ResNet-50, second seed | free / free |
 
 ## Held back
 
@@ -59,15 +59,15 @@ These have configs in `apps/` and no notebook. To run one, add a row
 for it at the end of QUEUE in scripts/build_notebooks.py.
 
 * `ax_var_ground, ay_inverse_ground` - the same weighting by batch variance, and its reversal. Variance and activation disagree about a channel that is large and constant, so they are separate questions; ResNet-18, and the pair it followed up was never run.
-* `a_seed3` - a third seed of A on ResNet-18. The seed question has moved to ResNet-50, notebook 39.
+* `a_seed3` - a third seed of A on ResNet-18. The seed question has moved to ResNet-50, notebook 32.
 * `z_eps_100` - a control built to lose: blur the plan away and see what is left. Y at eps 0.5 has since made most of its point for a quarter of the cost.
 * `j_feature_gram` - a control for whether nesting is what makes K work.
 * `ap_logit_spread` - a test of the flatness diagnosis on branch C, which came last of twelve and is not going to reach K.
 * `az_act_ground, ba_taylor_ground, bb_reorder_l1, bc_reorder_read, k_seed2, bj_chain_only, q_feature_mse, r_feature_mmd, bm_solo_full, bk_alpha_on_k, bl_gromov, ab_no_debias, bv_half_first_frozen, bw_narrow10_frozen` - ResNet-18 branches whose notebooks (16, 17, 21 to 24, 29) were removed unrun. Every new run is on ResNet-50, so any of these that comes back comes back as a ResNet-50 twin of BX or BY in a new notebook at the end.
-* `cd_dsnet_r50, cf_scala_r50, cg_nasvit_r50` - the published methods on ResNet-50, notebooks 31 and 32, removed unrun. Needed for the paper once the ResNet-50 results settle.
-* `ch_a_heads4_r50, cj_a_heads2_r50, ck_a_heads8_r50, cl_a_heads16_r50` - band heads on A and the head-count sweep, notebooks 33 to 35, removed unrun. CI in notebook 38 asks first whether heads help K.
+* `cd_dsnet_r50, cf_scala_r50, cg_nasvit_r50` - the published methods on ResNet-50, in the old notebooks 31 and 32 (removed unrun; the numbers now hold other runs). Needed for the paper once the ResNet-50 results settle.
+* `ch_a_heads4_r50, cj_a_heads2_r50, ck_a_heads8_r50, cl_a_heads16_r50` - band heads on A and the head-count sweep, notebooks 33 to 35, removed unrun. CI in notebook 31 asks first whether heads help K.
 * `cm_k_knots4_r50, cn_a_knots4_r50` - BN scale and shift continuous in width, notebook 36, removed unrun.
-* `co_ce_only_r50` - US-Net with KD off, the floor under CP; notebook 37 removed unrun, and its other half, CP, is in notebook 38.
+* `co_ce_only_r50` - US-Net with KD off, the floor under CP; notebook 37 removed unrun, and its other half, CP, is in notebook 31.
 
 ## Dropped on evidence
 

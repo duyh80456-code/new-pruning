@@ -53,7 +53,7 @@ HELD = [
      'a channel that is large and constant, so they are separate '
      'questions; ResNet-18, and the pair it followed up was never run.'),
     ('a_seed3', 'a third seed of A on ResNet-18. The seed question has '
-     'moved to ResNet-50, notebook 39.'),
+     'moved to ResNet-50, notebook 32.'),
     ('z_eps_100', 'a control built to lose: blur the plan away and see '
      'what is left. Y at eps 0.5 has since made most of its point for '
      'a quarter of the cost.'),
@@ -68,15 +68,15 @@ HELD = [
      'of these that comes back comes back as a ResNet-50 twin of BX or BY '
      'in a new notebook at the end.'),
     ('cd_dsnet_r50, cf_scala_r50, cg_nasvit_r50', 'the published methods '
-     'on ResNet-50, notebooks 31 and 32, removed unrun. Needed for the '
+     'on ResNet-50, in the old notebooks 31 and 32 (removed unrun; the numbers now hold other runs). Needed for the '
      'paper once the ResNet-50 results settle.'),
     ('ch_a_heads4_r50, cj_a_heads2_r50, ck_a_heads8_r50, cl_a_heads16_r50',
      'band heads on A and the head-count sweep, notebooks 33 to 35, '
-     'removed unrun. CI in notebook 38 asks first whether heads help K.'),
+     'removed unrun. CI in notebook 31 asks first whether heads help K.'),
     ('cm_k_knots4_r50, cn_a_knots4_r50', 'BN scale and shift continuous in '
      'width, notebook 36, removed unrun.'),
     ('co_ce_only_r50', 'US-Net with KD off, the floor under CP; notebook '
-     '37 removed unrun, and its other half, CP, is in notebook 38.'),
+     '37 removed unrun, and its other half, CP, is in notebook 31.'),
 ]
 
 DROPPED = [
@@ -144,7 +144,7 @@ def main():
         '',
         'On ResNet-50, K stands at 77.26 against 76.86 for A, ahead at 15'
         ' of 16',
-        'widths, one seed each. Notebook 39 is the second seed.',
+        'widths, one seed each. Notebook 32 is the second seed.',
         '',
         '## How to run one',
         '',

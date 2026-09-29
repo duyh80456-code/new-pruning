@@ -808,7 +808,7 @@ one session, CR will not. When the session ends, attach its output, set
 and a half hours are left.
 """
 
-MULTI_SESSION = {27, 30, 38, 39}
+MULTI_SESSION = {27, 30, 31, 32}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -830,10 +830,10 @@ QUEUE = [
      'The narrow end first, and then held still', OTHERWAY),
     (30, 'bx_a_r50', 'by_k_r50',
      'A and K on ResNet-50', DEEPER),
-    (38, 'cp_k_no_kd_r50', 'ci_k_heads4_r50',
+    (31, 'cp_k_no_kd_r50', 'ci_k_heads4_r50',
      'K without KL, and K with a head per band of widths',
      NOKD_AND_HEADS),
-    (39, 'cr_k_r50_seed2', 'cq_a_r50_seed2',
+    (32, 'cr_k_r50_seed2', 'cq_a_r50_seed2',
      'A and K on ResNet-50, second seed', SEED2_R50),
 ]
 
