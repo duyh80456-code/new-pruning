@@ -745,7 +745,48 @@ so it needs a second session: attach the output, set `RESUME_FROM`, run
 again.
 """
 
-MULTI_SESSION = {27, 30, 33, 36, 37}
+NOKD_AND_HEADS = """Two changes to K on ResNet-50, one per card, each read against BY
+(K on ResNet-50, notebook 30: **77.26** mean top-1, BX 76.86).
+
+| | what changes from BY | the question |
+|---|---|---|
+| CP | the logit KD is taken out: students learn from the label, and the two Wasserstein terms on the features are the only link between widths | can the transport stand without KL |
+| CI | the width range is cut into four bands, each with its own classifier over the shared backbone | do band heads add to the transport |
+
+**CP.** `student_kd_weight: 0`, `student_ce_weight: 1`. The teacher still
+runs, because the feature terms read it. Every earlier transport branch
+added to KL; this is the first that replaces it. The closest thing
+measured before, C, replaced KL with Wasserstein on the logits and lost
+0.8 to A on ResNet-18. CP differs by where the transport sits: on the
+features, where K's gain came from. Against BY it says what the KL is
+worth inside K; against BX, whether transport alone beats US-Net with its
+KD. tests/test_no_kd.py checks that at weight 0 a student loss is the
+label cross entropy exactly and its gradient ignores the teacher.
+
+**CI.** `head_groups: 4`: bands 0.25-0.40, 0.45-0.60, 0.65-0.80,
+0.85-1.00 at the test widths, four test widths to a band, each band with
+its own classifier. The network still runs at any width. Adapted from
+SOLAR (WACV 2026), which gives each of a fixed set of subnets its own
+head. The widest band keeps the name `classifier`, so the teacher and
+the class cost matrix are unchanged; 0.6M extra parameters on 23.7M.
+BY's gain sat at the middle widths, 0.35-0.70, which are the two middle
+bands - the heads either add there or compete with the transport for the
+same thing. tests/test_head_groups.py checks each width's backward
+reaches its own head and no other.
+
+Peak memory at batch 256: CP 9.38 GB, CI 9.38 GB, under the 15 GB of a
+T4. Both smoke configs ran through train.py on a local GPU.
+
+## Both need a second session
+
+Both cost what K does: about 8 minutes an epoch on a T4, about 14 hours.
+When the session ends, attach its output, set `RESUME_FROM` to the logs
+directory inside it, and run again; both branches resume from their own
+checkpoints. Notebook 30 reached epoch 77 of K in the first session, so
+expect the resumed session to need about three and a half hours.
+"""
+
+MULTI_SESSION = {27, 30, 33, 36, 37, 38}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -795,6 +836,9 @@ QUEUE = [
      'Every BN scale and shift a continuous function of width', KNOTS),
     (37, 'cp_k_no_kd_r50', 'co_ce_only_r50',
      'Wasserstein without KD, and the floor under it', NOKD),
+    (38, 'cp_k_no_kd_r50', 'ci_k_heads4_r50',
+     'K without KL, and K with a head per band of widths',
+     NOKD_AND_HEADS),
 ]
 
 HEADER = """# {number}. {title}
