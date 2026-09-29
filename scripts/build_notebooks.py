@@ -664,8 +664,8 @@ find the number. The best one goes on K afterwards; CI in notebook 33 is
 already K with four.
 
 Each branch is A with one flag changed, so each takes about what A did
-in notebook 30, 10.7 hours, inside one session. Notebook 35 runs CL alone and leaves the second
-card idle.
+in notebook 30, 10.7 hours, inside one session. Notebook 35 runs CL
+alone and leaves the second card idle.
 """
 
 KNOTS = """K and A on ResNet-50 with **every BN scale and shift a continuous
@@ -711,7 +711,41 @@ one session, CM will not. When the session
 ends, attach its output, set `RESUME_FROM` and run again.
 """
 
-MULTI_SESSION = {27, 30, 33, 36}
+NOKD = """**Can the Wasserstein terms stand without KD.** Every transport branch
+in this project so far added to the logit KD that US-Net already has; the
+code refused to run one without it. These two take it out, on ResNet-50,
+read against BX and BY from notebook 30.
+
+| | students learn from | ties the widths together |
+|---|---|---|
+| BX | the widest width, by KL | KL |
+| CO | the label | nothing but the shared weights |
+| BY | the widest width, by KL | KL and two feature transport terms |
+| CP | the label | the two feature transport terms alone |
+
+**CO** is US-Net with inplace distillation off - the floor. **CP** is K
+with `student_kd_weight: 0` and `student_ce_weight: 1`: the students take
+the label, the teacher still runs because the feature terms read it, and
+the only link between widths is Wasserstein on the features. CP against
+CO is the transport on its own; CP against BY is what the KL is worth
+inside K. The nearest thing already measured is C, Wasserstein replacing
+KL on the logits, which lost 0.8 to A on ResNet-18.
+
+**What was checked.** tests/test_no_kd.py: at weight 0 a student loss is
+the label cross entropy exactly and its gradient does not move when the
+teacher changes; at the default it is the KD loss it always was. The
+branch suite now applies both student weights the way train.py does - it
+used to ignore student_ce_weight, which is why CF (Scala) reads 30.43
+there now and 15.24 before; train.py itself did not change for CF.
+Peak memory at batch 256: CP 9.38 GB; CO runs the same graph as A,
+which measured 9.47 GB. Both under the 15 GB of a T4.
+
+CO costs what A does, about 10.7 hours. CP costs what K does, about 14,
+so it needs a second session: attach the output, set `RESUME_FROM`, run
+again.
+"""
+
+MULTI_SESSION = {27, 30, 33, 36, 37}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -759,6 +793,8 @@ QUEUE = [
      'How many heads: 16', HEAD_SWEEP),
     (36, 'cm_k_knots4_r50', 'cn_a_knots4_r50',
      'Every BN scale and shift a continuous function of width', KNOTS),
+    (37, 'cp_k_no_kd_r50', 'co_ce_only_r50',
+     'Wasserstein without KD, and the floor under it', NOKD),
 ]
 
 HEADER = """# {number}. {title}
@@ -911,7 +947,8 @@ SUITES_NOW = chr(10).join([
     "          'tests/test_published_methods.py',",
     "          'tests/test_freeze.py',",
     "          'tests/test_head_groups.py',",
-    "          'tests/test_affine_knots.py']"])
+    "          'tests/test_affine_knots.py',",
+    "          'tests/test_no_kd.py']"])
 
 for number, left, right, title, preamble in QUEUE:
     nb = json.loads(json.dumps(template))

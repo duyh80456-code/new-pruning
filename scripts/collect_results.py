@@ -183,6 +183,8 @@ LEGEND = [
     ('width_sampling=stable', 'Scala: one free width from each half of '
      'the range, on a grid'),
     ('stable_granularity', 'the grid step for stable sampling'),
+    ('student_kd_weight', 'the weight on logit KD for every student; 0 '
+     'leaves them learning from the label and the transport terms alone'),
     ('student_ce_weight', 'Scala: every student also takes the hard label '
      'at this weight'),
     ('isolate_smallest', 'Scala: the narrowest width takes the last '

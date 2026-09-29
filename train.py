@@ -648,7 +648,12 @@ def forward_loss(
                         'unknown kd_weighting {}'.format(weighting))
                 weight = weight / weight.mean().clamp_min(1e-12)
             per_sample = per_sample * weight
-        loss = (temperature * temperature) * torch.mean(per_sample)
+        # student_kd_weight 0 turns the logit KD off while leaving the
+        # teacher's forward in place, so the feature transport terms still
+        # have a teacher to read: that is the branch that asks whether the
+        # Wasserstein terms can stand without KL rather than beside it
+        loss = (getattr(FLAGS, 'student_kd_weight', 1.0)
+                * (temperature * temperature) * torch.mean(per_sample))
         # Scala's noise calibration: every student also takes the label,
         # weighted 1.0 in their release, so a teacher that is wrong early
         # is not the only thing it hears
