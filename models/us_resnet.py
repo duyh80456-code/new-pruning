@@ -50,11 +50,15 @@ class _Residual(nn.Module):
         here = self.width_mult
         return min(range(len(widths)), key=lambda i: abs(widths[i] - here))
 
-    def forward(self, x):
+    def preact(self, x):
+        """the residual sum before the closing ReLU"""
         body = self.body(x)
         if self.branch_scale is not None:
             body = body * self.branch_scale[self._slot()]
-        return self.post_relu(body + self.shortcut(x))
+        return body + self.shortcut(x)
+
+    def forward(self, x):
+        return self.post_relu(self.preact(x))
 
 
 class BasicBlock(_Residual):
@@ -210,13 +214,28 @@ class Model(nn.Module):
         taps = tuple(getattr(FLAGS, 'feature_layers', ['final']))
         wanted = {self.stage_ends[name]: name
                   for name in taps if name != 'final'}
+        # feature_pre_relu reads 'final' before the last block's ReLU.
+        # After it, a channel whose BN shift has gone negative is zero for
+        # every input, and all-zero clouds transport to each other at no
+        # cost: CR (K at seed 2026) sank there, every width up to 0.60
+        # dead at the pooled feature with the final BN shift at -1.44 on
+        # the channels the transport reads. Before the ReLU the same
+        # channel still varies with the input and still carries gradient.
+        pre_relu = getattr(FLAGS, 'feature_pre_relu', False)
+        last_block = len(self.features) - 2
         collected = {}
         for index, layer in enumerate(self.features):
-            x = layer(x)
+            if pre_relu and index == last_block:
+                pre = layer.preact(x)
+                collected['final'] = pre.mean(dim=(2, 3))
+                x = torch.relu(pre)
+            else:
+                x = layer(x)
             if index in wanted:
                 collected[wanted[index]] = x.mean(dim=(2, 3))
         x = x.view(-1, x.size()[1])
-        collected['final'] = x
+        if not pre_relu:
+            collected['final'] = x
         return self.head()(x), tuple(collected[name] for name in taps)
 
     def reset_parameters(self):

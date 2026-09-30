@@ -51,7 +51,8 @@ training loop rather than running it, so anything that lives only in
 | 28 | `kaggle_kd_28_bu_bt.ipynb` | `bu_narrow_first`, `bt_narrow_first_frozen` | The narrow end first, and then held still | 72.81 / 64.39 |
 | 30 | `kaggle_kd_30_bx_by.ipynb` | `bx_a_r50`, `by_k_r50` | A and K on ResNet-50 | 76.86 / 77.26 |
 | 31 | `kaggle_kd_31_cp_ci.ipynb` | `cp_k_no_kd_r50`, `ci_k_heads4_r50` | K without KL, and K with a head per band of widths | free / free |
-| 32 | `kaggle_kd_32_cr_cq.ipynb` | `cr_k_r50_seed2`, `cq_a_r50_seed2` | A and K on ResNet-50, second seed | free / free |
+| 32 | `kaggle_kd_32_cr_cq.ipynb` | `cr_k_r50_seed2`, `cq_a_r50_seed2` | A and K on ResNet-50, second seed | free / 76.46 |
+| 33 | `kaggle_kd_33_ct_cu.ipynb` | `ct_k_prerelu_r50`, `cu_k_prerelu_r50_seed2` | K with the transport read before the last ReLU, two seeds | free / free |
 
 ## Held back
 

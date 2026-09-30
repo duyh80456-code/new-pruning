@@ -808,7 +808,39 @@ one session, CR will not. When the session ends, attach its output, set
 and a half hours are left.
 """
 
-MULTI_SESSION = {27, 30, 31, 32}
+PRE_RELU = """K again on ResNet-50, with one change: both feature transport terms
+read the last block **before** its closing ReLU (`feature_pre_relu: True`).
+
+**Why.** CR, K at seed 2026 in notebook 32, died. Opening its checkpoint:
+every width from 0.25 to 0.60 gave an all-zero pooled feature and
+constant logits, and the final BN shift on the channels the transport
+reads had gone to -1.44 against -0.46 on the rest. After the ReLU those
+channels are zero for every input. Two all-zero clouds transport to each
+other at no cost, and the dead ReLU passes no gradient back, so K had a
+trivial minimum it could fall into and not leave. A has no such term,
+which is why CQ at the same seed trained normally. Before the ReLU the
+same channels still vary with the input: on CR's own weights the
+transport gradient into the last block goes from 0 to about 37 at width
+0.25 with the flag on. tests/test_pre_relu.py rebuilds the dead state and
+checks the flag gives it a gradient; the logits do not depend on it.
+
+| | seed | read against |
+|---|---|---|
+| CT | 1995 | BY 77.26: what the change costs where nothing broke |
+| CU | 2026 | CR (died) and CQ 76.46: whether it holds where K broke |
+
+**Watch in the log:** width 0.25 must leave loss 4.605 (= ln 100) within
+the first two epochs. If CU sits there through epoch 2, stop it.
+
+## Both need a second session
+
+About 8 minutes an epoch on a T4, 14 hours for each. When the session
+ends, attach its output, set `RESUME_FROM` to the logs directory inside
+it, and run again; about three hours are left. Attach the CIFAR-100
+dataset as well, or 34 minutes go on downloading it.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -835,6 +867,9 @@ QUEUE = [
      NOKD_AND_HEADS),
     (32, 'cr_k_r50_seed2', 'cq_a_r50_seed2',
      'A and K on ResNet-50, second seed', SEED2_R50),
+    (33, 'ct_k_prerelu_r50', 'cu_k_prerelu_r50_seed2',
+     'K with the transport read before the last ReLU, two seeds',
+     PRE_RELU),
 ]
 
 HEADER = """# {number}. {title}
@@ -988,7 +1023,8 @@ SUITES_NOW = chr(10).join([
     "          'tests/test_freeze.py',",
     "          'tests/test_head_groups.py',",
     "          'tests/test_affine_knots.py',",
-    "          'tests/test_no_kd.py']"])
+    "          'tests/test_no_kd.py',",
+    "          'tests/test_pre_relu.py']"])
 
 for number, left, right, title, preamble in QUEUE:
     nb = json.loads(json.dumps(template))
