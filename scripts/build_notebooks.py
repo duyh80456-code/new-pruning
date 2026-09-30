@@ -1009,6 +1009,23 @@ FILTER_NOW = chr(10).join([
 # The template carries on with zero GPUs and only fails at the first
 # .cuda() in the smoke step, after the dataset has been fetched. Notebook
 # 30 lost half an hour that way with Accelerator left at None.
+# Print the commit the session cloned, so a log says which code ran.
+# Notebook 31's resume died on a test its clone did not have: the
+# notebook had been taken from disk before that commit was pushed.
+CLONE_WAS = chr(10).join([
+    "if not os.path.isdir(CODE):",
+    "    subprocess.run(",
+    "        ['git', 'clone', '-b', REPO_BRANCH, REPO_URL, CODE], check=True)",
+    "os.chdir(CODE)"])
+CLONE_NOW = chr(10).join([
+    "if not os.path.isdir(CODE):",
+    "    subprocess.run(",
+    "        ['git', 'clone', '-b', REPO_BRANCH, REPO_URL, CODE], check=True)",
+    "os.chdir(CODE)",
+    "print('code at', subprocess.run(",
+    "    ['git', 'log', '-1', '--format=%h %s'], capture_output=True,",
+    "    text=True).stdout.strip())"])
+
 GPU_WAS = "if n_gpu < len(BRANCHES):"
 GPU_NOW = chr(10).join([
     "if n_gpu == 0:",
@@ -1031,7 +1048,7 @@ for number, left, right, title, preamble in QUEUE:
     for cell in nb['cells']:
         body = ''.join(cell['source'])
         for old, new in ((SUITES_WAS, SUITES_NOW), (GPU_WAS, GPU_NOW),
-                         (QUIET_WAS, QUIET_NOW),
+                         (QUIET_WAS, QUIET_NOW), (CLONE_WAS, CLONE_NOW),
                          (FILTER_WAS, FILTER_NOW)):
             body = body.replace(old, new)
         cell['source'] = source(body) if body.strip() else cell['source']
