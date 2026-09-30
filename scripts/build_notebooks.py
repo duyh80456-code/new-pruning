@@ -1026,6 +1026,37 @@ CLONE_NOW = chr(10).join([
     "    ['git', 'log', '-1', '--format=%h %s'], capture_output=True,",
     "    text=True).stdout.strip())"])
 
+# RESUME_FROM left empty with a finished session attached restarts from
+# epoch 1 without a word: notebook 31's second session ran seven hours
+# of epochs it already had. Look for the checkpoints in the inputs first,
+# and say for each branch where it starts.
+RESUME_WAS = chr(10).join([
+    "if RESUME_FROM:",
+    "    os.makedirs('logs', exist_ok=True)"])
+RESUME_NOW = chr(10).join([
+    "if not RESUME_FROM:",
+    "    found = set()",
+    "    for root, dirs, files in os.walk('/kaggle/input'):",
+    "        if ('latest_checkpoint.pt' in files and",
+    "                os.path.basename(root)[len('cifar100_'):] in BRANCHES):",
+    "            found.add(os.path.dirname(root))",
+    "    if len(found) > 1:",
+    "        raise SystemExit('checkpoints in more than one input, set '",
+    "                         'RESUME_FROM to one of: {}'.format(sorted(found)))",
+    "    if found:",
+    "        RESUME_FROM = found.pop()",
+    "        print('RESUME_FROM was empty; found checkpoints in', RESUME_FROM)",
+    "if RESUME_FROM:",
+    "    os.makedirs('logs', exist_ok=True)"])
+RESUME_REPORT_WAS = "    print('starting from scratch')"
+RESUME_REPORT_NOW = chr(10).join([
+    "    print('starting from scratch')",
+    "for branch in BRANCHES:",
+    "    ckpt = os.path.join('logs', 'cifar100_' + branch,",
+    "                        'latest_checkpoint.pt')",
+    "    print(branch, 'resumes from its checkpoint' if os.path.exists(ckpt)",
+    "          else 'starts at epoch 1')"])
+
 GPU_WAS = "if n_gpu < len(BRANCHES):"
 GPU_NOW = chr(10).join([
     "if n_gpu == 0:",
@@ -1049,6 +1080,8 @@ for number, left, right, title, preamble in QUEUE:
         body = ''.join(cell['source'])
         for old, new in ((SUITES_WAS, SUITES_NOW), (GPU_WAS, GPU_NOW),
                          (QUIET_WAS, QUIET_NOW), (CLONE_WAS, CLONE_NOW),
+                         (RESUME_WAS, RESUME_NOW),
+                         (RESUME_REPORT_WAS, RESUME_REPORT_NOW),
                          (FILTER_WAS, FILTER_NOW)):
             body = body.replace(old, new)
         cell['source'] = source(body) if body.strip() else cell['source']
