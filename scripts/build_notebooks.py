@@ -881,7 +881,38 @@ output, set `RESUME_FROM` to the logs directory inside it, and run again.
 Attach the CIFAR-100 dataset as well.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35}
+LATE_START = """K again on ResNet-50, reading the feature after the ReLU as BY did,
+with one change: both feature transport terms stay off for the first five
+epochs (`feature_start_epoch: 6`), so the warm-up trains on CE and logit
+KD alone.
+
+**Why.** CR, K at seed 2026, collapsed by epoch 3: the narrow widths'
+pooled features went to zero after the ReLU, and zero clouds transport to
+each other at no cost and pass no gradient. Notebook 33 read the feature
+before the ReLU instead. That removed the collapse - CU trained at seed
+2026 - but cost about 1.8 points at every width: CT 75.41 against BY
+77.26, and both CT and CU below A at all sixteen widths. This tries the
+other explanation, that the collapse is an early-training event: the
+features form first, and the transport only joins once they carry signal.
+
+| | seed | read against |
+|---|---|---|
+| DC | 2026 | CR (collapsed) and CQ 76.46 / 76.07: does K survive |
+| DD | 1995 | BY 77.26: what the late start costs where nothing broke |
+
+**Watch in the log:** DC's width 0.25 must leave loss 4.605 (= ln 100) in
+the first epochs and stay off it after epoch 6, when the transport joins.
+`pair_loss` appears on the train lines from epoch 6 on, not before.
+
+## Both need a second session
+
+About 8 minutes an epoch on a T4, 14 hours for each. When the session
+ends, Save Version, then in a new run attach that version's output (pick
+the version by number, not Latest) and run again; the notebook finds the
+checkpoints. Attach the CIFAR-100 dataset as well.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -915,6 +946,9 @@ QUEUE = [
      'Published baselines on ResNet-50: AlphaNet and Scala', PUBLISHED_A),
     (35, 'db_dynas_r50', 'ch_a_heads4_r50',
      'Published baselines on ResNet-50: DYNAS and SOLAR', PUBLISHED_B),
+    (36, 'dc_k_late_r50_seed2', 'dd_k_late_r50',
+     'K with the feature transport held off for five epochs, two seeds',
+     LATE_START),
 ]
 
 HEADER = """# {number}. {title}
@@ -1118,12 +1152,39 @@ SUITES_NOW = chr(10).join([
     "          'tests/test_affine_knots.py',",
     "          'tests/test_no_kd.py',",
     "          'tests/test_pre_relu.py',",
-    "          'tests/test_dynas.py']"])
+    "          'tests/test_dynas.py',",
+    "          'tests/test_feature_start.py']"])
+
+A_REF_WAS = chr(10).join([
+    "# the published run, for reference",
+    "A_KL = {0.25: 70.10, 0.30: 70.80, 0.35: 71.50, 0.40: 72.20, 0.45: 72.80,",
+    "        0.50: 73.20, 0.55: 73.40, 0.60: 73.80, 0.65: 73.90, 0.70: 74.30,",
+    "        0.75: 74.60, 0.80: 74.80, 0.85: 75.10, 0.90: 75.10, 0.95: 75.40,",
+    "        1.00: 75.30}"])
+A_REF_NOW = chr(10).join([
+    "# BX: A on ResNet-50, seed 1995, for reference. Not the ResNet-18 A,",
+    "# which every ResNet-50 run beats by two points without trying.",
+    "A_KL = {0.25: 75.26, 0.30: 75.35, 0.35: 75.54, 0.40: 76.01, 0.45: 76.30,",
+    "        0.50: 76.77, 0.55: 76.63, 0.60: 77.03, 0.65: 77.13, 0.70: 77.20,",
+    "        0.75: 77.39, 0.80: 77.56, 0.85: 77.60, 0.90: 77.99, 0.95: 78.01,",
+    "        1.00: 78.04}"])
+A_NOTE_WAS = chr(10).join([
+    "One seed, and sigma has not been measured. Three of the four gaps in the",
+    "finished table sit between 0.25 and 0.44 points, which is the range where",
+    "a single run cannot tell a result from noise."])
+A_NOTE_NOW = chr(10).join([
+    "A here is BX, A on ResNet-50 at seed 1995 (mean 76.86). The same config",
+    "run twice at seed 2026 gave 76.46 and 76.07, so a gap under about 0.4",
+    "is not yet a result."])
 
 for number, left, right, title, preamble in QUEUE:
     nb = json.loads(json.dumps(template))
     for cell in nb['cells']:
         body = ''.join(cell['source'])
+        if number >= 30:
+            for old, new in ((A_REF_WAS, A_REF_NOW),
+                             (A_NOTE_WAS, A_NOTE_NOW)):
+                body = body.replace(old, new)
         for old, new in ((SUITES_WAS, SUITES_NOW), (GPU_WAS, GPU_NOW),
                          (QUIET_WAS, QUIET_NOW), (CLONE_WAS, CLONE_NOW),
                          (RESUME_WAS, RESUME_NOW),

@@ -787,6 +787,16 @@ def run_one_epoch(
         min_width = min(FLAGS.width_mult_list)
     needs_cost = (isinstance(soft_criterion, WassersteinLossSoft)
                   or isinstance(pair_criterion, WassersteinPairLoss))
+    # The feature transport terms, vertical and horizontal, held off until
+    # feature_start_epoch. CR, K at seed 2026, collapsed by its third
+    # epoch, inside the warm-up: its narrow widths' features went to zero
+    # after the ReLU, and two zero clouds transport at no cost and pass no
+    # gradient, so the term held them there. Reading before the ReLU (CT,
+    # CU) removed the fixed point but cost about 1.8 points at every
+    # width. This keeps K's post-ReLU read and lets the features form
+    # under logit KD alone first. Off, the horizontal term goes entirely,
+    # logit pairs included. Epochs count as the log prints them, from 1.
+    transport_on = epoch >= getattr(FLAGS, 'feature_start_epoch', 0)
 
     if getattr(FLAGS, 'distributed', False):
         loader.sampler.set_epoch(epoch)
@@ -994,7 +1004,8 @@ def run_one_epoch(
                             # vertical term at the feature level, alongside
                             # whatever the logits are being matched with
                             if (feature_criterion is not None
-                                    and teacher_feature is not None):
+                                    and teacher_feature is not None
+                                    and transport_on):
                                 loss = loss + (
                                     getattr(FLAGS, 'feature_weight', 1.0)
                                     * width_gate(width_mult)
@@ -1002,7 +1013,8 @@ def run_one_epoch(
                                         feature,
                                         tuple(t.detach()
                                               for t in teacher_feature)))
-                            if split and position in pairs_at:
+                            if (split and position in pairs_at
+                                    and transport_on):
                                 share = 0.0
                                 for left, right in pairs_at[position]:
                                     one = ((output, feature)
@@ -1054,7 +1066,8 @@ def run_one_epoch(
                                 conflict.hold(model)
                     if conflict is not None:
                         conflict.merge(model, epoch)
-                    if split and split_pairs and is_master():
+                    if (split and split_pairs and transport_on
+                            and is_master()):
                         meters[str(max_width)]['pair_loss'].cache(
                             (split_logged / len(split_pairs)).item())
                     if deferred:
@@ -1068,7 +1081,8 @@ def run_one_epoch(
                             mid_outputs = [mid_outputs[i] for i in order]
                             mid_features = [mid_features[i] for i in order]
                         pair_loss = 0.0
-                        pairs = horizontal_pairs(mid_widths)
+                        pairs = (horizontal_pairs(mid_widths)
+                                 if transport_on else [])
                         for left, right in pairs:
                             here = pair_term(
                                 pair_criterion, feature_pair_criterion,
