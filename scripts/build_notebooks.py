@@ -1036,7 +1036,7 @@ RESUME_WAS = chr(10).join([
 RESUME_NOW = chr(10).join([
     "if not RESUME_FROM:",
     "    found = set()",
-    "    for root, dirs, files in os.walk('/kaggle/input'):",
+    "    for root, dirs, files in os.walk('/kaggle/input', followlinks=True):",
     "        if ('latest_checkpoint.pt' in files and",
     "                os.path.basename(root)[len('cifar100_'):] in BRANCHES):",
     "            found.add(os.path.dirname(root))",
