@@ -912,7 +912,31 @@ the version by number, not Latest) and run again; the notebook finds the
 checkpoints. Attach the CIFAR-100 dataset as well.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36}
+AMP_CHECK = """A and K on ResNet-50 again, exactly as BX and BY, with one change:
+`amp: True`. The training forward runs in fp16 on the T4's tensor cores;
+every loss, Sinkhorn included, takes fp32 inputs, and validation and BN
+calibration stay in fp32 (tests/test_amp.py).
+
+| | is | fp32 twin |
+|---|---|---|
+| DE | A with amp | BX 76.86 |
+| DF | K with amp | BY 77.26 |
+
+**How to read it.** Each against its fp32 twin first. The same A config
+run twice at one seed landed 0.39 apart, so within about 0.4 is the same
+result. If both are, and DF still leads DE, later runs switch to amp; on
+the local card it was 1.86x faster for ResNet-50 at batch 256.
+
+## Timing
+
+Expected well under a session: roughly half of A's 10.7 hours and K's 14,
+if the T4 gains what the local card did. The epoch times in the log say
+how much it actually gained; send them back with the table. If K does not
+finish, attach this version's output (pick the version number, not
+Latest) and run again.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -949,6 +973,8 @@ QUEUE = [
     (36, 'dc_k_late_r50_seed2', 'dd_k_late_r50',
      'K with the feature transport held off for five epochs, two seeds',
      LATE_START),
+    (37, 'de_a_amp_r50', 'df_k_amp_r50',
+     'A and K with mixed precision, against BX and BY', AMP_CHECK),
 ]
 
 HEADER = """# {number}. {title}
@@ -1153,7 +1179,8 @@ SUITES_NOW = chr(10).join([
     "          'tests/test_no_kd.py',",
     "          'tests/test_pre_relu.py',",
     "          'tests/test_dynas.py',",
-    "          'tests/test_feature_start.py']"])
+    "          'tests/test_feature_start.py',",
+    "          'tests/test_amp.py']"])
 
 A_REF_WAS = chr(10).join([
     "# the published run, for reference",

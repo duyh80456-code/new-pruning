@@ -1416,6 +1416,9 @@ def train_val_test():
                 checkpoint['ema_teacher'])
         if checkpoint.get('dynas') is not None:
             _DYNAS['dynas'].load_state_dict(checkpoint['dynas'])
+        if checkpoint.get('scaler') is not None:
+            # the loss scale it had settled on, rather than 65536 again
+            grad_scaler().load_state_dict(checkpoint['scaler'])
         print('Loaded checkpoint {} at epoch {}.'.format(
             FLAGS.log_dir, last_epoch))
     else:
@@ -1590,6 +1593,8 @@ def train_val_test():
                     'meters': (train_meters, val_meters),
                     'ema_teacher': (_EMA['net'].state_dict()
                                     if 'net' in _EMA else None),
+                    'scaler': (grad_scaler().state_dict()
+                               if getattr(FLAGS, 'amp', False) else None),
                     'dynas': (_DYNAS['dynas'].state_dict()
                               if 'dynas' in _DYNAS else None),
                 },
