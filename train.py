@@ -30,6 +30,7 @@ from utils.loss_ops import training_widths
 from utils.loss_ops import build_confusion_embedding, build_cost_matrix
 from utils.loss_ops import build_spread_criterion, get_classifier_weight
 from utils.loss_ops import width_gate
+from utils.dynas import Dynas
 from models.slimmable_ops import bn_calibration_init
 from models.slimmable_ops import make_divisible
 from models.slimmable_ops import USBatchNorm2d, USConv2d, USLinear
@@ -593,6 +594,70 @@ class GradientConflict(object):
         self.held = {}
 
 
+# Mixed precision, off by default. A T4 does about 8 TFLOPS in fp32 and 65
+# on its fp16 tensor cores, and ResNet-50 at 32x32 with four widths a step
+# is what makes a K run 14 hours. Only the network runs in fp16, and only
+# while training: its outputs and features are cast back to fp32 before
+# any loss sees them, because Sinkhorn's log-sum-exp over a cost divided
+# by eps overflows fp16, and validation and BN calibration stay in fp32 so
+# the numbers in the table are read the same way as every run before.
+_SCALER = None
+
+
+def amp_on(model):
+    return getattr(FLAGS, 'amp', False) and model.training
+
+
+def grad_scaler():
+    global _SCALER
+    if _SCALER is None:
+        _SCALER = torch.amp.GradScaler('cuda')
+    return _SCALER
+
+
+def to_float(value):
+    if isinstance(value, torch.Tensor):
+        return value.float() if value.is_floating_point() else value
+    if isinstance(value, (tuple, list)):
+        return type(value)(to_float(v) for v in value)
+    return value
+
+
+def run_model(model, input):
+    if not amp_on(model):
+        return model(input)
+    with torch.autocast('cuda', dtype=torch.float16):
+        output = model(input)
+    return to_float(output)
+
+
+# DYNAS: one optimizer per width group, stepped once per width. See
+# utils/dynas.py.
+_DYNAS = {}
+
+
+def check_dynas():
+    """DYNAS steps each width as soon as its gradient exists, so it serves
+    the plain per-width backward of the US-Net branch and nothing that
+    needs the gradients of several widths at once"""
+    if not getattr(FLAGS, 'universally_slimmable_training', False):
+        raise ValueError('dynas is written for the US-Net branch')
+    clash = [name for name in (
+        'amp', 'horizontal_kd', 'ensemble_teacher', 'split_pair_backward',
+        'width_equalize_q', 'freeze_prefix_at', 'ema_teacher_decay',
+        'conflict_from_epoch', 'feature_kd')
+        if getattr(FLAGS, name, None)]
+    if clash:
+        raise ValueError('dynas cannot run with {}'.format(clash))
+
+
+def backward(loss):
+    if getattr(FLAGS, 'amp', False):
+        grad_scaler().scale(loss).backward()
+    else:
+        loss.backward()
+
+
 def pair_term(pair_criterion, feature_pair_criterion,
               left_output, left_feature, right_output, right_feature):
     """the horizontal term between two co-sampled widths, before gating"""
@@ -614,7 +679,7 @@ def forward_loss(
         soft_criterion=None, return_soft_target=False, return_acc=False,
         return_output=False):
     """forward model and return loss"""
-    output = model(input)
+    output = run_model(model, input)
     feature = None
     if isinstance(output, tuple):
         output, feature = output
@@ -820,6 +885,10 @@ def run_one_epoch(
                                 'conflict_from_epoch needs the widest '
                                 'width to backward on its own, and a '
                                 'deferred step sums every width first')
+                        if getattr(FLAGS, 'amp', False):
+                            raise ValueError(
+                                'conflict_from_epoch reads gradients '
+                                'before amp unscales them')
                         conflict = GradientConflict()
                     if split:
                         if getattr(FLAGS, 'ensemble_teacher', False):
@@ -852,7 +921,7 @@ def run_one_epoch(
                                              for pair in split_pairs}):
                                 model.apply(lambda m: setattr(
                                     m, 'width_mult', widths_train[i]))
-                                ahead = model(input)
+                                ahead = run_model(model, input)
                                 known[i] = (ahead if isinstance(ahead, tuple)
                                             else (ahead, None))
                         split_logged = 0.0
@@ -973,7 +1042,13 @@ def run_one_epoch(
                         if deferred:
                             losses.append(loss)
                         else:
-                            loss.backward()
+                            backward(loss)
+                            if 'dynas' in _DYNAS:
+                                # this width's update, through its own
+                                # group's momentum at its own rate
+                                _DYNAS['rate'][width_mult] = (
+                                    _DYNAS['dynas'].step(
+                                        model, width_mult, epoch, batch_idx))
                             if (conflict is not None
                                     and width_mult == max_width):
                                 conflict.hold(model)
@@ -1053,7 +1128,7 @@ def run_one_epoch(
                                 meters[str(max_width)]['ens_loss'].cache(
                                     ens.item())
                         loss = sum(losses)
-                        loss.backward()
+                        backward(loss)
                 else:
                     # slimmable model (s-nets)
                     for width_mult in sorted(
@@ -1077,11 +1152,11 @@ def run_one_epoch(
                             else:
                                 loss = forward_loss(
                                     model, criterion, input, target, meter)
-                        loss.backward()
+                        backward(loss)
             else:
                 loss = forward_loss(
                     model, criterion, input, target, meters)
-                loss.backward()
+                backward(loss)
             if (getattr(FLAGS, 'distributed', False)
                     and getattr(FLAGS, 'distributed_all_reduce', False)):
                 allreduce_grads(model)
@@ -1089,18 +1164,35 @@ def run_one_epoch(
             # all bounded the way cross entropy is, so a single bad batch
             # early on can take the weights somewhere they never come back
             # from. Off by default, which is upstream behaviour.
+            # under amp the gradients are scaled until here: unscale
+            # before anything reads their size
+            if getattr(FLAGS, 'amp', False):
+                grad_scaler().unscale_(optimizer)
             clip = getattr(FLAGS, 'grad_clip', 0)
             if clip:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
             equalize_by_width_count(model, widths_train)
             held = freeze_narrow_prefix(model, epoch)
-            optimizer.step()
+            if 'dynas' in _DYNAS:
+                # every width has already stepped; .grad is empty
+                pass
+            elif getattr(FLAGS, 'amp', False):
+                # skips the step when a gradient overflowed
+                grad_scaler().step(optimizer)
+                grad_scaler().update()
+            else:
+                optimizer.step()
             restore_frozen(held)
             update_ema_teacher(model)
             if is_master() and getattr(FLAGS, 'slimmable_training', False):
                 for width_mult in sorted(FLAGS.width_mult_list, reverse=True):
                     meter = meters[str(width_mult)]
-                    meter['lr'].cache(optimizer.param_groups[0]['lr'])
+                    if 'dynas' in _DYNAS:
+                        # the rate this width was actually stepped at
+                        meter['lr'].cache(_DYNAS['rate'].get(
+                            width_mult, float('nan')))
+                    else:
+                        meter['lr'].cache(optimizer.param_groups[0]['lr'])
             elif is_master():
                 meters['lr'].cache(optimizer.param_groups[0]['lr'])
             else:
@@ -1281,6 +1373,12 @@ def train_val_test():
         print('Loaded model {}.'.format(FLAGS.pretrained))
 
     optimizer = get_optimizer(model_wrapper)
+    if getattr(FLAGS, 'dynas', False):
+        check_dynas()
+        _DYNAS['dynas'] = Dynas(
+            model_wrapper, get_optimizer,
+            getattr(FLAGS, 'num_sample_training', 2))
+        _DYNAS['rate'] = {}
 
     # check resume training
     if os.path.exists(os.path.join(FLAGS.log_dir, 'latest_checkpoint.pt')):
@@ -1302,6 +1400,8 @@ def train_val_test():
         if checkpoint.get('ema_teacher') is not None:
             ema_teacher(model_wrapper).load_state_dict(
                 checkpoint['ema_teacher'])
+        if checkpoint.get('dynas') is not None:
+            _DYNAS['dynas'].load_state_dict(checkpoint['dynas'])
         print('Loaded checkpoint {} at epoch {}.'.format(
             FLAGS.log_dir, last_epoch))
     else:
@@ -1476,6 +1576,8 @@ def train_val_test():
                     'meters': (train_meters, val_meters),
                     'ema_teacher': (_EMA['net'].state_dict()
                                     if 'net' in _EMA else None),
+                    'dynas': (_DYNAS['dynas'].state_dict()
+                              if 'dynas' in _DYNAS else None),
                 },
                 os.path.join(FLAGS.log_dir, 'latest_checkpoint.pt'))
 

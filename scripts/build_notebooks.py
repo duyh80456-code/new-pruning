@@ -840,7 +840,48 @@ it, and run again; about three hours are left. Attach the CIFAR-100
 dataset as well, or 34 minutes go on downloading it.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33}
+PUBLISHED_A = """Two published methods for training a universally slimmable network,
+rerun on ResNet-50 under exactly the protocol of BX (A) and BY (K): CIFAR-100
+at 32x32, 100 epochs, batch 256, lr 0.2, seed 1995, the sixteen widths read
+after BN post-calibration.
+
+| | method | what it changes in US-Net |
+|---|---|---|
+| CV | AlphaNet (ICML 2021) | the inplace distillation KL becomes an adaptive alpha-divergence |
+| CF | Scala (NeurIPS 2024) | isolated narrowest width, stable sampling, a teacher chain, the label for every width |
+
+No published number exists for either on a CIFAR ResNet-50, so these rows
+are the comparison. Each config's header lists what was taken from the
+authors' code and where this port differs.
+
+## Timing
+
+A took 10.7 hours on a T4; both should finish in one session. If one does
+not, attach this session's output, set `RESUME_FROM` to the logs directory
+inside it, and run again. Attach the CIFAR-100 dataset as well.
+"""
+
+PUBLISHED_B = """Two more published methods, same protocol as BX (A) and BY (K).
+
+| | method | what it changes in US-Net |
+|---|---|---|
+| DB | DYNAS (CVPR 2025) | a learning rate per sub-network that decays faster for small ones, and a momentum buffer per group of widths |
+| CH | SOLAR (WACV 2026) | a classifier head per band of widths: 0.25-0.40, 0.45-0.60, 0.65-0.80, 0.85-1.00 |
+
+DYNAS steps each sampled width through its own group's optimizer as soon
+as its gradient exists (utils/dynas.py, tests/test_dynas.py). SOLAR gives
+each sub-network its own head; on a universally slimmable network the
+sub-networks are bands of widths. CI, K with the same four heads, scored
+77.27 in notebook 31, so CH against BX says what the heads do without K.
+
+## Timing
+
+About A's 10.7 hours each. If one does not finish, attach this session's
+output, set `RESUME_FROM` to the logs directory inside it, and run again.
+Attach the CIFAR-100 dataset as well.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -870,6 +911,10 @@ QUEUE = [
     (33, 'ct_k_prerelu_r50', 'cu_k_prerelu_r50_seed2',
      'K with the transport read before the last ReLU, two seeds',
      PRE_RELU),
+    (34, 'cv_alphanet_r50', 'cf_scala_r50',
+     'Published baselines on ResNet-50: AlphaNet and Scala', PUBLISHED_A),
+    (35, 'db_dynas_r50', 'ch_a_heads4_r50',
+     'Published baselines on ResNet-50: DYNAS and SOLAR', PUBLISHED_B),
 ]
 
 HEADER = """# {number}. {title}
@@ -1072,7 +1117,8 @@ SUITES_NOW = chr(10).join([
     "          'tests/test_head_groups.py',",
     "          'tests/test_affine_knots.py',",
     "          'tests/test_no_kd.py',",
-    "          'tests/test_pre_relu.py']"])
+    "          'tests/test_pre_relu.py',",
+    "          'tests/test_dynas.py']"])
 
 for number, left, right, title, preamble in QUEUE:
     nb = json.loads(json.dumps(template))
