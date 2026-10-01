@@ -2576,6 +2576,88 @@
         1.1898,
         1.2002
       ]
+    },
+    {
+      "name": "ct_k_prerelu_r50",
+      "letter": "CT",
+      "what": "K on ResNet-50 with both feature transport terms read before the last ReLU (feature_pre_relu), seed 1995: what the collapse fix costs where K did not collapse; against BY",
+      "top1": [
+        73.52,
+        74.19,
+        74.48,
+        74.92,
+        74.89,
+        75.52,
+        75.7,
+        75.85,
+        75.78,
+        75.62,
+        76.02,
+        75.98,
+        76.02,
+        76.03,
+        75.97,
+        76.0
+      ],
+      "nll": [
+        1.0214,
+        1.0048,
+        0.9981,
+        0.9983,
+        1.0041,
+        1.0164,
+        1.0252,
+        1.03,
+        1.0397,
+        1.0577,
+        1.0673,
+        1.0821,
+        1.0991,
+        1.1142,
+        1.1361,
+        1.1862
+      ]
+    },
+    {
+      "name": "cu_k_prerelu_r50_seed2",
+      "letter": "CU",
+      "what": "K on ResNet-50 with the transport read before the last ReLU, seed 2026, the seed CR collapsed at: whether the fix holds where K broke; against CQ",
+      "top1": [
+        73.76,
+        74.02,
+        74.45,
+        75.02,
+        75.32,
+        75.52,
+        75.47,
+        75.83,
+        75.85,
+        75.97,
+        76.06,
+        75.99,
+        76.17,
+        76.21,
+        76.16,
+        75.99
+      ],
+      "nll": [
+        1.0306,
+        1.0166,
+        1.0133,
+        1.003,
+        1.0175,
+        1.0192,
+        1.038,
+        1.0553,
+        1.0664,
+        1.077,
+        1.0988,
+        1.1202,
+        1.1285,
+        1.1509,
+        1.1771,
+        1.2233
+      ]
     }
   ]
 }
