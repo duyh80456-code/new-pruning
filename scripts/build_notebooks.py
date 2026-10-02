@@ -936,7 +936,33 @@ finish, attach this version's output (pick the version number, not
 Latest) and run again.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37}
+WKD_AND_SEED3 = """Two runs on ResNet-50, BX's protocol.
+
+| | is | read against |
+|---|---|---|
+| DG | US-Net with WKD-L (NeurIPS 2024) as the inplace distillation loss | BX 76.86, and K |
+| DH | A at a third seed, 42 | BX 76.86 and CQ 76.46: A's spread over three seeds |
+
+**DG.** The published Wasserstein KD, ported from the authors' code and
+checked against their loss function to six digits (tests/test_wkd.py):
+the target class distilled on its own, the other classes transported
+under a class cost from the classifier, weight 600 cosine-decayed over the
+last 37.5% of training, CE on the label for every student. Its loss is
+large by design (the narrow width's train loss starts near 8, not 4.6);
+that is the weight, not a fault. If it is K's equal, K's design adds
+nothing over Wasserstein KD as such; if K leads, that is the paper's
+claim against the closest prior method.
+
+**DH.** No change from BX but the seed. Every comparison needs A's spread.
+
+## Timing
+
+About A's 10.7 hours each; both should finish in one session. If not,
+attach this version's output (pick the version number, not Latest) and
+run again. Attach the CIFAR-100 dataset as well.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -975,6 +1001,8 @@ QUEUE = [
      LATE_START),
     (37, 'de_a_amp_r50', 'df_k_amp_r50',
      'A and K with mixed precision, against BX and BY', AMP_CHECK),
+    (38, 'dg_wkd_r50', 'dh_a_r50_seed3',
+     'WKD-L in US-Net, and A at a third seed', WKD_AND_SEED3),
 ]
 
 HEADER = """# {number}. {title}
@@ -1180,7 +1208,8 @@ SUITES_NOW = chr(10).join([
     "          'tests/test_pre_relu.py',",
     "          'tests/test_dynas.py',",
     "          'tests/test_feature_start.py',",
-    "          'tests/test_amp.py']"])
+    "          'tests/test_amp.py',",
+    "          'tests/test_wkd.py']"])
 
 A_REF_WAS = chr(10).join([
     "# the published run, for reference",

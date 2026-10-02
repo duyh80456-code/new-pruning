@@ -58,6 +58,8 @@ def check_single():
     from utils.loss_ops import build_pair_criterion
     from utils.loss_ops import build_soft_criterion
     from utils.loss_ops import WassersteinLossSoft, WassersteinPairLoss
+    from utils.loss_ops import WKDLogitLoss, wkd_gamma
+    from utils.loss_ops import get_classifier_weight
     from utils.loss_ops import training_widths
     from utils.loss_ops import width_gate
 
@@ -116,6 +118,11 @@ def check_single():
                 soft.set_cost(cost)
             if isinstance(pair, WassersteinPairLoss):
                 pair.set_cost(cost)
+        # WKD-L reads the teacher's logits, the label and the classifier
+        # cost, which run_one_epoch sets each step; follow it here
+        if isinstance(soft, WKDLogitLoss):
+            soft.set_gamma(wkd_gamma(epoch))
+            soft.set_cost(get_classifier_weight(model))
 
         losses, mids, mid_features, mid_widths = [], [], [], []
         teacher_prob, teacher_feature = None, None
@@ -127,6 +134,8 @@ def check_single():
             if width == high:
                 losses.append(torch.mean(criterion(out, target)))
                 teacher_prob = torch.softmax(out / temperature, dim=1)
+                if isinstance(soft, WKDLogitLoss):
+                    soft.set_teacher(out, target)
                 teacher_feature = features
                 if confusion is not None:
                     confusion.update(teacher_prob.detach(), target)

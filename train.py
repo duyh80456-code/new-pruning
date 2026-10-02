@@ -20,6 +20,7 @@ from utils.distributed import master_only_print as print
 from utils.distributed import AllReduceDistributedDataParallel, allreduce_grads
 from utils.loss_ops import CrossEntropyLossSoft, CrossEntropyLossSmooth
 from utils.loss_ops import WassersteinLossSoft, WassersteinPairLoss
+from utils.loss_ops import WKDLogitLoss, wkd_gamma
 from utils.loss_ops import build_soft_criterion, build_pair_criterion
 from utils import channel_reorder
 from utils.loss_ops import build_feature_criterion
@@ -797,6 +798,9 @@ def run_one_epoch(
     # under logit KD alone first. Off, the horizontal term goes entirely,
     # logit pairs included. Epochs count as the log prints them, from 1.
     transport_on = epoch >= getattr(FLAGS, 'feature_start_epoch', 0)
+    wkd = isinstance(soft_criterion, WKDLogitLoss)
+    if wkd and train:
+        soft_criterion.set_gamma(wkd_gamma(epoch))
 
     if getattr(FLAGS, 'distributed', False):
         loader.sampler.set_epoch(epoch)
@@ -841,6 +845,9 @@ def run_one_epoch(
                         widths_train = sorted(widths_train, reverse=True)
                     # the class cost matrix is read off the classifier, which
                     # keeps moving, so refresh it before the widths are run
+                    if wkd:
+                        # their 'fc' cost, from the shared classifier
+                        soft_criterion.set_cost(get_classifier_weight(model))
                     if needs_cost:
                         cost = build_cost_matrix(model, confusion)
                         if isinstance(soft_criterion, WassersteinLossSoft):
@@ -964,6 +971,9 @@ def run_one_epoch(
                              teacher_output) = forward_loss(
                                 model, criterion, input, target, meter,
                                 return_soft_target=True, return_output=True)
+                            if wkd:
+                                soft_criterion.set_teacher(
+                                    teacher_output, target)
                             if confusion is not None:
                                 confusion.update(soft_target.detach(), target)
                             # once a step, not once a width: the rows are

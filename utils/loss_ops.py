@@ -1128,6 +1128,107 @@ class WassersteinPairLoss(WassersteinLossSoft):
             p, q, self.cost, self.eps, self.n_iters, self.debiased)
 
 
+def wkd_sinkhorn(w1, w2, cost, reg, n_iters):
+    """mdistiller/distillers/WKD.py's sinkhorn, line for line: plain
+    (not log-domain) iterations from a uniform u, the plan returned"""
+    bs, dim = w1.shape
+    w1 = w1.unsqueeze(-1)
+    w2 = w2.unsqueeze(-1)
+    u = 1 / dim * torch.ones_like(w1)
+    kernel = torch.exp(-cost / reg)
+    kernel_t = kernel.transpose(2, 1)
+    for _ in range(n_iters):
+        v = w2 / (torch.bmm(kernel_t, u) + 1e-8)
+        u = w1 / (torch.bmm(kernel, v) + 1e-8)
+    return u.reshape(bs, -1, 1) * kernel * v.reshape(bs, 1, -1)
+
+
+class WKDLogitLoss(torch.nn.modules.loss._Loss):
+    """WKD-L of Lv et al., "Wasserstein Distance Rivals Kullback-Leibler
+    Divergence for Knowledge Distillation", NeurIPS 2024, arXiv
+    2412.08139, from their mdistiller/distillers/WKD.py
+    (wkd_logit_loss_with_speration) and configs/cifar100/wkd_l.
+
+    Per sample: the target class is taken out and distilled on its own,
+    -p_t(y) log p_s(y) at temperature 1; the other 99 classes are
+    renormalised at temperature 8 and moved by discrete transport under a
+    class-to-class cost, Sinkhorn at reg 0.05 for 10 iterations, scaled by
+    gamma (600 in their WKD-L-only CIFAR config, cosine-decayed to zero
+    over the last 37.5% of training). Their cost is 1 - exp(-d) for a
+    distance d between class prototypes; their 'fc' option takes d as one
+    minus the cosine of the teacher's classifier rows, which is what this
+    uses, read off the shared classifier every step, because US-Net has no
+    pretrained teacher to compute CKA prototypes from.
+
+    US-Net hands a soft criterion the student logits and the teacher's
+    softmax; WKD-L needs the teacher's logits and the label, so train.py
+    sets them each step with set_teacher, and set_cost / set_gamma the
+    same way. The soft target argument is ignored.
+    """
+
+    def __init__(self, temperature=8.0, reg=0.05, n_iters=10,
+                 reduction='none'):
+        super(WKDLogitLoss, self).__init__(reduction=reduction)
+        self.temperature = temperature
+        self.reg = reg
+        self.n_iters = n_iters
+        self.gamma = 0.0
+        self.cost = None
+        self.teacher = None
+        self.label = None
+
+    def set_cost(self, weight):
+        normed = torch.nn.functional.normalize(
+            weight.detach().float(), p=2, dim=-1)
+        distance = 1 - normed.matmul(normed.t())
+        # COST_MATRIX_SHARPEN 1.0, then the relu and floor of
+        # wkd_logit_loss
+        self.cost = torch.relu(1 - torch.exp(-distance)) + 1e-8
+
+    def set_gamma(self, gamma):
+        self.gamma = gamma
+
+    def set_teacher(self, logits, label):
+        self.teacher = logits.detach().float()
+        self.label = label
+
+    def forward(self, output, target=None):
+        student = output.float()
+        n, c = student.shape
+        label = self.label.view(n, 1)
+        # target part, temperature 1
+        log_s = torch.nn.functional.log_softmax(student, dim=1)
+        p_t = torch.nn.functional.softmax(self.teacher, dim=1)
+        loss_t = -(torch.gather(p_t, 1, label)
+                   * torch.gather(log_s, 1, label)).view(-1)
+        # the other classes, transported
+        mask = torch.ones_like(student).scatter_(1, label, 0).bool()
+        rest_s = student[mask].reshape(n, c - 1)
+        rest_t = self.teacher[mask].reshape(n, c - 1)
+        pair = mask.unsqueeze(1) * mask.unsqueeze(2)
+        cost = self.cost.unsqueeze(0).expand(n, c, c)[pair].reshape(
+            n, c - 1, c - 1)
+        hot = self.temperature
+        q_s = torch.nn.functional.softmax(rest_s / hot, dim=-1)
+        q_t = torch.nn.functional.softmax(rest_t / hot, dim=-1)
+        plan = wkd_sinkhorn(q_s, q_t, cost, self.reg, self.n_iters)
+        moved = (plan * cost).sum(-1).sum(-1)
+        # the mean over the batch is taken by the caller, as theirs takes
+        # it inside: the same number
+        return loss_t + self.gamma * moved
+
+
+def wkd_gamma(epoch):
+    """their weight schedule on our epoch count: constant, then cosine to
+    zero from the same fraction of training (150 of 240 epochs)"""
+    weight = getattr(FLAGS, 'wkd_weight', 600.0)
+    start = getattr(FLAGS, 'wkd_decay_from', 0.625) * FLAGS.num_epochs
+    if epoch <= start:
+        return weight
+    return 0.5 * weight * (1 + math.cos(
+        (epoch - start) / (FLAGS.num_epochs - start) * math.pi))
+
+
 class AlphaDivergenceLossSoft(torch.nn.modules.loss._Loss):
     """adaptive alpha-divergence of AlphaNet, arXiv:2102.07954
 
@@ -1233,6 +1334,12 @@ def build_soft_criterion():
             alpha_min=getattr(FLAGS, 'alpha_min', -1.0),
             alpha_max=getattr(FLAGS, 'alpha_max', 1.0),
             iw_clip=getattr(FLAGS, 'alpha_iw_clip', 5.0),
+            reduction='none')
+    if kd_loss == 'wkd':
+        return WKDLogitLoss(
+            temperature=getattr(FLAGS, 'wkd_temperature', 8.0),
+            reg=getattr(FLAGS, 'wkd_reg', 0.05),
+            n_iters=getattr(FLAGS, 'wkd_iters', 10),
             reduction='none')
     if kd_loss == 'wasserstein':
         return WassersteinLossSoft(
