@@ -2740,6 +2740,88 @@
         1.2751,
         1.3249
       ]
+    },
+    {
+      "name": "dc_k_late_r50_seed2",
+      "letter": "DC",
+      "what": "K on ResNet-50 as BY (post-ReLU read) with both feature transport terms held off until epoch 6, at seed 2026 where CR collapsed: survives",
+      "top1": [
+        75.47,
+        75.76,
+        76.56,
+        76.87,
+        76.97,
+        77.1,
+        77.33,
+        77.45,
+        77.76,
+        77.56,
+        77.75,
+        77.87,
+        77.77,
+        78.03,
+        78.01,
+        78.04
+      ],
+      "nll": [
+        1.0187,
+        0.9862,
+        0.974,
+        0.971,
+        0.9802,
+        0.9827,
+        0.9906,
+        1.0006,
+        1.0062,
+        1.0122,
+        1.0232,
+        1.0382,
+        1.0514,
+        1.065,
+        1.0867,
+        1.1304
+      ]
+    },
+    {
+      "name": "dd_k_late_r50",
+      "letter": "DD",
+      "what": "K on ResNet-50 as BY with both feature transport terms held off until epoch 6, at BY's seed 1995: what the late start costs where nothing broke",
+      "top1": [
+        75.63,
+        76.29,
+        76.54,
+        76.97,
+        77.67,
+        77.43,
+        77.58,
+        77.62,
+        77.83,
+        78.02,
+        78.0,
+        78.01,
+        78.09,
+        78.23,
+        78.08,
+        77.95
+      ],
+      "nll": [
+        1.0123,
+        0.9694,
+        0.963,
+        0.9605,
+        0.961,
+        0.973,
+        0.9791,
+        0.9896,
+        0.9938,
+        1.003,
+        1.0143,
+        1.0323,
+        1.0438,
+        1.0551,
+        1.0801,
+        1.1294
+      ]
     }
   ]
 }
