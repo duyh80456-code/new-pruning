@@ -24,93 +24,48 @@ A_REF = {0.25: 75.26, 0.30: 75.35, 0.35: 75.54, 0.40: 76.01, 0.45: 76.30,
          0.75: 77.39, 0.80: 77.56, 0.85: 77.60, 0.90: 77.99, 0.95: 78.01,
          1.00: 78.04}
 
-JOSLIM = {
+UPSTREAMS = {
+    'joslim': ('https://github.com/enyac-group/Joslim.git',
+               '9b743d9b50ade9fc2cd33d255dfbb936e4894733', 'Joslim',
+               'joslim.patch',
+               'botorch==0.16.1 gpytorch==1.15.2 linear_operator==0.6.1'),
+    'lcs': ('https://github.com/apple/learning-compressible-subspaces.git',
+            'e6d3924368faccbdfd3d89c4a4735dba947275c9',
+            'learning-compressible-subspaces', 'lcs.patch', 'pyyaml'),
+}
+
+SPEC = {
     'number': 39,
-    'name': 'kaggle_kd_39_joslim',
-    'title': 'Joslim from the authors\' code: Joslim and its US-Net mode',
-    'upstream': 'https://github.com/enyac-group/Joslim.git',
-    'commit': '9b743d9b50ade9fc2cd33d255dfbb936e4894733',
-    'dir': 'Joslim',
-    'patch': 'joslim.patch',
-    'pip': 'botorch==0.16.1 gpytorch==1.15.2 linear_operator==0.6.1',
-    'intro': '''Joslim (Chin et al., ECML-PKDD 2021) trains a slimmable network and,
-during training, searches per-layer width configurations with Bayesian
-optimisation instead of shrinking every layer by the same factor. Run here
-from the authors' repository (enyac-group/Joslim at 9b743d9) with
-`third_party/patches/joslim.patch` applied; `third_party/patches/joslim_README.md`
-lists every change.
+    'name': 'kaggle_kd_39_joslim_lcs',
+    'title': 'Joslim and LCS from the authors\' code, on our protocol',
+    'intro': '''Two published slimmable methods run from their authors' repositories
+rather than re-implemented, both on exactly the protocol of every other row:
+CIFAR-100 at 32x32, CIFAR ResNet-50 (3x3 stem, no max-pool), 100 epochs,
+batch 256, SGD nesterov lr 0.2 cosine with warm-up, wd 5e-4, widths
+0.25-1.00, read at the sixteen widths after BN recalibration on 20 batches.
 
-| | GPU | what |
-|---|---|---|
-| joslim_r50 | 0 | Joslim, 200 visited architectures (tau 195) |
-| slim_r50 | 1 | the same code in its US-Net mode (`--slim --slim_uniform`): a cross-check of our BX in an independent codebase |
+| | GPU | method | code |
+|---|---|---|---|
+| joslim_r50 | 0 | Joslim (Chin et al., ECML-PKDD 2021): per-layer widths searched by Bayesian optimisation during training | enyac-group/Joslim at 9b743d9 + `third_party/patches/joslim.patch` |
+| lcs_l_bn | 1 | LCS (Nunez et al., WACV 2023): a line in weight space from width 0.25 to 1.00, here with BatchNorm | apple/learning-compressible-subspaces at e6d3924 + `third_party/patches/lcs.patch` |
 
-Both: CIFAR-100, CIFAR ResNet-50 (3x3 stem, no max-pool), 100 epochs, batch
-256, SGD nesterov lr 0.2 cosine with 5 warm-up epochs, wd 5e-4, widths
-0.25-1.00. Read at the sixteen uniform widths after BN recalibration on 20
-batches, as every other run. Joslim's own design point is per-layer widths,
-so its Pareto set (accuracy against FLOPs) is printed as well.
-
-One change of substance: upstream scored every sampled architecture on test
-batches, and that score drives the search. The patch scores them on a fixed
-5,000-image subset of the training set; the test set is read only at the end.
+Each patch adds only what the protocol needs (CIFAR-100, the CIFAR
+ResNet-50, the recipe, resume, the sixteen-width evaluation in our line
+format); `third_party/patches/*_README.md` list every change. One change of
+substance in Joslim: upstream scored every sampled architecture on test
+batches, and that score drives its search; the patch scores them on a fixed
+5,000-image subset of the training set. Joslim's own design point is
+per-layer widths, so its Pareto set (accuracy against FLOPs) is printed too.
 
 ## More than one session
 
-On a T4 the US-Net mode takes about 10-13 hours and Joslim longer, since its
-Bayesian optimisation runs on the CPU. Each run checkpoints every epoch.
-When the session ends, Save Version, then in a new run attach that version's
-output (pick the version by number, not Latest) and run again: the notebook
-finds the checkpoints and both runs continue. Attach the CIFAR-100 dataset
-as well.
-''',
-    'branches': [
-        ('joslim_r50', '0', '--tau 195 --prior_points 20'),
-        ('slim_r50', '1', '--slim --slim_uniform --tau 1'),
-    ],
-}
-
-LCS = {
-    'number': 40,
-    'name': 'kaggle_kd_40_lcs',
-    'title': 'LCS from the authors\' code: published norm and BatchNorm',
-    'upstream': 'https://github.com/apple/learning-compressible-subspaces.git',
-    'commit': 'e6d3924368faccbdfd3d89c4a4735dba947275c9',
-    'dir': 'learning-compressible-subspaces',
-    'patch': 'lcs.patch',
-    'pip': 'pyyaml',
-    'intro': '''LCS (Nunez et al., WACV 2023) learns a line in weight space whose points
-are networks of different widths: width 0.25 at one end, 1.00 at the other,
-and every width between them by interpolation. Run here from the authors'
-repository (apple/learning-compressible-subspaces at e6d3924) with
-`third_party/patches/lcs.patch` applied; `third_party/patches/lcs_README.md`
-lists every change. In structured mode only the norm layers are lines, the
-convolutions are shared, so the stored model is 23.76M parameters, 0.2% more
-than one ResNet-50.
-
-| | GPU | what |
-|---|---|---|
-| lcs_l_bn | 1 | LCS with BatchNorm, recalibrated at each width on 20 batches: our protocol |
-| lcs_l_in | 0 | LCS with its published instance norm, which needs no recalibration |
-
-Both: CIFAR-100, CIFAR ResNet-50 (3x3 stem, no max-pool), method `lcs_l`,
-100 epochs, batch 256, SGD nesterov lr 0.2 with the authors' per-epoch
-warm-up and cosine, wd 5e-4, widths 0.25-1.00, read at the sixteen widths.
-
-## More than one session
-
-On a T4 the BatchNorm run takes about 9-13 hours and the instance-norm run
-about twice that. Each run checkpoints every epoch. When the session ends,
-Save Version, then in a new run attach that version's output (pick the
+On a T4 LCS takes about 9-13 hours and Joslim longer, since its Bayesian
+optimisation runs on the CPU. Both checkpoint every epoch. When the session
+ends, Save Version, then in a new run attach that version's output (pick the
 version by number, not Latest) and run again: the notebook finds the
-checkpoints and both runs continue. Attach the CIFAR-100 dataset as well.
+checkpoints and both continue. Attach the CIFAR-100 dataset as well.
 ''',
-    'branches': [
-        ('lcs_l_in', '0', ''),
-        ('lcs_l_bn', '1', '--norm BN --recal_batches 20'),
-    ],
 }
-
 
 def source(text):
     lines = text.strip('\n').split('\n')
@@ -131,8 +86,8 @@ import torch
 
 n_gpu = torch.cuda.device_count()
 print('torch', torch.__version__, '| gpus', n_gpu)
-if n_gpu == 0:
-    raise SystemExit('No GPU. Set Accelerator to GPU T4 x2 and run again.')
+if n_gpu < 2:
+    raise SystemExit('Needs GPU T4 x2: one card per method.')
 
 WORK = '/kaggle/working'
 OURS = os.path.join(WORK, 'new-pruning')
@@ -143,24 +98,28 @@ print('our code at', subprocess.run(
     ['git', '-C', OURS, 'log', '-1', '--format=%h %s'],
     capture_output=True, text=True).stdout.strip())
 
-CODE = os.path.join(WORK, UPSTREAM_DIR)
-if not os.path.isdir(CODE):
-    subprocess.run(['git', 'clone', UPSTREAM, CODE], check=True)
-    subprocess.run(['git', '-C', CODE, 'checkout', '-q', COMMIT], check=True)
-    subprocess.run(['git', '-C', CODE, 'apply',
-                    os.path.join(OURS, 'third_party', 'patches', PATCH)],
-                   check=True)
-print('upstream at', subprocess.run(
-    ['git', '-C', CODE, 'log', '-1', '--format=%h %ad', '--date=short'],
-    capture_output=True, text=True).stdout.strip(), '+', PATCH)
+CODE = {}
+packages = []
+for key, (url, commit, folder, patch, pip) in UPSTREAMS.items():
+    CODE[key] = os.path.join(WORK, folder)
+    if not os.path.isdir(CODE[key]):
+        subprocess.run(['git', 'clone', url, CODE[key]], check=True)
+        subprocess.run(['git', '-C', CODE[key], 'checkout', '-q', commit],
+                       check=True)
+        subprocess.run(['git', '-C', CODE[key], 'apply', os.path.join(
+            OURS, 'third_party', 'patches', patch)], check=True)
+    print(key, 'at', subprocess.run(
+        ['git', '-C', CODE[key], 'log', '-1', '--format=%h %ad',
+         '--date=short'], capture_output=True, text=True).stdout.strip(),
+        '+', patch)
+    packages += pip.split()
 
 # install without letting pip replace Kaggle's torch
 base = torch.__version__.split('+')[0]
 with open(os.path.join(WORK, 'constraints.txt'), 'w') as handle:
     handle.write('torch=={}\\n'.format(base))
 subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '-c',
-                os.path.join(WORK, 'constraints.txt')] + PIP.split(),
-               check=True)
+                os.path.join(WORK, 'constraints.txt')] + packages, check=True)
 '''
 
 DATA = '''# the folder that contains cifar-100-python/, or a place to download it
@@ -194,9 +153,9 @@ def run_pinned(jobs):
         proc.wait()
         lines.put((label, None))
 
-    for label, gpu, command in jobs:
+    for label, gpu, cwd, command in jobs:
         env = dict(os.environ, CUDA_VISIBLE_DEVICES=gpu, **WORKER_ENV)
-        proc = subprocess.Popen(command, cwd=CODE, env=env, text=True,
+        proc = subprocess.Popen(command, cwd=cwd, env=env, text=True,
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT)
         procs[label] = proc
@@ -223,7 +182,7 @@ def run_pinned(jobs):
 '''
 
 TABLE = '''A_REF = {a_ref}
-labels = [b[0] for b in BRANCHES]
+labels = ['joslim_r50', 'lcs_l_bn']
 print('{{:>7}}{{:>9}}'.format('width', 'A') + ''.join(
     '{{:>12}}{{:>8}}'.format(b[:11], 'vs A') for b in labels))
 for width in sorted(A_REF):
@@ -248,77 +207,59 @@ for label in labels:
         print('{{:24}} {{}} of 16 widths read'.format(label, len(table)))
 '''
 
-JOSLIM_RESUME = '''CK = os.path.join(WORK, 'ckpt')
-os.makedirs(CK, exist_ok=True)
-for label, _, _ in BRANCHES:
-    target = os.path.join(CK, label + '.pt')
-    if os.path.exists(target):
-        continue
-    for root, _, files in os.walk('/kaggle/input', followlinks=True):
-        if label + '.pt' in files:
-            shutil.copy(os.path.join(root, label + '.pt'), target)
-            print('restored', label, 'from', root)
-            break
+RESUME = '''CK = os.path.join(WORK, 'ckpt')
+# Joslim keeps ckpt/joslim_r50.pt, LCS keeps ckpt/lcs_l_bn/last.pt
+wanted = {'joslim_r50': ('joslim_r50.pt', None),
+          'lcs_l_bn': ('last.pt', 'lcs_l_bn')}
+for label, (name, folder) in wanted.items():
+    target = os.path.join(CK, folder or '', name)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    if not os.path.exists(target):
+        for root, _, files in os.walk('/kaggle/input', followlinks=True):
+            if name in files and (folder is None
+                                  or os.path.basename(root) == folder):
+                shutil.copy(os.path.join(root, name), target)
+                print('restored', label, 'from', root)
+                break
     print(label, 'resumes from its checkpoint' if os.path.exists(target)
           else 'starts at epoch 1')
 '''
 
-JOSLIM_TRAIN = '''COMMON = ['--dataset', 'CIFAR100', '--datapath', DATA,
+TRAIN = '''JOSLIM = ['--dataset', 'CIFAR100', '--datapath', DATA,
           '--network', 'slim_resnet50_cifar', '--epochs', '100',
           '--warmup', '5', '--baselr', '0.2', '--scheduler', 'cosine_decay',
           '--batch_size', '256', '--wd', '5e-4', '--mmt', '0.9',
           '--nesterov', '--label_smoothing', '0', '--lower_channel', '0.25',
           '--num_sampled_arch', '2', '--baseline', '-3',
-          '--print_freq', '100', '--ckpt_dir', CK]
+          '--print_freq', '100', '--ckpt_dir', CK,
+          '--tau', '195', '--prior_points', '20']
+WIDTHS = ','.join('{:.2f}'.format(0.25 + 0.05 * i) for i in range(16))
+LCS = ['--model', 'cresnet50', '--dataset', 'cifar100', '--method', 'lcs_l',
+       '--data_dir', DATA, '--epochs', '100', '--batch_size', '256',
+       '--learning_rate', '0.2', '--momentum', '0.9', '--nesterov',
+       '--weight_decay', '5e-4', '--width_factor_limits', '0.25,1.0',
+       '--eval_width_factors', WIDTHS, '--skip_upstream_test',
+       '--norm', 'BN', '--recal_batches', '20',
+       '--save_dir', os.path.join(WORK, 'lcs_l_bn'),
+       '--ckpt_dir', os.path.join(CK, 'lcs_l_bn'), '--log_prefix', 'lcs_l_bn']
+# LCS ends its run with the sixteen protocol lines; Joslim is read below
 codes = run_pinned([
-    (label, gpu, [sys.executable, '-u', 'joslim.py', '--name', label]
-     + COMMON + extra.split())
-    for label, gpu, extra in BRANCHES])
+    ('joslim_r50', '0', CODE['joslim'],
+     [sys.executable, '-u', 'joslim.py', '--name', 'joslim_r50'] + JOSLIM),
+    ('lcs_l_bn', '1', CODE['lcs'],
+     [sys.executable, '-u', 'train_structured.py'] + LCS)])
 print(codes)
 '''
 
-JOSLIM_EVAL = '''# the sixteen uniform widths for both runs, then Joslim's Pareto set
-EVAL = ['--dataset', 'CIFAR100', '--datapath', DATA,
+EVAL = '''# Joslim at the sixteen uniform widths, then its own Pareto set
+EVAL = ['--name', 'joslim_r50', '--dataset', 'CIFAR100', '--datapath', DATA,
         '--network', 'slim_resnet50_cifar', '--batch_size', '256',
         '--lower_channel', '0.25', '--ckpt_dir', CK]
-run_pinned([(label, gpu, [sys.executable, '-u', 'eval_checkpoints.py',
-                          '--name', label] + EVAL + ['--uniform', '--tag', label])
-            for label, gpu, _ in BRANCHES])
-run_pinned([('joslim_r50_pareto', '0',
-             [sys.executable, '-u', 'eval_checkpoints.py',
-              '--name', 'joslim_r50'] + EVAL)])
-'''
-
-LCS_RESUME = '''CK = os.path.join(WORK, 'ckpt')
-for label, _, _ in BRANCHES:
-    target = os.path.join(CK, label, 'last.pt')
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    if os.path.exists(target):
-        continue
-    for root, _, files in os.walk('/kaggle/input', followlinks=True):
-        if 'last.pt' in files and os.path.basename(root) == label:
-            shutil.copy(os.path.join(root, 'last.pt'), target)
-            print('restored', label, 'from', root)
-            break
-    print(label, 'resumes from its checkpoint' if os.path.exists(target)
-          else 'starts at epoch 1')
-'''
-
-LCS_TRAIN = '''WIDTHS = ','.join('{:.2f}'.format(0.25 + 0.05 * i) for i in range(16))
-COMMON = ['--model', 'cresnet50', '--dataset', 'cifar100', '--method',
-          'lcs_l', '--data_dir', DATA, '--epochs', '100',
-          '--batch_size', '256', '--learning_rate', '0.2', '--momentum',
-          '0.9', '--nesterov', '--weight_decay', '5e-4',
-          '--width_factor_limits', '0.25,1.0', '--eval_width_factors',
-          WIDTHS, '--skip_upstream_test']
-# training ends with the sixteen protocol lines
-codes = run_pinned([
-    (label, gpu, [sys.executable, '-u', 'train_structured.py'] + COMMON
-     + extra.split() + ['--save_dir', os.path.join(WORK, label),
-                        '--ckpt_dir', os.path.join(CK, label),
-                        '--log_prefix', label])
-    for label, gpu, extra in BRANCHES])
-print(codes)
+run_pinned([('joslim_r50', '0', CODE['joslim'],
+             [sys.executable, '-u', 'eval_checkpoints.py'] + EVAL
+             + ['--uniform', '--tag', 'joslim_r50'])])
+run_pinned([('joslim_r50_pareto', '0', CODE['joslim'],
+             [sys.executable, '-u', 'eval_checkpoints.py'] + EVAL)])
 '''
 
 KEEP = '''# keep the checkpoints in the output, under a name the next session finds
@@ -329,21 +270,14 @@ print('checkpoints in', CK, sorted(os.listdir(CK)))
 def build(spec, steps):
     head = '# {}. {}\n\n{}'.format(spec['number'], spec['title'],
                                    spec['intro'])
-    branches = repr(spec['branches'])
     config = '''# Fixed for this notebook.
 REPO_URL = {repo!r}
 REPO_BRANCH = {branch!r}
-UPSTREAM = {upstream!r}
-COMMIT = {commit!r}
-UPSTREAM_DIR = {dir!r}
-PATCH = {patch!r}
-PIP = {pip!r}
-# (label, gpu, extra flags)
-BRANCHES = {branches}
+# key: (repository, pinned commit, folder, patch, extra pip packages)
+UPSTREAMS = {upstreams}
 WORKER_ENV = {{'JOSLIM_WORKERS': '2', 'LCS_WORKERS': '2'}}
-'''.format(repo=REPO_URL, branch=REPO_BRANCH, upstream=spec['upstream'],
-           commit=spec['commit'], dir=spec['dir'], patch=spec['patch'],
-           pip=spec['pip'], branches=branches)
+'''.format(repo=REPO_URL, branch=REPO_BRANCH,
+           upstreams=repr(UPSTREAMS))
     cells = [markdown(head), code(config), code(SETUP), code(DATA),
              code(RUN)]
     cells += [code(step) for step in steps]
@@ -363,5 +297,4 @@ WORKER_ENV = {{'JOSLIM_WORKERS': '2', 'LCS_WORKERS': '2'}}
 
 
 if __name__ == '__main__':
-    build(JOSLIM, [JOSLIM_RESUME, JOSLIM_TRAIN, JOSLIM_EVAL])
-    build(LCS, [LCS_RESUME, LCS_TRAIN])
+    build(SPEC, [RESUME, TRAIN, EVAL])
