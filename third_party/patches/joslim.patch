@@ -1,0 +1,328 @@
+diff --git a/eval_checkpoints.py b/eval_checkpoints.py
+index 6579829..f304e4a 100644
+--- a/eval_checkpoints.py
++++ b/eval_checkpoints.py
+@@ -6,6 +6,7 @@ import math
+ import torch
+ import queue
+ import argparse
++import itertools
+ import numpy as np
+ import torch.nn as nn
+ import torch.nn.functional as F
+@@ -16,7 +17,10 @@ import matplotlib.pyplot as plt
+ from utils.drivers import test, get_dataloader
+ 
+ from botorch.models import SingleTaskGP
+-from botorch.fit import fit_gpytorch_model
++try:
++    from botorch.fit import fit_gpytorch_model
++except ImportError:  # removed in botorch >= 0.12; unused here
++    from botorch.fit import fit_gpytorch_mll as fit_gpytorch_model
+ from gpytorch.mlls import ExactMarginalLogLikelihood
+ from gpytorch.kernels.matern_kernel import MaternKernel
+ from gpytorch.kernels.scale_kernel import ScaleKernel
+@@ -65,6 +69,10 @@ class Joslim:
+         self.batch_size = batch_size
+     
+         self.train_loader, self.val_loader, self.test_loader = get_dataloader(self.img_size, dataset, datapath, batch_size, eval(args.interpolation), True, args.slim_dataaug, args.scale_ratio)
++        cap = args.bn_cal_batch_num  # BN recalibration on the first `cap` shuffled train batches (0 = full train set, upstream)
++        if cap > 0:
++            full_loader = self.train_loader
++            self.train_loader = type('Capped', (), {'__iter__': lambda s: itertools.islice(iter(full_loader), cap)})()
+ 
+         if 'CIFAR100' in dataset:
+             num_classes = 100
+@@ -84,7 +92,7 @@ class Joslim:
+             self.sample_pool = torch.load(sample_pool)['X']
+ 
+     def eval(self, args):
+-        data_dict = torch.load(os.path.join('./checkpoint', '{}.pt'.format(args.name)))
++        data_dict = torch.load(os.path.join(args.ckpt_dir, '{}.pt'.format(args.name)), map_location='cpu', weights_only=False)
+ 
+         population_data = data_dict['population_data']
+ 
+@@ -188,7 +196,7 @@ class Joslim:
+             out_X = data_dict['X'][:-2, :]
+             out_X = out_X[efficient_mask]
+ 
+-            torch.save({'X': out_X}, os.path.join('./checkpoint', '{}_sample_pool.pt'.format(args.name)))
++            torch.save({'X': out_X}, os.path.join(args.ckpt_dir, '{}_sample_pool.pt'.format(args.name)))
+ 
+             index_set = np.arange(len(filters))
+ 
+@@ -249,37 +257,41 @@ class Joslim:
+ 
+                 print('Acc: {:.2f} {:.2f}, MFLOPs: {:.3f} ({:.2f} %)'.format(test_top1, test_top5, flops*1e-6, flops/og_flops*100.))
+         else:
+-            num = 40
+-            index_set = np.sqrt((np.arange(num) / num)*(args.upper_flops-args.lower_flops) + args.lower_flops)
+-            for f in index_set:
++            # --uniform (was broken: selfmodel, upper_flops). Every layer at width f in
++            # [lower_channel, upper_channel] step 0.05; BN recalibrated on the train set as above.
++            prefix = '[{}] '.format(args.tag) if args.tag else ''
++            t_start = time.time()
++            for f in np.round(np.arange(args.lower_channel, args.upper_channel + 1e-6, 0.05), 2):
+                 parameterization = np.ones(self.model.search_dim) * f
+                 flops = self.model.get_flops_from_wm(parameterization)
+-                filters = self.model.decode_wm(parameterization)
+-                self.model.set_real_ch(filters)
+-
+-                # Eval on validation set
++                self.model.set_real_ch(self.model.decode_wm(parameterization))
+                 self.model.train()
+-                for m in selfmodel.modules():
++                for m in self.model.modules():
+                     if isinstance(m, nn.BatchNorm2d):
+                         m.reset_running_stats()
+                         m.momentum = None
+-
+-                loss = 0
+                 with torch.no_grad():
+-                    selfmodel.train()
+                     for i, (batch, label) in enumerate(self.train_loader):
+-                        batch = batch.to('cuda')
+-                        label = label.to('cuda')
+-                        out = selfmodel(batch)
+-                        loss += criterion(out, label).item()
++                        self.model(batch.to('cuda'))
+                         if 'CIFAR' not in args.dataset and i == 1:
+                             break
+-                    test_top1, test_top5 = test(selfmodel, self.test_loader, device='cuda')
+-                test_top1s.append(test_top1)
+-                test_top5s.append(test_top5)
+-                new_flops.append(ratio)
+-
+-                print('WM: {:.2f} Acc: {:.2f} {:.2f}, MFLOPs: {:.3f} ({:.2f} %)'.format(f, test_top1, test_top5, flops*1e-6, flops/og_flops*100.))
++                    self.model.eval()
++                    n = loss = top1 = top5 = 0.
++                    for batch, label in self.test_loader:
++                        batch, label = batch.to('cuda'), label.to('cuda')
++                        out = self.model(batch)
++                        loss += F.cross_entropy(out, label, reduction='sum').item()
++                        top5_pred = out.topk(5, dim=1)[1]
++                        top1 += top5_pred[:, 0].eq(label).sum().item()
++                        top5 += top5_pred.eq(label.view(-1, 1)).sum().item()
++                        n += label.size(0)
++                test_top1s.append(top1 / n * 100.)
++                test_top5s.append(top5 / n * 100.)
++                new_flops.append(flops / og_flops)
++                print('{}{:.1f}s	val	{}	-1/100: loss: {:.4f}, top1_error: {:.4f}, top5_error: {:.4f}'.format(
++                    prefix, time.time() - t_start, float(f), loss / n, 1 - top1 / n, 1 - top5 / n))
++                print('WM: {:.2f} MFLOPs: {:.3f} ({:.2f} %)'.format(f, flops*1e-6, flops/og_flops*100.))
++                sys.stdout.flush()
+ 
+ 
+         efficient_mask = is_pareto_efficient(np.stack([100-np.array(test_top1s), np.array(new_flops)], axis=1))
+@@ -297,7 +309,7 @@ class Joslim:
+         test_top1s = test_top1s[sorted_idx]
+         test_top5s = test_top5s[sorted_idx]
+ 
+-        if not os.path.exists('./results/') and args.local_rank == 0:
++        if not os.path.exists('./results/'):
+             os.makedirs('./results/')
+         if not args.uniform:
+             np.savetxt('results/{}_eval_pareto.txt'.format(args.name), np.stack([new_flops, test_top1s, test_top5s]))
+@@ -319,6 +331,9 @@ def get_args():
+     parser.add_argument("--slim_dataaug", action='store_true', default=False, help='Use the data augmentation implemented in universally slimmable network')
+     parser.add_argument("--sample_pool", type=str, default='none', help='Checkpoint to sample architectures from')
+     parser.add_argument("--scale_ratio", type=float, default=0.08, help='Scale for random scaling, default: 0.08')
++    parser.add_argument("--ckpt_dir", type=str, default='./checkpoint', help='Directory holding {name}.pt')
++    parser.add_argument("--tag", type=str, default='', help='Optional [tag] prefix on the --uniform result lines')
++    parser.add_argument("--bn_cal_batch_num", type=int, default=20, help='Train batches for BN recalibration; 0 = full train set (upstream)')
+     args = parser.parse_args()
+     return args
+ 
+diff --git a/joslim.py b/joslim.py
+index ec5f776..8cf4697 100755
+--- a/joslim.py
++++ b/joslim.py
+@@ -12,7 +12,10 @@ import torch.nn.functional as F
+ from utils.drivers import test, get_dataloader
+ 
+ from botorch.models import SingleTaskGP
+-from botorch.fit import fit_gpytorch_model
++try:
++    from botorch.fit import fit_gpytorch_model
++except ImportError:  # removed in botorch >= 0.12; same fit, new name
++    from botorch.fit import fit_gpytorch_mll as fit_gpytorch_model
+ from gpytorch.mlls import ExactMarginalLogLikelihood
+ from gpytorch.kernels.matern_kernel import MaternKernel
+ from gpytorch.kernels.scale_kernel import ScaleKernel
+@@ -202,7 +205,10 @@ class Joslim:
+                 idx = np.random.choice(len(self.sample_pool), 1)[0]
+                 parameterization = self.sample_pool[idx]
+             else:
+-                if target_flops == 0:
++                if target_flops == 0 and args.slim_uniform:
++                    # US-Net (the paper's "Slim"): one width multiplier for every layer
++                    parameterization = np.ones(hdim) * np.random.uniform(args.lower_channel, args.upper_channel)
++                elif target_flops == 0:
+                     parameterization = np.random.uniform(args.lower_channel, args.upper_channel, hdim)
+                 else:
+                     parameterization = np.ones(hdim) * args.lower_channel
+@@ -385,8 +391,8 @@ class Joslim:
+         ratio_visited = []
+         archs = []
+ 
+-        if os.path.exists(os.path.join('./checkpoint/', '{}.pt'.format(args.name))):
+-            ckpt = torch.load(os.path.join('./checkpoint/', '{}.pt'.format(args.name)))
++        if os.path.exists(os.path.join(args.ckpt_dir, '{}.pt'.format(args.name))):
++            ckpt = torch.load(os.path.join(args.ckpt_dir, '{}.pt'.format(args.name)), map_location='cpu', weights_only=False)
+             self.X = ckpt['X']
+             self.Y = ckpt['Y']
+             self.population_data = ckpt['population_data']
+@@ -532,12 +538,16 @@ class Joslim:
+                     allreduce_grads(model, args.world_size)
+                 optimizer.step()
+                 sys.stdout.flush()
++                if args.max_iters > 0 and i + 1 >= args.max_iters:  # smoke tests only
++                    break
+ 
+-            if not os.path.exists('./checkpoint/') and args.local_rank == 0:
+-                os.makedirs('./checkpoint/')
++            if not os.path.exists(args.ckpt_dir) and args.local_rank == 0:
++                os.makedirs(args.ckpt_dir)
+             if args.local_rank == 0:
++                ckpt_path = os.path.join(args.ckpt_dir, '{}.pt'.format(args.name))
+                 torch.save({'model_state_dict': self.model.state_dict(), 'optim_state_dict': optimizer.state_dict(),
+-                            'epoch': epoch, 'population_data': self.population_data, 'X': self.X, 'Y': self.Y, 'ratio_visited': ratio_visited}, os.path.join('./checkpoint/', '{}.pt'.format(args.name)))
++                            'epoch': epoch, 'population_data': self.population_data, 'X': self.X, 'Y': self.Y, 'ratio_visited': ratio_visited}, ckpt_path + '.tmp')
++                os.replace(ckpt_path + '.tmp', ckpt_path)  # atomic: a session killed mid-save keeps the previous epoch
+             if len(ratio_visited) > 0 and args.local_rank == 0:
+                 writer.add_histogram('FLOPs visited', np.array(ratio_visited), epoch+1)
+             if args.local_rank == 0:
+@@ -584,6 +594,9 @@ def get_args():
+     parser.add_argument("--lower_channel", type=float, default=0, help='lower bound')
+     parser.add_argument("--upper_channel", type=float, default=1, help='upper bound')
+     parser.add_argument("--slim", action='store_true', default=False, help='Use slimmable training')
++    parser.add_argument("--slim_uniform", action='store_true', default=False, help='With --slim: one width for all layers (US-Net)')
++    parser.add_argument("--ckpt_dir", type=str, default='./checkpoint/', help='Where {name}.pt is saved and resumed from')
++    parser.add_argument("--max_iters", type=int, default=0, help='Cap iterations per epoch (smoke tests only; 0 = full epoch)')
+     parser.add_argument("--num_sampled_arch", type=int, default=1, help='Number of arch sampled in between largest and smallest')
+     parser.add_argument('--track_flops', nargs='+', default=[0.35, 0.5, 0.75])
+     parser.add_argument("--cont_sampling", action='store_true', default=False, help='Continuous sampling previous arch to train')
+@@ -597,7 +610,7 @@ def get_args():
+     parser.add_argument("--baseline", type=int, default=5, help='Use for scalarization')
+ 
+     # Distributed
+-    parser.add_argument("--local_rank", default=0, type=int)
++    parser.add_argument("--local_rank", "--local-rank", default=0, type=int)
+ 
+     args = parser.parse_args()
+     return args
+diff --git a/model/slim_resnet.py b/model/slim_resnet.py
+index ad3d8d5..93775ea 100644
+--- a/model/slim_resnet.py
++++ b/model/slim_resnet.py
+@@ -3,16 +3,19 @@ import torch.nn as nn
+ 
+ from .dyn_model import SlimBN, SlimConv2d, SlimDownsample, SlimDownsampleConv, SlimBasicBlock, SlimBottleneck, DynModel
+ 
+-__all__ = ['slim_resnet20', 'slim_resnet32', 'slim_resnet44', 'slim_resnet56',
++__all__ = ['slim_resnet20', 'slim_resnet32', 'slim_resnet44', 'slim_resnet56', 'slim_resnet50_cifar',
+            'slim_resnet18', 'slim_resnet34', 'slim_resnet50', 'slim_resnet101', 'slim_resnet152']
+ 
+ class SlimStem(nn.Module):
+-    def __init__(self, inC, outC, norm_layer):
++    def __init__(self, inC, outC, norm_layer, cifar=False):
+         super(SlimStem, self).__init__()
+-        self.conv = SlimConv2d(3, outC, kernel_size=7, stride=2, padding=3, bias=False)
++        if cifar:  # 3x3 stride 1, no maxpool: stages at 32/16/8/4 px
++            self.conv = SlimConv2d(3, outC, kernel_size=3, stride=1, padding=1, bias=False)
++        else:
++            self.conv = SlimConv2d(3, outC, kernel_size=7, stride=2, padding=3, bias=False)
+         self.norm = norm_layer(outC)
+         self.act = nn.ReLU(inplace=True)
+-        self.pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
++        self.pool = nn.Identity() if cifar else nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+     
+     def forward(self, x):
+         x = self.conv(x)
+@@ -60,7 +63,7 @@ class SlimStage(nn.Module):
+ class SlimResNet(DynModel):
+     def __init__(self, block, layers, num_classes=10, zero_init_residual=False,
+                  groups=1, width_per_group=64, replace_stride_with_dilation=None,
+-                 norm_layer=SlimBN):
++                 norm_layer=SlimBN, cifar_stem=False):
+         super(SlimResNet, self).__init__()
+         num_stages = len(layers)
+ 
+@@ -90,7 +93,7 @@ class SlimResNet(DynModel):
+                 return layer
+             downsample_type = helper
+             # For ImageNet
+-            stem = SlimStem(3, self.og_channels[0], norm_layer)
++            stem = SlimStem(3, self.og_channels[0], norm_layer, cifar=cifar_stem)
+ 
+         self.features = [stem]
+ 
+@@ -194,6 +197,9 @@ def slim_resnet34(num_classes=1000):
+ def slim_resnet50(num_classes=1000):
+     return SlimResNet(SlimBottleneck, [3,4,6,3], num_classes=num_classes)
+ 
++def slim_resnet50_cifar(num_classes=100):
++    return SlimResNet(SlimBottleneck, [3,4,6,3], num_classes=num_classes, cifar_stem=True)
++
+ def slim_resnet101(num_classes=1000):
+     return SlimResNet(SlimBottleneck, [3,4,23,3], num_classes=num_classes)
+ 
+diff --git a/utils/drivers.py b/utils/drivers.py
+index 4456a0c..5958d36 100644
+--- a/utils/drivers.py
++++ b/utils/drivers.py
+@@ -12,7 +12,10 @@ from torch.utils.data.sampler import SubsetRandomSampler
+ 
+ from torch.utils.data.distributed import DistributedSampler
+ 
+-from .folder2lmdb import ImageFolderLMDB
++try:
++    from .folder2lmdb import ImageFolderLMDB
++except ImportError:  # ImageNet-LMDB deps (fire, lmdb, umsgpack, pyarrow) are not needed for CIFAR
++    ImageFolderLMDB = None
+ from PIL import Image
+ 
+ # From https://github.com/JiahuiYu/slimmable_networks/blob/4bb2a623f02a183fe08a5b7415338f148f46b363/utils/transforms.py
+@@ -59,6 +62,7 @@ def get_dataloader(img_size, dataset, datapath, batch_size, interpolation, no_va
+                                              std=[0.229, 0.224, 0.225])
+ 
+     if 'CIFAR100' in dataset:
++        normalize = transforms.Normalize(mean=[0.5071, 0.4865, 0.4409], std=[0.2673, 0.2564, 0.2762])
+         train_set = torchvision.datasets.CIFAR100(datapath, True, transforms.Compose([
+                 transforms.RandomCrop(img_size, padding=4),
+                 transforms.RandomHorizontalFlip(),
+@@ -120,15 +124,31 @@ def get_dataloader(img_size, dataset, datapath, batch_size, interpolation, no_va
+     train_loader = torch.utils.data.DataLoader(
+         train_set, batch_size=int(batch_size/num_gpus),
+         shuffle=(False if sampler else True), sampler=sampler,
+-        num_workers=8, pin_memory=True, drop_last=True
++        num_workers=int(os.environ.get('JOSLIM_WORKERS', 8)), pin_memory=True, drop_last=True
+     )
+ 
+     sampler = DistributedSampler(test_set) if num_gpus > 1 else None
+     test_loader = torch.utils.data.DataLoader(test_set, batch_size=int(batch_size/num_gpus),
+         shuffle=(False if sampler else True), sampler=sampler,
+-        num_workers=8, pin_memory=True)
++        num_workers=int(os.environ.get('JOSLIM_WORKERS', 8)), pin_memory=True)
+     val_loader = test_loader
+-            
++    # Upstream scores every sampled architecture (the losses its GP and
++    # Pareto selection run on) on test batches. For CIFAR, score them on a
++    # fixed 5,000-image subset of the training set instead, with the test
++    # transform, so the test set is only read by the final evaluation.
++    # Training still uses all 50,000 images, as the other baselines do.
++    # JOSLIM_VAL=test restores the upstream behaviour.
++    if 'CIFAR' in dataset and os.environ.get('JOSLIM_VAL', 'train5k') != 'test':
++        val_cls = (torchvision.datasets.CIFAR100 if 'CIFAR100' in dataset
++                   else torchvision.datasets.CIFAR10)
++        val_set = val_cls(datapath, True, test_set.transform, download=True)
++        picked = torch.randperm(len(val_set),
++                                generator=torch.Generator().manual_seed(0))[:5000]
++        val_loader = torch.utils.data.DataLoader(
++            torch.utils.data.Subset(val_set, picked.tolist()),
++            batch_size=int(batch_size/num_gpus), shuffle=True,
++            num_workers=int(os.environ.get('JOSLIM_WORKERS', 8)), pin_memory=True)
++
+     return train_loader, val_loader, test_loader
+ 
+ 

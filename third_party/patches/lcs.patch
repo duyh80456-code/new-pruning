@@ -1,0 +1,890 @@
+diff --git a/args.py b/args.py
+index 8a8a4fb..3e93451 100644
+--- a/args.py
++++ b/args.py
+@@ -56,6 +56,52 @@ def gen_args(desc):
+         "--weight_decay", type=float, help="L2 regularization parameter"
+     )
+ 
++    # ---- Additions for the CIFAR-100 / ResNet-50 protocol runs ----
++    parser.add_argument(
++        "--data_dir",
++        type=str,
++        default="./data",
++        help="Root that contains (or will receive) cifar-100-python / cifar-10-batches-py",
++    )
++    parser.add_argument(
++        "--nesterov", action="store_true", help="Use Nesterov momentum in SGD"
++    )
++    parser.add_argument(
++        "--ckpt_dir",
++        type=str,
++        help="Directory for the per-epoch resume checkpoint (default: save_dir)",
++    )
++    parser.add_argument(
++        "--max_iters_per_epoch",
++        type=int,
++        help="Cap on training iterations per epoch (smoke tests only)",
++    )
++    parser.add_argument(
++        "--recal_batches",
++        type=int,
++        default=20,
++        help="Training batches used to recalibrate BN statistics per eval width (BN only)",
++    )
++    parser.add_argument(
++        "--eval_only",
++        action="store_true",
++        help="Load the checkpoint from --ckpt_dir and only run the final width evaluation",
++    )
++    parser.add_argument(
++        "--log_prefix", type=str, default="", help="Prefix for final eval lines"
++    )
++    parser.add_argument(
++        "--stop_at_epoch",
++        type=int,
++        help="Exit after this many epochs are done (checkpoint saved, no eval); rerun to resume",
++    )
++    parser.add_argument(
++        "--skip_upstream_test",
++        action="store_true",
++        help="Skip upstream's periodic/final test() and model_N saves; protocol eval still runs",
++    )
++    parser.add_argument("--seed", type=int, help="Random seed")
++
+     return parser
+ 
+ 
+@@ -175,8 +221,8 @@ def validate_model_data(args):
+     """
+     Ensures that the specified model and dataset are compatible
+     """
+-    implemented_models = ["cpreresnet20", "resnet18", "vgg19"]
+-    implemented_datasets = ["cifar10", "imagenet"]
++    implemented_models = ["cpreresnet20", "resnet18", "vgg19", "cresnet50"]
++    implemented_datasets = ["cifar10", "cifar100", "imagenet"]
+ 
+     if args.model not in implemented_models:
+         raise ValueError(f"{args.model} not implemented.")
+@@ -189,10 +235,10 @@ def validate_model_data(args):
+             raise ValueError(
+                 f"{args.model} does not support ImageNet. Supported models: resnet18, vgg19"
+             )
+-    elif args.dataset == "cifar10":
+-        if args.model not in ("cpreresnet20"):
++    elif args.dataset in ("cifar10", "cifar100"):
++        if args.model not in ("cpreresnet20", "cresnet50"):
+             raise ValueError(
+-                f"{args.model} does not support CIFAR. Supported models: cpreresnet20"
++                f"{args.model} does not support CIFAR. Supported models: cpreresnet20, cresnet50"
+             )
+ 
+     return args
+diff --git a/get_training_params.py b/get_training_params.py
+index 77032ac..25238e3 100644
+--- a/get_training_params.py
++++ b/get_training_params.py
+@@ -15,7 +15,7 @@ def gen_args_dict(args):
+         a_dict["epochs"] = args.epochs
+ 
+     if args.test_freq is not None:
+-        a_dict["test_freq"] = args.epochs
++        a_dict["test_freq"] = args.test_freq  # upstream assigned args.epochs here
+ 
+     if args.learning_rate is not None:
+         a_dict["learning_rate"] = args.learning_rate
+@@ -32,6 +32,18 @@ def gen_args_dict(args):
+     if args.save_dir is not None:
+         a_dict["save_dir"] = args.save_dir
+ 
++    # Protocol additions (see README_RUN.md).
++    a_dict["data_dir"] = args.data_dir
++    a_dict["nesterov"] = args.nesterov
++    a_dict["ckpt_dir"] = args.ckpt_dir
++    a_dict["max_iters_per_epoch"] = args.max_iters_per_epoch
++    a_dict["recal_batches"] = args.recal_batches
++    a_dict["eval_only"] = args.eval_only
++    a_dict["log_prefix"] = args.log_prefix
++    a_dict["stop_at_epoch"] = args.stop_at_epoch
++    a_dict["skip_upstream_test"] = args.skip_upstream_test
++    a_dict["seed"] = args.seed
++
+     if args.dataset == "imagenet":
+         if args.imagenet_dir is not None:
+             a_dict["dataset_dir"] = args.imagenet_dir
+diff --git a/model_logging.py b/model_logging.py
+index 1f973ff..4513c68 100644
+--- a/model_logging.py
++++ b/model_logging.py
+@@ -162,7 +162,7 @@ def ns_logging(
+ 
+     is_cuda = next(model.parameters()).is_cuda
+     n_macs, n_params = model_profiling.model_profiling(
+-        model, input_size, input_size, use_cuda=is_cuda
++        model, input_size, input_size, use_cuda=is_cuda, verbose=False
+     )
+ 
+     total_params = 0
+diff --git a/models/modules.py b/models/modules.py
+index 2e2b498..e216d67 100644
+--- a/models/modules.py
++++ b/models/modules.py
+@@ -415,6 +415,21 @@ class LinesAdaptiveIN(AdaptiveIN):
+         return w, b
+ 
+ 
++class LinesAdaptiveBN(AdaptiveBN):
++    # BN counterpart of LinesAdaptiveIN (needed for --method lcs_l --norm BN).
++    def __init__(self, *args, **kwargs):
++        super().__init__(*args, **kwargs)
++        self.weight1 = nn.Parameter(torch.Tensor(self.num_features))
++        self.bias1 = nn.Parameter(torch.Tensor(self.num_features))
++        torch.nn.init.ones_(self.weight1)
++        torch.nn.init.zeros_(self.bias1)
++
++    def get_weight(self):
++        w = (1 - self.alpha) * self.weight + self.alpha * self.weight1
++        b = (1 - self.alpha) * self.bias + self.alpha * self.bias1
++        return w, b
++
++
+ class AdaptiveConv2d(nn.Conv2d):
+     def __init__(
+         self,
+diff --git a/models/networks/resnet.py b/models/networks/resnet.py
+index ad679f6..3b10025 100644
+--- a/models/networks/resnet.py
++++ b/models/networks/resnet.py
+@@ -118,6 +118,7 @@ class ResNet(nn.Module):
+         layers,
+         num_classes=1000,
+         base_width=64,
++        cifar_stem=False,
+     ):
+         self.inplanes = 64
+         super(ResNet, self).__init__()
+@@ -126,11 +127,18 @@ class ResNet(nn.Module):
+         if self.base_width // 64 > 1:
+             print(f"==> Using {self.base_width // 64}x wide model")
+ 
+-        self.conv1 = builder.conv7x7(3, 64, stride=2, first_layer=True)
++        if cifar_stem:
++            # CIFAR stem: 3x3 stride-1 conv, no max-pool (stages at 32/16/8/4 px).
++            self.conv1 = builder.conv3x3(3, 64, stride=1, first_layer=True)
++        else:
++            self.conv1 = builder.conv7x7(3, 64, stride=2, first_layer=True)
+ 
+         self.bn1 = builder.batchnorm(64)
+         self.relu = nn.ReLU(inplace=True)
+-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
++        if cifar_stem:
++            self.maxpool = nn.Identity()
++        else:
++            self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+         self.layer1 = self._make_layer(block_builder, block, 64, layers[0])
+         self.layer2 = self._make_layer(
+             block_builder, block, 128, layers[1], stride=2
+@@ -206,6 +214,7 @@ class ResNet(nn.Module):
+ def _get_output_size(dataset: str):
+     return {
+         "cifar10": 10,
++        "cifar100": 100,
+         "imagenet": 1000,
+     }[dataset]
+ 
+@@ -219,3 +228,15 @@ def ResNet18(builder, block_builder, dataset):
+         [2, 2, 2, 2],
+         _get_output_size(dataset),
+     )
++
++
++def CResNet50(builder, block_builder, dataset):
++    # ResNet-50 (bottleneck, [3, 4, 6, 3]) with a CIFAR stem.
++    return ResNet(
++        builder,
++        block_builder,
++        Bottleneck,
++        [3, 4, 6, 3],
++        _get_output_size(dataset),
++        cifar_stem=True,
++    )
+diff --git a/protocol.py b/protocol.py
+new file mode 100644
+index 0000000..fdb40f4
+--- /dev/null
++++ b/protocol.py
+@@ -0,0 +1,166 @@
++#
++# Additions for running LCS under an external CIFAR-100 protocol:
++# per-epoch resume checkpoint, optional BatchNorm recalibration per width, and
++# a fixed-format per-width evaluation line. Not part of the original release.
++#
++import os
++import random
++import time
++
++import numpy as np
++import torch
++import torch.nn as nn
++import torch.nn.functional as F
++
++CKPT_NAME = "last.pt"
++_T0 = time.time()
++
++
++def _ckpt_path(regime_params):
++    return os.path.join(regime_params["ckpt_dir"], CKPT_NAME)
++
++
++def save_checkpoint(net, optimizer, next_epoch, regime_params):
++    """Model, optimizer and RNG state; the cosine schedule is a pure function
++    of the epoch (schedulers.cosine_lr), so the epoch is its whole state."""
++    path = _ckpt_path(regime_params)
++    os.makedirs(os.path.dirname(path), exist_ok=True)
++    state = {
++        "model": net.state_dict(),
++        "optimizer": optimizer.state_dict(),
++        "epoch": next_epoch,
++        "current_iteration": regime_params.get("current_iteration"),
++        "rng": {
++            "python": random.getstate(),
++            "numpy": np.random.get_state(),
++            "torch": torch.get_rng_state(),
++            "cuda": torch.cuda.get_rng_state_all()
++            if torch.cuda.is_available()
++            else None,
++        },
++    }
++    tmp = path + ".tmp"
++    torch.save(state, tmp)
++    os.replace(tmp, path)
++    print(f"Saved checkpoint {path} (next epoch {next_epoch})", flush=True)
++
++
++def load_checkpoint(net, optimizer, regime_params):
++    """Returns the epoch to start from (0 if no checkpoint)."""
++    path = _ckpt_path(regime_params)
++    if not os.path.isfile(path):
++        if regime_params.get("eval_only"):
++            raise FileNotFoundError(f"--eval_only but no checkpoint at {path}")
++        print(f"No checkpoint at {path}; starting from epoch 0", flush=True)
++        return 0
++    state = torch.load(path, map_location="cpu", weights_only=False)
++    net.load_state_dict(state["model"])
++    optimizer.load_state_dict(state["optimizer"])
++    if state.get("current_iteration") is not None:
++        regime_params["current_iteration"] = state["current_iteration"]
++    rng = state["rng"]
++    random.setstate(rng["python"])
++    np.random.set_state(rng["numpy"])
++    torch.set_rng_state(rng["torch"])
++    if rng["cuda"] is not None and torch.cuda.is_available():
++        torch.cuda.set_rng_state_all(rng["cuda"])
++    print(f"Resumed from {path} at epoch {state['epoch']}", flush=True)
++    return state["epoch"]
++
++
++_STEP = {"t": None, "n": 0}
++
++
++def step_tick(batch_idx, skip=3):
++    """Steady-state step timer: starts after the first @skip steps of an epoch
++    (cudnn autotuning, loader start-up), synchronising CUDA at each mark."""
++    if torch.cuda.is_available():
++        torch.cuda.synchronize()
++    if batch_idx == skip - 1:
++        _STEP["t"], _STEP["n"] = time.time(), 0
++    elif batch_idx >= skip and _STEP["t"] is not None:
++        _STEP["n"] += 1
++        _STEP["dt"] = time.time() - _STEP["t"]
++
++
++def steady_rate():
++    n = _STEP["n"]
++    if not n:
++        return "steady n/a"
++    return f"steady {_STEP['dt'] / n:.3f} s/step over {n} steps"
++
++
++def _tracked_bns(net):
++    return [
++        m
++        for m in net.modules()
++        if isinstance(m, nn.modules.batchnorm._NormBase)
++        and m.track_running_stats
++        and m.running_mean is not None
++    ]
++
++
++@torch.no_grad()
++def recalibrate_bn(net, loader, n_batches, device):
++    """Reset running stats, then forward n_batches training batches in train
++    mode with a cumulative average (what momentum=None does in nn.BatchNorm2d;
++    AdaptiveNorm hands momentum straight to F.batch_norm, which rejects None,
++    so the factor 1/(i+1) is set explicitly). No-op for IN/GN."""
++    bns = _tracked_bns(net)
++    if not bns or not n_batches:
++        return 0
++    saved = [m.momentum for m in bns]
++    for m in bns:
++        m.reset_running_stats()
++    net.train()
++    it = iter(loader)
++    for i in range(n_batches):
++        try:
++            data, _ = next(it)
++        except StopIteration:
++            it = iter(loader)
++            data, _ = next(it)
++        for m in bns:
++            m.momentum = 1.0 / (i + 1)
++        net(data.to(device, non_blocking=True))
++    for m, mom in zip(bns, saved):
++        m.momentum = mom
++    net.eval()
++    return len(bns)
++
++
++@torch.no_grad()
++def evaluate(net, loader, device):
++    net.eval()
++    loss_sum, c1, c5, n = 0.0, 0, 0, 0
++    for data, target in loader:
++        data = data.to(device, non_blocking=True)
++        target = target.to(device, non_blocking=True)
++        out = net(data)
++        loss_sum += F.cross_entropy(out, target, reduction="sum").item()
++        hit = out.topk(5, dim=1).indices.eq(target[:, None])
++        c1 += hit[:, 0].sum().item()
++        c5 += hit.any(dim=1).sum().item()
++        n += target.numel()
++    return loss_sum / n, 1.0 - c1 / n, 1.0 - c5 / n
++
++
++def eval_widths(net, widths, set_width, trainloader, testloader, device,
++                epochs, regime_params):
++    """One tab-separated line per width:
++    <elapsed>s  val  <width>  -1/<epochs>: loss: .., top1_error: .., top5_error: ..
++    """
++    prefix = regime_params.get("log_prefix") or ""
++    prefix = f"[{prefix}] " if prefix else ""
++    n_recal = regime_params.get("recal_batches") or 0
++    for w in widths:
++        set_width(w)
++        n_bn = recalibrate_bn(net, trainloader, n_recal, device)
++        loss, e1, e5 = evaluate(net, testloader, device)
++        if n_bn == 0 and w == widths[0]:
++            print("(no tracked BN layers: evaluated without recalibration)")
++        print(
++            f"{prefix}{time.time() - _T0:.1f}s\tval\t{w:.2f}\t-1/{epochs}: "
++            f"loss: {loss:.4f}, top1_error: {e1:.4f}, top5_error: {e5:.4f}",
++            flush=True,
++        )
+diff --git a/train_curve.py b/train_curve.py
+index c120ede..0c24828 100644
+--- a/train_curve.py
++++ b/train_curve.py
+@@ -6,6 +6,7 @@
+ # Trains a standard/sparse/quantized line/poly chain/bezier curve.
+ 
+ import random
++import time
+ 
+ import numpy as np
+ import torch
+@@ -14,6 +15,7 @@ import torch.nn as nn
+ 
+ import curve_utils
+ import model_logging
++import protocol
+ import models.networks as models
+ import utils
+ from models import modules
+@@ -177,7 +179,10 @@ def train(
+     }
+     module_update = regime_update_dict[regime_params["regime"]]
+ 
++    max_iters = regime_params.get("max_iters_per_epoch")
+     for batch_idx, (data, target) in enumerate(train_loader):
++        if max_iters is not None and batch_idx >= max_iters:
++            break
+ 
+         data, target = data.to(device, non_blocking=True), target.to(
+             device, non_blocking=True
+@@ -206,7 +211,12 @@ def train(
+                     model, True, alpha=alpha, **regime_params
+                 )
+                 output = model(data)
+-                loss += criterion(output, target)
++                # Per-width backward: same gradient as backward() of the
++                # summed loss, but only one width's activations are alive
++                # (the summed form does not fit R50/bs256 in 16 GB).
++                width_loss = criterion(output, target)
++                width_loss.backward()
++                loss += width_loss.detach()
+ 
+         else:
+             model, regime_params = module_update(
+@@ -249,7 +259,8 @@ def train(
+                     normj += vj.pow(2).sum()
+             loss += beta * (num.pow(2) / (normi * normj))
+ 
+-        loss.backward()
++        if loss.requires_grad:  # only the beta term is left for the us regime
++            loss.backward()
+         if regime_params.get("bn_update_factor") is not None:
+             loss_reg_term = (
+                 utils.apply_in_topk_reg(model, apply_to_bias=False)
+@@ -258,6 +269,7 @@ def train(
+         else:
+             loss_reg_term = 0
+         optimizer.step()
++        protocol.step_tick(batch_idx)
+ 
+         avg_loss += loss.item() + loss_reg_term
+ 
+@@ -384,10 +396,14 @@ def train_model(config):
+     net = net.to(device)
+ 
+     if device == "cuda":
+-        cudnn.benchmark = True
++        # Off: widths are sampled continuously, so nearly every step has new
++        # conv shapes and benchmark re-autotunes them (~20 s each on our GPU).
++        cudnn.benchmark = False
+     net = torch.nn.DataParallel(net)
+ 
+-    start_epoch = 0
++    start_epoch = protocol.load_checkpoint(net, optimizer, regime_params)
++    if regime_params.get("eval_only"):
++        start_epoch = epochs
+ 
+     metric_dict = {"acc": [], "alpha": []}
+     if regime_params["regime"] == "quantized":
+@@ -402,9 +418,9 @@ def train_model(config):
+ 
+     save_dir = regime_params["save_dir"]
+ 
+-    for epoch in range(start_epoch, start_epoch + epochs):
++    for epoch in range(start_epoch, epochs):
+         scheduler(epoch, None)
+-        if epoch % test_freq == 0:
++        if epoch % test_freq == 0 and not regime_params.get("skip_upstream_test"):
+             for alpha in alpha_grid:
+                 test(
+                     net,
+@@ -419,6 +435,7 @@ def train_model(config):
+ 
+             model_logging.save_model_at_epoch(net, epoch, save_dir)
+ 
++        t_epoch = time.time()
+         _, regime_params = train(
+             net,
+             trainloader,
+@@ -428,19 +445,58 @@ def train_model(config):
+             device,
+             **regime_params,
+         )
++        if device == "cuda":
++            torch.cuda.synchronize()
++        n_steps = len(trainloader)
++        if regime_params.get("max_iters_per_epoch") is not None:
++            n_steps = min(n_steps, regime_params["max_iters_per_epoch"])
++        dt = time.time() - t_epoch
++        print(
++            f"Epoch {epoch} train time {dt:.1f}s, {n_steps} steps, "
++            f"{dt / max(n_steps, 1):.3f} s/step ({protocol.steady_rate()}), peak mem "
++            f"{torch.cuda.max_memory_allocated() / 2**30 if device == 'cuda' else 0:.2f} GiB",
++            flush=True,
++        )
++        protocol.save_checkpoint(net, optimizer, epoch + 1, regime_params)
++        stop = regime_params.get("stop_at_epoch")
++        if stop is not None and epoch + 1 >= stop and epoch + 1 < epochs:
++            print(f"Stopping after epoch {epoch} (--stop_at_epoch {stop}); rerun to resume.")
++            return
++
++    epoch = epochs - 1  # defined even when resuming a finished run
++    if not (regime_params.get("eval_only") or regime_params.get("skip_upstream_test")):
++        # Save final model
++        for alpha in alpha_grid:
++            metric_dict = test(
++                net,
++                alpha,
++                testloader,
++                criterion,
++                epoch,
++                device,
++                metric_dict=metric_dict,
++                **regime_params,
++            )
++
++        model_logging.save_model_at_epoch(net, epoch + 1, save_dir)
++        model_logging.save("test_metrics.npy", metric_dict, save_dir)
++
++    # Protocol evaluation: width w <-> alpha = (w - low) / (high - low), as in
++    # get_training_params.structured_args_dict and us_update.
++    if regime_params["regime"] == "us":
++        low, high = regime_params["width_factor_limits"]
++
++        def set_width(w):
++            us_update(net, alpha=(w - low) / (high - low), **regime_params)
+ 
+-    # Save final model
+-    for alpha in alpha_grid:
+-        metric_dict = test(
++        widths = [round(low + (high - low) * a, 6) for a in alpha_grid]
++        protocol.eval_widths(
+             net,
+-            alpha,
++            widths,
++            set_width,
++            trainloader,
+             testloader,
+-            criterion,
+-            epoch,
+             device,
+-            metric_dict=metric_dict,
+-            **regime_params,
++            epochs,
++            regime_params,
+         )
+-
+-    model_logging.save_model_at_epoch(net, epoch + 1, save_dir)
+-    model_logging.save("test_metrics.npy", metric_dict, save_dir)
+diff --git a/train_indep.py b/train_indep.py
+index 7721e72..79a4801 100644
+--- a/train_indep.py
++++ b/train_indep.py
+@@ -3,6 +3,7 @@
+ # Copyright (C) 2021 Apple Inc. All Rights Reserved.
+ #
+ import random
++import time
+ 
+ import numpy as np
+ import torch
+@@ -10,6 +11,7 @@ import torch.backends.cudnn as cudnn
+ from torch import nn
+ 
+ import model_logging
++import protocol
+ import models.networks as networks
+ import utils
+ from models.builder import Builder
+@@ -192,7 +194,10 @@ def train(
+     }
+     module_update = regime_update_dict[regime_params["regime"]]
+ 
++    max_iters = regime_params.get("max_iters_per_epoch")
+     for batch_idx, (data, target) in enumerate(train_loader):
++        if max_iters is not None and batch_idx >= max_iters:
++            break
+         data, target = data.to(device, non_blocking=True), target.to(
+             device, non_blocking=True
+         )
+@@ -208,7 +213,12 @@ def train(
+                     model, True, **regime_params
+                 )
+                 output = model(data)
+-                loss += criterion(output, target)
++                # Per-width backward: same gradient as backward() of the
++                # summed loss, but only one width's activations are alive
++                # (the summed form does not fit R50/bs256 in 16 GB).
++                width_loss = criterion(output, target)
++                width_loss.backward()
++                loss += width_loss.detach()
+         elif regime_params["regime"] == "us":
+             loss = 0
+             optimizer.zero_grad()
+@@ -229,7 +239,12 @@ def train(
+                     model, True, **regime_params
+                 )
+                 output = model(data)
+-                loss += criterion(output, target)
++                # Per-width backward: same gradient as backward() of the
++                # summed loss, but only one width's activations are alive
++                # (the summed form does not fit R50/bs256 in 16 GB).
++                width_loss = criterion(output, target)
++                width_loss.backward()
++                loss += width_loss.detach()
+         else:
+             model, regime_params = module_update(model, True, **regime_params)
+ 
+@@ -237,10 +252,12 @@ def train(
+             output = model(data)
+             loss = criterion(output, target)
+ 
+-        loss.backward()
++        if loss.requires_grad:  # ns/us already called backward per width
++            loss.backward()
+         if regime_params.get("bn_update_factor") is not None:
+             apply_norm_regularization(model, regime_params["bn_update_factor"])
+         optimizer.step()
++        protocol.step_tick(batch_idx)
+ 
+         avg_loss += loss.item()
+ 
+@@ -409,10 +426,14 @@ def train_model(config):
+     net = net.to(device)
+ 
+     if device == "cuda":
+-        cudnn.benchmark = True
++        # Off: widths are sampled continuously, so nearly every step has new
++        # conv shapes and benchmark re-autotunes them (~20 s each on our GPU).
++        cudnn.benchmark = False
+     net = torch.nn.DataParallel(net)
+ 
+-    start_epoch = 0
++    start_epoch = protocol.load_checkpoint(net, optimizer, regime_params)
++    if regime_params.get("eval_only"):
++        start_epoch = epochs
+ 
+     metric_dict = {"acc": [], "alpha": []}
+     if regime_params["regime"] == "quantized":
+@@ -431,9 +452,9 @@ def train_model(config):
+     save_dir = regime_params["save_dir"]
+ 
+     # Training loop
+-    for epoch in range(start_epoch, start_epoch + epochs):
++    for epoch in range(start_epoch, epochs):
+         scheduler(epoch, None)
+-        if epoch % test_freq == 0:
++        if epoch % test_freq == 0 and not regime_params.get("skip_upstream_test"):
+             for param in eval_param_grid:
+                 test(
+                     net,
+@@ -448,6 +469,7 @@ def train_model(config):
+ 
+             model_logging.save_model_at_epoch(net, epoch, save_dir)
+ 
++        t_epoch = time.time()
+         _, regime_params = train(
+             net,
+             trainloader,
+@@ -457,19 +479,56 @@ def train_model(config):
+             device,
+             **regime_params,
+         )
++        if device == "cuda":
++            torch.cuda.synchronize()
++        n_steps = len(trainloader)
++        if regime_params.get("max_iters_per_epoch") is not None:
++            n_steps = min(n_steps, regime_params["max_iters_per_epoch"])
++        dt = time.time() - t_epoch
++        print(
++            f"Epoch {epoch} train time {dt:.1f}s, {n_steps} steps, "
++            f"{dt / max(n_steps, 1):.3f} s/step ({protocol.steady_rate()}), peak mem "
++            f"{torch.cuda.max_memory_allocated() / 2**30 if device == 'cuda' else 0:.2f} GiB",
++            flush=True,
++        )
++        protocol.save_checkpoint(net, optimizer, epoch + 1, regime_params)
++        stop = regime_params.get("stop_at_epoch")
++        if stop is not None and epoch + 1 >= stop and epoch + 1 < epochs:
++            print(f"Stopping after epoch {epoch} (--stop_at_epoch {stop}); rerun to resume.")
++            return
++
++    epoch = epochs - 1  # defined even when resuming a finished run
++    if not (regime_params.get("eval_only") or regime_params.get("skip_upstream_test")):
++        # Save final model
++        for param in eval_param_grid:
++            metric_dict = test(
++                net,
++                param,
++                testloader,
++                criterion,
++                epoch,
++                device,
++                metric_dict=metric_dict,
++                **regime_params,
++            )
++
++        model_logging.save_model_at_epoch(net, epoch + 1, save_dir)
++        model_logging.save("test_metrics.npy", metric_dict, save_dir)
++
++    # Protocol evaluation (BN recalibrated per width when BN is used).
++    if regime_params["regime"] in ("us", "ns"):
++
++        def set_width(w):
++            regime_params["width_factor"] = w
++            ns_update(net, **regime_params)
+ 
+-    # Save final model
+-    for param in eval_param_grid:
+-        metric_dict = test(
++        protocol.eval_widths(
+             net,
+-            param,
++            eval_param_grid,
++            set_width,
++            trainloader,
+             testloader,
+-            criterion,
+-            epoch,
+             device,
+-            metric_dict=metric_dict,
+-            **regime_params,
++            epochs,
++            regime_params,
+         )
+-
+-    model_logging.save_model_at_epoch(net, epoch + 1, save_dir)
+-    model_logging.save("test_metrics.npy", metric_dict, save_dir)
+diff --git a/utils.py b/utils.py
+index 84e67b6..c789090 100644
+--- a/utils.py
++++ b/utils.py
+@@ -4,6 +4,7 @@
+ #
+ import collections
+ import os
++import random
+ import time
+ from typing import Callable
+ from typing import Dict
+@@ -76,6 +77,47 @@ def get_cifar10_data(batch_size):
+     return trainset, trainloader, testset, testloader
+ 
+ 
++def get_cifar100_data(batch_size, data_dir="./data", num_workers=2):
++    # Same pipeline as get_cifar10_data, CIFAR-100 statistics.
++    print("==> Preparing CIFAR-100 data...")
++    mean, std = (0.5071, 0.4865, 0.4409), (0.2673, 0.2564, 0.2762)
++    transform_train = transforms.Compose(
++        [
++            transforms.RandomCrop(32, padding=4),
++            transforms.RandomHorizontalFlip(),
++            transforms.ToTensor(),
++            transforms.Normalize(mean, std),
++        ]
++    )
++    transform_test = transforms.Compose(
++        [transforms.ToTensor(), transforms.Normalize(mean, std)]
++    )
++    trainset = torchvision.datasets.CIFAR100(
++        root=data_dir, train=True, download=True, transform=transform_train
++    )
++    trainloader = torch.utils.data.DataLoader(
++        trainset,
++        batch_size=batch_size,
++        shuffle=True,
++        num_workers=num_workers,
++        pin_memory=True,
++        persistent_workers=num_workers > 0,
++    )
++    testset = torchvision.datasets.CIFAR100(
++        root=data_dir, train=False, download=True, transform=transform_test
++    )
++    # Shuffled, as in get_cifar10_data (their BN-statistics analysis needs it).
++    testloader = torch.utils.data.DataLoader(
++        testset,
++        batch_size=batch_size,
++        shuffle=True,
++        num_workers=num_workers,
++        pin_memory=True,
++        persistent_workers=num_workers > 0,
++    )
++    return trainset, trainloader, testset, testloader
++
++
+ def get_imagenet_data(data_dir, batch_size):
+     print("==> Preparing ImageNet data...")
+ 
+@@ -148,6 +190,7 @@ def print_train_params(config, setting, method, norm, save_dir):
+         "cpreresnet20": "cPreResNet20",
+         "resnet18": "ResNet18",
+         "vgg19": "VGG19",
++        "cresnet50": "CIFAR-ResNet50",
+     }
+ 
+     method_name_map = {
+@@ -160,7 +203,11 @@ def print_train_params(config, setting, method, norm, save_dir):
+         "target_bit_width": "Bit Width Target",
+     }
+ 
+-    dataset_name_map = {"cifar10": "CIFAR-10", "imagenet": "ImageNet"}
++    dataset_name_map = {
++        "cifar10": "CIFAR-10",
++        "cifar100": "CIFAR-100",
++        "imagenet": "ImageNet",
++    }
+ 
+     setting_name_map = {
+         "unstructured_sparsity": "Unstructured sparsity",
+@@ -202,12 +249,19 @@ def network_and_params(config=None):
+     Returns the network and training parameters for the specified model type.
+     """
+ 
++    seed = config["parameters"].get("seed")
++    if seed is not None:
++        random.seed(seed)
++        np.random.seed(seed)
++        torch.manual_seed(seed)
++
+     model_config = config["parameters"].get("model_config")
+     model_class = model_config["model_class"]
+     model_class_dict = {
+         "cpreresnet20": networks.cpreresnet,
+         "resnet18": networks.ResNet18,
+         "vgg19": networks.vgg19,
++        "cresnet50": networks.CResNet50,
+     }
+     if model_config is not None:
+         # Get the class.
+@@ -240,6 +294,12 @@ def network_and_params(config=None):
+ 
+     if dataset == "cifar10":
+         data = get_cifar10_data(batch_size)
++    elif dataset == "cifar100":
++        data = get_cifar100_data(
++            batch_size,
++            config["parameters"].get("data_dir", "./data"),
++            int(os.environ.get("LCS_WORKERS", 2)),
++        )
+     elif dataset == "imagenet":
+         imagenet_dir = config["parameters"]["dataset_dir"]
+         data = get_imagenet_data(imagenet_dir, batch_size)
+@@ -334,7 +394,8 @@ def network_and_params(config=None):
+ 
+         if "BN" in config["parameters"]["bn_type"]:
+             norm_kwargs = config["parameters"]["norm_kwargs"]
+-            assert "width_factors_list" in norm_kwargs
++            # lcs_l.yaml has no norm_kwargs; None == no per-width BN copies.
++            norm_kwargs.setdefault("width_factors_list", None)
+ 
+             block_builder_params["norm_kwargs"] = norm_kwargs
+             builder_parms["norm_kwargs"] = norm_kwargs
+@@ -400,12 +461,27 @@ def network_and_params(config=None):
+     # Save directory
+     regime_params["save_dir"] = config["parameters"]["save_dir"]
+ 
++    # Protocol additions (resume, iteration cap, BN recalibration, logging).
++    for key in (
++        "ckpt_dir",
++        "max_iters_per_epoch",
++        "recal_batches",
++        "eval_only",
++        "log_prefix",
++        "stop_at_epoch",
++        "skip_upstream_test",
++    ):
++        regime_params[key] = config["parameters"].get(key)
++    if regime_params["ckpt_dir"] is None:
++        regime_params["ckpt_dir"] = regime_params["save_dir"]
++
+     criterion = nn.CrossEntropyLoss()
+     optimizer = optim.SGD(
+         net.parameters(),
+         lr=learning_rate,
+         momentum=momentum,
+         weight_decay=weight_decay,
++        nesterov=config["parameters"].get("nesterov", False),
+     )
+ 
+     scheduler = schedulers.cosine_lr(
+@@ -586,6 +662,7 @@ def make_fresh_copy_of_pruned_network(model: nn.Module, model_kwargs: Dict):
+ def get_input_size(dataset):
+     return {
+         "cifar10": 32,
++        "cifar100": 32,
+         "imagenet": 224,
+     }[dataset]
+ 
