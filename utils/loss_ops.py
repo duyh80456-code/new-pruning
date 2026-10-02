@@ -1167,8 +1167,12 @@ class WKDLogitLoss(torch.nn.modules.loss._Loss):
     """
 
     def __init__(self, temperature=8.0, reg=0.05, n_iters=10,
-                 reduction='none'):
+                 reduction='none', with_kl=False):
         super(WKDLogitLoss, self).__init__(reduction=reduction)
+        # with_kl keeps US-Net's KL to the teacher's softmax and adds the
+        # transport of the non-target classes beside it, in place of
+        # WKD-L's own target term: KL already covers the target class
+        self.with_kl = with_kl
         self.temperature = temperature
         self.reg = reg
         self.n_iters = n_iters
@@ -1213,6 +1217,11 @@ class WKDLogitLoss(torch.nn.modules.loss._Loss):
         q_t = torch.nn.functional.softmax(rest_t / hot, dim=-1)
         plan = wkd_sinkhorn(q_s, q_t, cost, self.reg, self.n_iters)
         moved = (plan * cost).sum(-1).sum(-1)
+        if self.with_kl:
+            # US-Net's soft cross entropy to the teacher's softmax, which
+            # differs from KL by the teacher's entropy, a constant here
+            kl = -(target * log_s).sum(1)
+            return kl + self.gamma * moved
         # the mean over the batch is taken by the caller, as theirs takes
         # it inside: the same number
         return loss_t + self.gamma * moved
@@ -1335,12 +1344,12 @@ def build_soft_criterion():
             alpha_max=getattr(FLAGS, 'alpha_max', 1.0),
             iw_clip=getattr(FLAGS, 'alpha_iw_clip', 5.0),
             reduction='none')
-    if kd_loss == 'wkd':
+    if kd_loss in ('wkd', 'kl_wkd'):
         return WKDLogitLoss(
             temperature=getattr(FLAGS, 'wkd_temperature', 8.0),
             reg=getattr(FLAGS, 'wkd_reg', 0.05),
             n_iters=getattr(FLAGS, 'wkd_iters', 10),
-            reduction='none')
+            reduction='none', with_kl=kd_loss == 'kl_wkd')
     if kd_loss == 'wasserstein':
         return WassersteinLossSoft(
             eps=getattr(FLAGS, 'sinkhorn_eps', 0.2),

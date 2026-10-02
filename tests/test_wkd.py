@@ -89,6 +89,32 @@ def against_reference():
     check(float(student.grad.abs().sum()) > 0, 'gradient reaches the student')
 
 
+def kl_plus_transport():
+    """kl_wkd: US-Net's soft CE to the teacher's softmax plus the same
+    transport, in place of WKD-L's target term"""
+    torch.manual_seed(1)
+    n, c = 16, 100
+    student, teacher = torch.randn(n, c) * 3, torch.randn(n, c) * 3
+    label = torch.randint(0, c, (n,))
+    weight = torch.randn(c, 64)
+    plain, mixed = (WKDLogitLoss(with_kl=False), WKDLogitLoss(with_kl=True))
+    for loss in (plain, mixed):
+        loss.set_cost(weight)
+        loss.set_teacher(teacher, label)
+        loss.set_gamma(600.0)
+    soft = torch.softmax(teacher, dim=1)
+    log_s = torch.log_softmax(student, dim=1)
+    kl = -(soft * log_s).sum(1)
+    target_term = -(soft.gather(1, label.view(-1, 1))
+                    * log_s.gather(1, label.view(-1, 1))).view(-1)
+    check(torch.allclose(mixed(student, soft) - plain(student, soft),
+                         kl - target_term, atol=1e-4),
+          'kl_wkd is soft CE plus the same transport, no target term')
+    mixed.set_gamma(0.0)
+    check(torch.allclose(mixed(student, soft), kl, atol=1e-5),
+          'kl_wkd at gamma 0 is exactly the soft CE of A')
+
+
 def schedule():
     check(wkd_gamma(1) == FLAGS.wkd_weight, 'gamma at the start is the weight')
     start = int(0.625 * FLAGS.num_epochs)
@@ -101,7 +127,7 @@ def through_train():
         print('skip  no GPU: train.py path not exercised')
         return
     outs = {}
-    for name in ('dg_wkd_r50', 'bx_a_r50'):
+    for name in ('dg_wkd_r50', 'di_kl_wkd_r50', 'bx_a_r50'):
         base = io.open(os.path.join(ROOT, 'apps', 'smoke_{}.yml'.format(name)),
                        encoding='utf-8').read()
         log = tempfile.mkdtemp().replace('\\', '/')
@@ -119,6 +145,9 @@ def through_train():
                                                text)]
         check(all(math.isfinite(v) for v in losses),
               '{}: every logged loss finite'.format(name))
+    check(outs['di_kl_wkd_r50'] != outs['bx_a_r50'],
+          'KL plus transport is not A ({:.4f} vs {:.4f})'.format(
+              outs['di_kl_wkd_r50'], outs['bx_a_r50']))
     check(outs['dg_wkd_r50'] != outs['bx_a_r50'],
           'the narrow width trains on a different loss than A '
           '({:.4f} vs {:.4f})'.format(outs['dg_wkd_r50'], outs['bx_a_r50']))
@@ -126,6 +155,7 @@ def through_train():
 
 if __name__ == '__main__':
     against_reference()
+    kl_plus_transport()
     schedule()
     through_train()
     print('all checks passed')
