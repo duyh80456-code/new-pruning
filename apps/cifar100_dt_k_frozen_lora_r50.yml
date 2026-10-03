@@ -1,0 +1,107 @@
+# =========================== Branch DT ===========================
+# K as trained in DD (ResNet-50, transport from epoch 6, seed 1995,
+# 77.50), loaded from DD's final checkpoint and frozen, with width-private
+# weights added on top and trained alone for 20 epochs: TAS-LoRA's recipe
+# (CVPR 2026, a frozen supernet plus width-conditioned additions merged at
+# inference) on a universally slimmable CNN, with interpolation in width
+# in place of their router. Here a low-rank update to every conv kernel at four knots, widths 0.25,
+# 0.50, 0.75 and 1.00, rank 4, mixed by distance in between (DR's update,
+# 1.27M parameters). Only the updates train.
+# The loss is K's, transport on from the first epoch since the network is
+# already trained; SGD at lr 0.02, one warm-up epoch, cosine. Frozen
+# weights are out of the optimizer, so neither decay nor momentum moves
+# them. Read against DD; DT against DU says where private weights pay,
+# conv kernels or BN affines.
+
+num_gpus_per_job: 1
+num_cpus_per_job: 4
+memory_per_job: 30
+gpu_type: "nvidia-tesla-t4"
+
+# data
+dataset: data.cifar100
+data_transforms: data.cifar100
+data_loader: data.cifar100
+dataset_dir: data
+data_loader_workers: 2
+
+# info
+num_classes: 100
+image_size: 32
+topk: [1, 5]
+
+# optimizer
+optimizer: sgd
+momentum: 0.9
+weight_decay: 0.0005
+nesterov: True
+
+# Four losses are summed into one step and the KD terms are not bounded
+# the way cross entropy is, so one bad batch early can be unrecoverable.
+grad_clip: 5.0
+
+# lr
+lr: 0.02
+lr_scheduler: cosine_decaying
+lr_warmup: True
+lr_warmup_epochs: 1
+num_epochs: 20
+
+# model profiling
+profiling: [gpu]
+
+# pretrain, resume, test_only
+pretrained: pretrained/dd_k_late_r50.pt
+resume: ''
+test_only: False
+
+random_seed: 1995
+batch_size: 256
+reset_parameters: True
+
+# =========================== Override Settings ===========================
+log_dir: logs/cifar100_dt_k_frozen_lora_r50
+slimmable_training: True
+universally_slimmable_training: True
+num_sample_training: 4
+bn_cal_batch_num: 20
+calibrate_bn: true
+cumulative_bn_stats: true
+
+model: models.us_resnet
+depth: 50
+width_mult: 1.0
+width_mult_list: [0.25, 1.0]
+width_mult_range: [0.25, 1.0]
+# widths that get a calibrated BN and an entry in the final table
+width_mult_list_test: [0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
+
+# =========================== Distillation ===========================
+inplace_distill: True
+kd_loss: soft_ce
+sinkhorn_eps: 0.2
+sinkhorn_iters: 100
+sinkhorn_debiased: True
+cost_normalize: True
+horizontal_kd: True
+horizontal_weight: 1.0
+feature_kd: True
+feature_align: prefix
+feature_weight: 1.0
+horizontal_where: feature
+
+# Deferred, K holds all four widths' graphs until the end of the step:
+# 19.3 GB at batch 256 on ResNet-50, and a T4 has 15. Only the pair term
+# needs two widths at once, and its gradient splits exactly into one part
+# per side, so each width takes its part with the partner detached and is
+# freed. Same gradient to a relative 5e-8 on ResNet-18, checked against
+# the deferred path through train.py's own loop. Costs one extra forward
+# without a graph per step.
+split_pair_backward: True
+
+feature_start_epoch: 0
+
+# =========================== Frozen K, private weights ===========================
+lora_knots: 4
+lora_rank: 4
+train_only: [lora_]

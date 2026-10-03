@@ -1074,6 +1074,39 @@ number, not Latest) and run again: the notebook finds the checkpoints.
 Attach the CIFAR-100 dataset as well.
 """
 
+FROZEN_K = """K as already trained, frozen, with width-private weights added on top
+and trained alone: the recipe of TAS-LoRA (CVPR 2026), which freezes a
+trained supernet, adds LoRA experts mixed per sub-network and merges them
+at deployment, here on a universally slimmable CNN with interpolation in
+width in place of their router. Both branches load DD's final weights
+(K on ResNet-50, transport from epoch 6, seed 1995, 77.50), freeze them,
+and train for 20 epochs on K's loss at lr 0.02.
+
+| | what is added and trained | parameters |
+|---|---|---|
+| DT | a rank-4 update to every conv kernel at 4 knots in width (DR's update) | 1.27M |
+| DU | an offset to every BN scale and shift at 4 knots in width | 0.21M |
+
+Everything else is frozen and out of the optimizer, so neither weight
+decay nor momentum moves it (checked locally: 0 of 161 frozen tensors
+changed). At deployment a chosen width's additions merge into its
+kernels and affines.
+
+**Before you start: attach notebook 36's output**, the version that
+finished, as well as the CIFAR-100 dataset. The cell after the data
+link finds `cifar100_dd_k_late_r50/latest_checkpoint.pt` in it and stops
+the session if it is missing or not at epoch 100.
+
+**How to read it.** Each against DD: once K is trained, do private
+weights per width add anything. DT against DU: conv kernels or BN
+affines. Against notebook 44 (the same LoRA trained from the start):
+added afterwards or grown with K. A gap under about 0.4 is not a result.
+
+## Timing
+
+20 epochs of K with the backbone frozen: about three hours, one session.
+"""
+
 MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44}
 
 QUEUE = [
@@ -1129,7 +1162,35 @@ QUEUE = [
      .replace('{other}', '42')),
     (44, 'dr_k_late_lora4x4_r50', 'ds_k_late_lora2x8_r50',
      'K with a low-rank update per width, continuous', LORA),
+    (45, 'dt_k_frozen_lora_r50', 'du_k_frozen_bnknots_r50',
+     'K frozen, width-private weights added on top', FROZEN_K),
 ]
+
+# Notebooks whose branches start from DD's final weights get a cell, after
+# the data link, that finds them in an attached output of notebook 36.
+NEEDS_DD = {45}
+DD_CELL = '''# DD's final weights, from an attached output of notebook 36
+TARGET_PT = 'pretrained/dd_k_late_r50.pt'
+os.makedirs('pretrained', exist_ok=True)
+if not os.path.exists(TARGET_PT):
+    found = []
+    for root, dirs, files in os.walk('/kaggle/input', followlinks=True):
+        if (os.path.basename(root) == 'cifar100_dd_k_late_r50'
+                and 'latest_checkpoint.pt' in files):
+            path = os.path.join(root, 'latest_checkpoint.pt')
+            epoch = torch.load(path, map_location='cpu',
+                               weights_only=False).get('last_epoch', -1)
+            found.append((epoch, path))
+            print('found DD at epoch', epoch + 1, 'in', path)
+    finished = [path for epoch, path in found if epoch >= 99]
+    if not finished:
+        raise SystemExit('No finished DD checkpoint: attach the output of '
+                         'the notebook 36 version that ran to epoch 100.')
+    checkpoint = torch.load(finished[0], map_location='cpu',
+                            weights_only=False)
+    torch.save({'model': checkpoint['model']}, TARGET_PT)
+    print('DD weights taken from', finished[0])
+print(TARGET_PT, os.path.getsize(TARGET_PT) // 2**20, 'MB')'''
 
 HEADER = """# {number}. {title}
 
@@ -1500,6 +1561,13 @@ for number, left, right, title, preamble in QUEUE:
     nb['cells'][1]['source'] = source(CONFIG.format(
         number=number, total=max(entry[0] for entry in QUEUE),
         branches=branches))
+    if number in NEEDS_DD:
+        at = next(i for i, cell in enumerate(nb['cells'])
+                  if "TARGET = 'data/cifar-100-python'"
+                  in ''.join(cell['source'])) + 1
+        nb['cells'].insert(at, {'cell_type': 'code', 'metadata': {},
+                                'execution_count': None, 'outputs': [],
+                                'source': source(DD_CELL)})
     name = 'kaggle_kd_{:02d}_{}.ipynb'.format(
         number, '_'.join(branch.split('_')[0] for branch in branches))
     with io.open(os.path.join(KAGGLE, name), 'w',

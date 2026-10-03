@@ -195,6 +195,11 @@ LEGEND = [
      'many evenly spaced widths, mixed by distance in between, so each '
      'width has a little private weight'),
     ('lora_rank', "the rank of each knot's update"),
+    ('train_only', 'only parameters whose names contain these fragments '
+     'train; the rest is loaded from pretrained, frozen and out of the '
+     'optimizer'),
+    ('pretrained', 'the run starts from these weights; keys a newer '
+     'model adds keep their initial values'),
     ('stratified_draw=uniform', "the block's widths are plain uniform "
      'draws, sorted, instead of one per slice'),
     ('student_kd_weight', 'the weight on logit KD for every student; 0 '

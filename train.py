@@ -269,6 +269,9 @@ def get_optimizer(model):
         # weight decay only on normal conv and fc
         model_params = []
         for params in model.parameters():
+            # frozen by train_only: not stepped, decayed or given momentum
+            if not params.requires_grad:
+                continue
             ps = list(params.size())
             if len(ps) == 4 and ps[1] != 1:
                 weight_decay = FLAGS.weight_decay
@@ -1393,8 +1396,36 @@ def train_val_test():
                 new_checkpoint[key_new] = checkpoint[key_old]
                 print('remap {} to {}'.format(key_new, key_old))
             checkpoint = new_checkpoint
-        model_wrapper.load_state_dict(checkpoint)
-        print('Loaded model {}.'.format(FLAGS.pretrained))
+        # A checkpoint from before lora_knots or affine_knots has none of
+        # their keys; those keep their initial values, which leave the
+        # model as it was. Every other key has to match.
+        missing, unexpected = model_wrapper.load_state_dict(
+            checkpoint, strict=False)
+        added = ('lora_up', 'lora_down', 'knot_weight', 'knot_bias')
+        stray = [k for k in missing if not any(a in k for a in added)]
+        if stray or unexpected:
+            raise RuntimeError(
+                'pretrained {} does not fit this model: missing {}, '
+                'unexpected {}'.format(FLAGS.pretrained, stray[:5],
+                                       list(unexpected)[:5]))
+        print('Loaded model {}, {} added keys left at their initial '
+              'values.'.format(FLAGS.pretrained, len(missing)))
+
+    # train_only: a list of name fragments. Everything else is frozen and
+    # left out of the optimizer, so weight decay and momentum cannot move
+    # it either, which is what broke the first freeze (BT).
+    train_only = getattr(FLAGS, 'train_only', None)
+    if train_only:
+        kept = 0
+        for name, param in model_wrapper.named_parameters():
+            keep = any(part in name for part in train_only)
+            param.requires_grad_(keep)
+            kept += param.numel() if keep else 0
+        if not kept:
+            raise ValueError('train_only {} matches no parameter'.format(
+                train_only))
+        print('Training only {}: {:.2f}M parameters.'.format(
+            train_only, kept / 1e6))
 
     optimizer = get_optimizer(model_wrapper)
     if getattr(FLAGS, 'dynas', False):
