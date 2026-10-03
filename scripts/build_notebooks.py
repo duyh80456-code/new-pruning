@@ -1028,10 +1028,9 @@ so with DD (one head) the count runs 1, 2, 4, 8, 16.
 
 **How to read it.** Each against DD: do heads help K. The earlier K with
 four heads (CI, 77.27) was level with that K without them (BY, 77.26),
-so the expectation is no; a gain here would be new. Against A with the
-same heads (CH 77.21 at 4; CK and CL at 8 and 16 in notebook 42): does
-K keep its lead when both have them. A gap under about 0.4 is not a
-result.
+so the expectation is no; a gain here would be new. DO against CH (A
+with four heads, 77.21): does K keep its lead when both have them. A gap
+under about 0.4 is not a result.
 
 ## Timing
 
@@ -1088,8 +1087,6 @@ QUEUE = [
     (41, 'dl_k_block_adjacent_r50', 'dm_k_block_spread_r50',
      'K with the free widths drawn in blocks, uniformly: close or far',
      BLOCK_UNIFORM),
-    (42, 'ck_a_heads8_r50', 'cl_a_heads16_r50',
-     'SOLAR on A: 8 heads and 16', HEAD_SWEEP),
     (43, 'dn_k_late_heads2_r50', 'do_k_late_heads4_r50',
      'K with 2 heads and 4', K_HEADS.replace('{pair}', '2 and 4 heads')),
     (44, 'dp_k_late_heads8_r50', 'dq_k_late_heads16_r50',

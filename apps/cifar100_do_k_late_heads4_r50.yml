@@ -7,8 +7,8 @@
 # cost read the widest width's head. A middle head trains on about 44 per cent of steps.
 # CI, the older K (transport from epoch 1) with four heads, scored 77.27
 # against BY's 77.26 without; this asks the same of the K that is kept,
-# at 2, 4, 8 and 16 heads. Read against DD, and against A with the same
-# heads (CH at 4, CK at 8, CL at 16).
+# at 2, 4, 8 and 16 heads. Read against DD, and at four heads against
+# A with the same heads (CH, 77.21).
 
 num_gpus_per_job: 1
 num_cpus_per_job: 4
