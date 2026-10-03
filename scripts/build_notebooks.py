@@ -1015,8 +1015,8 @@ Attach the CIFAR-100 dataset as well.
 
 K_HEADS = """K with a classifier head per band of widths, SOLAR's idea (WACV 2026)
 on the K that is kept: DD, K on ResNet-50 with the feature transport
-from epoch 6, seed 1995, 77.50. Notebooks 43 and 44 put {pair} on it,
-so with DD (one head) the count runs 1, 2, 4, 8, 16.
+from epoch 6, seed 1995, 77.50. This notebook puts {pair} on it;
+with notebook {other} and DD (one head) the count runs 1, 2, 4, 8, 16.
 
 | | heads | test widths per head | a middle head trains on |
 |---|---|---|---|
@@ -1040,7 +1040,7 @@ number, not Latest) and run again: the notebook finds the checkpoints.
 Attach the CIFAR-100 dataset as well.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 43, 44}
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1087,10 +1087,12 @@ QUEUE = [
     (41, 'dl_k_block_adjacent_r50', 'dm_k_block_spread_r50',
      'K with the free widths drawn in blocks, uniformly: close or far',
      BLOCK_UNIFORM),
+    (42, 'dp_k_late_heads8_r50', 'dq_k_late_heads16_r50',
+     'K with 8 heads and 16', K_HEADS.replace('{pair}', '8 and 16 heads')
+     .replace('{other}', '43')),
     (43, 'dn_k_late_heads2_r50', 'do_k_late_heads4_r50',
-     'K with 2 heads and 4', K_HEADS.replace('{pair}', '2 and 4 heads')),
-    (44, 'dp_k_late_heads8_r50', 'dq_k_late_heads16_r50',
-     'K with 8 heads and 16', K_HEADS.replace('{pair}', '8 and 16 heads')),
+     'K with 2 heads and 4', K_HEADS.replace('{pair}', '2 and 4 heads')
+     .replace('{other}', '42')),
 ]
 
 HEADER = """# {number}. {title}
