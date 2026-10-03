@@ -1169,19 +1169,25 @@ QUEUE = [
 # Notebooks whose branches start from DD's final weights get a cell, after
 # the data link, that finds them in an attached output of notebook 36.
 NEEDS_DD = {45}
-DD_CELL = '''# DD's final weights, from an attached output of notebook 36
+DD_CELL = '''# DD's final weights, from an attached output of notebook 36. The path
+# below is where the finished resume of notebook 36 keeps them; if it is
+# not attached there, every attached input is searched instead.
+DD_CHECKPOINT = ('/kaggle/input/notebooks/chimbellll/kaggle-kd-36-dc-dd-'
+                 'resume/logs/cifar100_dd_k_late_r50/latest_checkpoint.pt')
 TARGET_PT = 'pretrained/dd_k_late_r50.pt'
 os.makedirs('pretrained', exist_ok=True)
 if not os.path.exists(TARGET_PT):
-    found = []
-    for root, dirs, files in os.walk('/kaggle/input', followlinks=True):
+    paths = [DD_CHECKPOINT] if os.path.exists(DD_CHECKPOINT) else [
+        os.path.join(root, 'latest_checkpoint.pt')
+        for root, dirs, files in os.walk('/kaggle/input', followlinks=True)
         if (os.path.basename(root) == 'cifar100_dd_k_late_r50'
-                and 'latest_checkpoint.pt' in files):
-            path = os.path.join(root, 'latest_checkpoint.pt')
-            epoch = torch.load(path, map_location='cpu',
-                               weights_only=False).get('last_epoch', -1)
-            found.append((epoch, path))
-            print('found DD at epoch', epoch + 1, 'in', path)
+            and 'latest_checkpoint.pt' in files)]
+    found = []
+    for path in paths:
+        epoch = torch.load(path, map_location='cpu',
+                           weights_only=False).get('last_epoch', -1)
+        found.append((epoch, path))
+        print('found DD at epoch', epoch + 1, 'in', path)
     finished = [path for epoch, path in found if epoch >= 99]
     if not finished:
         raise SystemExit('No finished DD checkpoint: attach the output of '
