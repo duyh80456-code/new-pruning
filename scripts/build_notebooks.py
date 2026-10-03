@@ -961,7 +961,34 @@ attach this version's output (pick the version number, not Latest) and
 run again. Attach the CIFAR-100 dataset as well.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38}
+STRATIFIED = """K with the two free widths of the sandwich drawn ten steps at a time
+instead of one step at a time, and dealt out two ways. Both start from DD
+(K on ResNet-50, transport from epoch 6, seed 1995, 77.50).
+
+| | how the 20 widths of a block are dealt out | the two free widths of a step |
+|---|---|---|
+| DJ | sorted, step m takes the m-th smallest pair: each block runs narrow to wide | neighbours, about 0.04 apart |
+| DK | step m takes the m-th and (m + 10)-th smallest, steps shuffled | one in each half, about 0.375 apart |
+
+In both, each block of ten steps draws one width in each twentieth of
+[0.25, 1.0], so the range is covered evenly rather than by chance. They
+differ only in the pairing, which is what K's horizontal term reads:
+independent draws put the two free widths 0.25 apart on average.
+
+**How to read it.** Each against DD: does drawing in blocks help K. DJ
+against DK: close pairs or far ones. A gap under about 0.4 is not a
+result.
+
+## Timing
+
+K took about 14 hours on a T4, so these need two sessions. When the
+first ends, Save Version, attach that version's output (pick the version
+number, not Latest) and run again: the notebook finds the checkpoints.
+A resumed run starts a fresh block of ten steps, which changes nothing
+the comparison depends on. Attach the CIFAR-100 dataset as well.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1002,6 +1029,9 @@ QUEUE = [
      'A and K with mixed precision, against BX and BY', AMP_CHECK),
     (38, 'dg_wkd_r50', 'di_kl_wkd_r50',
      'Wasserstein instead of KL, and beside it', WKD_AND_SEED3),
+    (40, 'dj_k_strat_adjacent_r50', 'dk_k_strat_spread_r50',
+     'K with the free widths drawn in blocks: close pairs or far ones',
+     STRATIFIED),
 ]
 
 HEADER = """# {number}. {title}
@@ -1208,7 +1238,8 @@ SUITES_NOW = chr(10).join([
     "          'tests/test_dynas.py',",
     "          'tests/test_feature_start.py',",
     "          'tests/test_amp.py',",
-    "          'tests/test_wkd.py']"])
+    "          'tests/test_wkd.py',",
+    "          'tests/test_stratified.py']"])
 
 A_REF_WAS = chr(10).join([
     "# the published run, for reference",

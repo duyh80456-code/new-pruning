@@ -183,6 +183,14 @@ LEGEND = [
     ('width_sampling=stable', 'Scala: one free width from each half of '
      'the range, on a grid'),
     ('stable_granularity', 'the grid step for stable sampling'),
+    ('width_sampling=stratified', 'the free widths drawn a block of '
+     'steps at a time, one per equal slice of the range, so the block '
+     'covers it evenly'),
+    ('stratified_pairing', "how a block's sorted draws are dealt out: "
+     '`adjacent` gives a step two neighbouring widths and runs the block '
+     'narrow to wide, `spread` gives it one from each half and shuffles '
+     'the steps'),
+    ('stratified_block', 'the number of steps drawn together'),
     ('student_kd_weight', 'the weight on logit KD for every student; 0 '
      'leaves them learning from the label and the transport terms alone'),
     ('student_ce_weight', 'Scala: every student also takes the hard label '

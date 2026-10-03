@@ -944,9 +944,52 @@ def training_widths(epoch, low, high):
         return [high]
     if getattr(FLAGS, 'width_sampling', 'uniform') == 'stable':
         return [high, low] + stable_widths(low, high)
+    if getattr(FLAGS, 'width_sampling', 'uniform') == 'stratified':
+        return [high, low] + stratified_widths(
+            low, high, getattr(FLAGS, 'num_sample_training', 2) - 2)
     free = [sample_width(low, high)
             for _ in range(getattr(FLAGS, 'num_sample_training', 2) - 2)]
     return [high, low] + free
+
+
+_STRATA = []
+
+
+def stratified_widths(low, high, k):
+    """the free widths of one step, drawn for a block of steps at once
+
+    Every stratified_block steps, k * block widths are drawn one per
+    equal slice of [low, high], so the block covers the range evenly
+    instead of by chance, and sorted. stratified_pairing then deals them
+    out:
+
+      adjacent  step m of the block takes the m-th smallest group of k,
+                so the block runs from the narrow end to the wide one and
+                the two free widths of a step sit one slice apart
+      spread    step m takes the m-th, (m + block)-th, ... smallest, one
+                from each 1/k of the range, and the steps are shuffled:
+                the free widths of a step are always far apart, as in
+                Scala's stable sampling
+
+    The two read K's horizontal term from opposite ends: it compares the
+    two free widths, which adjacent makes nearly equal and spread keeps
+    about half the range apart. A resumed run starts a fresh block.
+    """
+    if not _STRATA:
+        block = getattr(FLAGS, 'stratified_block', 10)
+        total = k * block
+        draws = [low + (j + random.random()) / total * (high - low)
+                 for j in range(total)]
+        pairing = getattr(FLAGS, 'stratified_pairing', 'adjacent')
+        if pairing == 'adjacent':
+            groups = [draws[m * k:(m + 1) * k] for m in range(block)]
+        elif pairing == 'spread':
+            groups = [draws[m::block] for m in range(block)]
+            random.shuffle(groups)
+        else:
+            raise ValueError('unknown stratified_pairing {}'.format(pairing))
+        _STRATA.extend(groups)
+    return list(_STRATA.pop(0))
 
 
 def stable_widths(low, high):
