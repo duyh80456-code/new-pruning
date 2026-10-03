@@ -2822,6 +2822,92 @@
         1.0801,
         1.1294
       ]
+    },
+    {
+      "name": "cf_scala_r50",
+      "letter": "CF",
+      "what": "Scala (NeurIPS 2024) on ResNet-50, ported from the authors' code: isolated narrowest width, stable sampling, teacher chain, the label for every width, 10 epochs of the full width alone; published baseline, seed 1995",
+      "top1": [
+        75.33,
+        75.83,
+        76.49,
+        76.82,
+        76.62,
+        76.73,
+        76.63,
+        76.85,
+        76.72,
+        76.96,
+        77.08,
+        77.17,
+        77.34,
+        77.59,
+        76.9,
+        77.75
+      ],
+      "nll": [
+        1.0965,
+        1.0813,
+        1.1138,
+        1.144,
+        1.1721,
+        1.1854,
+        1.2109,
+        1.2258,
+        1.2379,
+        1.2453,
+        1.2468,
+        1.3003,
+        1.3496,
+        1.4166,
+        1.538,
+        1.6547
+      ],
+      "seed": 1995,
+      "minutes": 570
+    },
+    {
+      "name": "cv_alphanet_r50",
+      "letter": "CV",
+      "what": "AlphaNet (ICML 2021) on ResNet-50: BX with the inplace distillation KL replaced by the adaptive alpha-divergence, alpha in [-1, 1], ratios clipped at 5; published baseline, seed 1995",
+      "top1": [
+        74.16,
+        74.6,
+        74.94,
+        75.55,
+        75.61,
+        75.84,
+        76.24,
+        76.27,
+        76.42,
+        76.64,
+        76.88,
+        77.08,
+        77.09,
+        77.12,
+        77.23,
+        77.26
+      ],
+      "nll": [
+        1.3825,
+        1.4212,
+        1.4448,
+        1.455,
+        1.4902,
+        1.5043,
+        1.5182,
+        1.524,
+        1.5249,
+        1.536,
+        1.5395,
+        1.529,
+        1.5229,
+        1.4919,
+        1.4804,
+        1.472
+      ],
+      "seed": 1995,
+      "minutes": 591
     }
   ]
 }
