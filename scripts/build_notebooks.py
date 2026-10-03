@@ -1322,6 +1322,103 @@ A_NOTE_NOW = chr(10).join([
     "run twice at seed 2026 gave 76.46 and 76.07, so a gap under about 0.4",
     "is not yet a result."])
 
+# The final table of notebook 40 on, read against K as well as A
+TABLE_WAS = """widths = sorted({w for table in results.values() for w in table})
+header = '{:>7}{:>9}'.format('width', 'A')
+for branch in BRANCHES:
+    header += '{:>11}{:>8}'.format(branch[:10], 'vs A')
+print(header)
+
+for width in widths:
+    row = '{:>7.2f}{:>9.2f}'.format(width, A_KL.get(width, float('nan')))
+    for branch in BRANCHES:
+        entry = results.get(branch, {}).get(width)
+        if entry is None:
+            row += '{:>11}{:>8}'.format('-', '-')
+            continue
+        accuracy = 100.0 * (1.0 - entry[1])
+        row += '{:>11.2f}{:>+8.2f}'.format(
+            accuracy, accuracy - A_KL.get(width, accuracy))
+    print(row)
+
+print()
+reference = sum(A_KL.values()) / len(A_KL)
+print('{:22} mean {:.2f}   worst {:.2f}'.format(
+    'A (reference)', reference, min(A_KL.values())))
+for branch in BRANCHES:
+    table = results.get(branch, {})
+    if not table:
+        continue
+    accuracies = [100.0 * (1.0 - v[1]) for v in table.values()]
+    mean = sum(accuracies) / len(accuracies)
+    print('{:22} mean {:.2f}   worst {:.2f}   vs A {:+.2f}'.format(
+        branch, mean, min(accuracies), mean - reference))"""
+TABLE_NOW = """# DD: K on ResNet-50 as kept (feature transport from epoch 6), seed 1995
+K_REF = {0.25: 75.63, 0.30: 76.29, 0.35: 76.54, 0.40: 76.97, 0.45: 77.67,
+         0.50: 77.43, 0.55: 77.58, 0.60: 77.62, 0.65: 77.83, 0.70: 78.02,
+         0.75: 78.00, 0.80: 78.01, 0.85: 78.09, 0.90: 78.23, 0.95: 78.08,
+         1.00: 77.95}
+
+widths = sorted({w for table in results.values() for w in table})
+header = '{:>7}{:>8}{:>8}'.format('width', 'A', 'K')
+for branch in BRANCHES:
+    header += '{:>11}{:>7}{:>7}'.format(branch[:10], 'vs A', 'vs K')
+print(header)
+
+for width in widths:
+    row = '{:>7.2f}{:>8.2f}{:>8.2f}'.format(
+        width, A_KL.get(width, float('nan')), K_REF.get(width, float('nan')))
+    for branch in BRANCHES:
+        entry = results.get(branch, {}).get(width)
+        if entry is None:
+            row += '{:>11}{:>7}{:>7}'.format('-', '-', '-')
+            continue
+        accuracy = 100.0 * (1.0 - entry[1])
+        row += '{:>11.2f}{:>+7.2f}{:>+7.2f}'.format(
+            accuracy, accuracy - A_KL.get(width, accuracy),
+            accuracy - K_REF.get(width, accuracy))
+    print(row)
+
+print()
+reference = sum(A_KL.values()) / len(A_KL)
+k_reference = sum(K_REF.values()) / len(K_REF)
+print('{:22} mean {:.2f}   worst {:.2f}'.format(
+    'A (BX)', reference, min(A_KL.values())))
+print('{:22} mean {:.2f}   worst {:.2f}'.format(
+    'K (DD)', k_reference, min(K_REF.values())))
+for branch in BRANCHES:
+    table = results.get(branch, {})
+    if not table:
+        continue
+    accuracies = [100.0 * (1.0 - v[1]) for v in table.values()]
+    mean = sum(accuracies) / len(accuracies)
+    above_k = sum(100.0 * (1.0 - v[1]) > K_REF.get(round(w, 2), 1e9)
+                  for w, v in table.items())
+    print('{:22} mean {:.2f}   worst {:.2f}   vs A {:+.2f}   vs K {:+.2f}'
+          '   above K at {}/{} widths'.format(
+              branch, mean, min(accuracies), mean - reference,
+              mean - k_reference, above_k, len(table)))"""
+RESULTS_MD_WAS = """## Results, against A
+
+A is the number to beat, not C or D. Improving on an ablation of your own
+method is not improving on the paper.
+
+A here is BX, A on ResNet-50 at seed 1995 (mean 76.86). The same config
+run twice at seed 2026 gave 76.46 and 76.07, so a gap under about 0.4
+is not yet a result."""
+RESULTS_MD_NOW = """## Results, against A and K
+
+A is the number to beat, not C or D. Improving on an ablation of your own
+method is not improving on the paper.
+
+A here is BX, A on ResNet-50 at seed 1995 (mean 76.86). The same config
+run twice at seed 2026 gave 76.46 and 76.07, so a gap under about 0.4
+is not yet a result.
+
+K here is DD, K as kept (feature transport from epoch 6) at seed 1995
+(mean 77.50). Every branch in this notebook is a change to K, so "vs K"
+is the column that says whether the change helps."""
+
 for number, left, right, title, preamble in QUEUE:
     nb = json.loads(json.dumps(template))
     for cell in nb['cells']:
@@ -1329,6 +1426,11 @@ for number, left, right, title, preamble in QUEUE:
         if number >= 30:
             for old, new in ((A_REF_WAS, A_REF_NOW),
                              (A_NOTE_WAS, A_NOTE_NOW)):
+                body = body.replace(old, new)
+        # from 40 every branch is a change to K, so read it against K too
+        if number >= 40:
+            for old, new in ((TABLE_WAS, TABLE_NOW),
+                             (RESULTS_MD_WAS, RESULTS_MD_NOW)):
                 body = body.replace(old, new)
         for old, new in ((SUITES_WAS, SUITES_NOW), (GPU_WAS, GPU_NOW),
                          (QUIET_WAS, QUIET_NOW), (CLONE_WAS, CLONE_NOW),
