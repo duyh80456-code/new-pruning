@@ -24,6 +24,12 @@ A_REF = {0.25: 75.26, 0.30: 75.35, 0.35: 75.54, 0.40: 76.01, 0.45: 76.30,
          0.75: 77.39, 0.80: 77.56, 0.85: 77.60, 0.90: 77.99, 0.95: 78.01,
          1.00: 78.04}
 
+# DD, K as kept (feature transport from epoch 6), seed 1995
+K_REF = {0.25: 75.63, 0.30: 76.29, 0.35: 76.54, 0.40: 76.97, 0.45: 77.67,
+         0.50: 77.43, 0.55: 77.58, 0.60: 77.62, 0.65: 77.83, 0.70: 78.02,
+         0.75: 78.00, 0.80: 78.01, 0.85: 78.09, 0.90: 78.23, 0.95: 78.08,
+         1.00: 77.95}
+
 UPSTREAMS = {
     'joslim': ('https://github.com/enyac-group/Joslim.git',
                '9b743d9b50ade9fc2cd33d255dfbb936e4894733', 'Joslim',
@@ -182,27 +188,32 @@ def run_pinned(jobs):
 '''
 
 TABLE = '''A_REF = {a_ref}
+K_REF = {k_ref}
 labels = ['joslim_r50', 'lcs_l_bn']
-print('{{:>7}}{{:>9}}'.format('width', 'A') + ''.join(
-    '{{:>12}}{{:>8}}'.format(b[:11], 'vs A') for b in labels))
+print('{{:>7}}{{:>8}}{{:>8}}'.format('width', 'A', 'K') + ''.join(
+    '{{:>12}}{{:>7}}{{:>7}}'.format(b[:11], 'vs A', 'vs K') for b in labels))
 for width in sorted(A_REF):
-    row = '{{:>7.2f}}{{:>9.2f}}'.format(width, A_REF[width])
+    row = '{{:>7.2f}}{{:>8.2f}}{{:>8.2f}}'.format(
+        width, A_REF[width], K_REF[width])
     for label in labels:
         entry = results.get(label, {{}}).get(width)
         if entry is None:
-            row += '{{:>12}}{{:>8}}'.format('-', '-')
+            row += '{{:>12}}{{:>7}}{{:>7}}'.format('-', '-', '-')
             continue
         accuracy = 100.0 * (1.0 - entry[1])
-        row += '{{:>12.2f}}{{:>+8.2f}}'.format(accuracy, accuracy - A_REF[width])
+        row += '{{:>12.2f}}{{:>+7.2f}}{{:>+7.2f}}'.format(
+            accuracy, accuracy - A_REF[width], accuracy - K_REF[width])
     print(row)
 reference = sum(A_REF.values()) / len(A_REF)
+k_reference = sum(K_REF.values()) / len(K_REF)
 print('\\n{{:24}} mean {{:.2f}}'.format('A (BX)', reference))
+print('{{:24}} mean {{:.2f}}'.format('K (DD)', k_reference))
 for label in labels:
     table = results.get(label, {{}})
     if len(table) == len(A_REF):
         mean = sum(100.0 * (1.0 - v[1]) for v in table.values()) / len(table)
-        print('{{:24}} mean {{:.2f}}   vs A {{:+.2f}}'.format(
-            label, mean, mean - reference))
+        print('{{:24}} mean {{:.2f}}   vs A {{:+.2f}}   vs K {{:+.2f}}'.format(
+            label, mean, mean - reference, mean - k_reference))
     else:
         print('{{:24}} {{}} of 16 widths read'.format(label, len(table)))
 '''
@@ -281,9 +292,9 @@ WORKER_ENV = {{'JOSLIM_WORKERS': '2', 'LCS_WORKERS': '2'}}
     cells = [markdown(head), code(config), code(SETUP), code(DATA),
              code(RUN)]
     cells += [code(step) for step in steps]
-    cells += [markdown('## Results, against A (BX, 76.86)\n\nSend back this '
+    cells += [markdown('## Results, against A (BX, 76.86) and K (DD, 77.50)\n\nSend back this '
                        'table and the `val ... -1/100` lines above it.'),
-              code(TABLE.format(a_ref=repr(A_REF))), code(KEEP)]
+              code(TABLE.format(a_ref=repr(A_REF), k_ref=repr(K_REF))), code(KEEP)]
     nb = {'cells': cells, 'metadata': {
         'kernelspec': {'display_name': 'Python 3', 'language': 'python',
                        'name': 'python3'},
