@@ -23,9 +23,10 @@ def check(cond, what):
     print('ok   ', what)
 
 
-def blocks(pairing, n_blocks=50, block=10):
+def blocks(pairing, n_blocks=50, block=10, draw='slices'):
     FLAGS.width_sampling = 'stratified'
     FLAGS.stratified_pairing = pairing
+    FLAGS.stratified_draw = draw
     FLAGS.stratified_block = block
     FLAGS.num_sample_training = 4
     del loss_ops._STRATA[:]
@@ -71,7 +72,25 @@ def main():
           'spread: mean gap {:.3f}, about half the range'.format(
               sum(gaps) / len(gaps)))
 
+    # plain uniform draws, sorted and dealt out the same two ways
+    adjacent = blocks('adjacent', draw='uniform')
+    check(any(sorted(slice_of(w) for step in b for w in step)
+              != list(range(20)) for b in adjacent),
+          'uniform draw: some block leaves a slice empty, so no slices')
+    check(all([w for s in b for w in s] == sorted(w for s in b for w in s)
+              for b in adjacent),
+          'uniform draw, adjacent: steps take the sorted draws in order')
+    spread = blocks('spread', draw='uniform')
+    check(all(max(min(s) for s in b) <= min(max(s) for s in b)
+              for b in spread),
+          'uniform draw, spread: each step one of the lower ten and one '
+          'of the upper ten')
+    check(any([min(s) for s in b] != sorted(min(s) for s in b)
+              for b in spread),
+          'uniform draw, spread: the steps are shuffled')
+
     FLAGS.width_sampling = 'uniform'
+    FLAGS.stratified_draw = 'slices'
     print('all checks passed')
 
 

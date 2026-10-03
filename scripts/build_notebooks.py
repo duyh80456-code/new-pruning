@@ -988,7 +988,30 @@ A resumed run starts a fresh block of ten steps, which changes nothing
 the comparison depends on. Attach the CIFAR-100 dataset as well.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40}
+BLOCK_UNIFORM = """DJ and DK again, with one change: the 20 widths of each block of ten
+steps are plain uniform draws in [0.25, 1.0], as US-Net makes them, not
+one per twentieth of the range. They are still drawn together, sorted
+and dealt out the same two ways. Both start from DD (K on ResNet-50,
+transport from epoch 6, seed 1995, 77.50).
+
+| | the 20 widths of a block | how they are dealt out |
+|---|---|---|
+| DL | uniform draws, sorted | step m takes the m-th smallest pair: close pairs, narrow to wide |
+| DM | uniform draws, sorted | step m takes the m-th and (m + 10)-th, steps shuffled: far pairs |
+
+**How to read it.** DL against DJ and DM against DK: does covering the
+range evenly matter, or only the pairing. Each against DD: does drawing
+in blocks help K at all. A gap under about 0.4 is not a result.
+
+## Timing
+
+K took about 14 hours on a T4, so these need two sessions. When the
+first ends, Save Version, attach that version's output (pick the version
+number, not Latest) and run again: the notebook finds the checkpoints.
+Attach the CIFAR-100 dataset as well.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1032,6 +1055,9 @@ QUEUE = [
     (40, 'dj_k_strat_adjacent_r50', 'dk_k_strat_spread_r50',
      'K with the free widths drawn in blocks: close pairs or far ones',
      STRATIFIED),
+    (41, 'dl_k_block_adjacent_r50', 'dm_k_block_spread_r50',
+     'K with the free widths drawn in blocks, uniformly: close or far',
+     BLOCK_UNIFORM),
 ]
 
 HEADER = """# {number}. {title}

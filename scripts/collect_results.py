@@ -191,6 +191,8 @@ LEGEND = [
      'narrow to wide, `spread` gives it one from each half and shuffles '
      'the steps'),
     ('stratified_block', 'the number of steps drawn together'),
+    ('stratified_draw=uniform', "the block's widths are plain uniform "
+     'draws, sorted, instead of one per slice'),
     ('student_kd_weight', 'the weight on logit KD for every student; 0 '
      'leaves them learning from the label and the transport terms alone'),
     ('student_ce_weight', 'Scala: every student also takes the hard label '

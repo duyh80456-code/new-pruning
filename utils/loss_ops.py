@@ -974,12 +974,23 @@ def stratified_widths(low, high, k):
     The two read K's horizontal term from opposite ends: it compares the
     two free widths, which adjacent makes nearly equal and spread keeps
     about half the range apart. A resumed run starts a fresh block.
+
+    stratified_draw: uniform drops the slices: the k * block widths are
+    plain uniform draws, as US-Net makes them, only drawn together and
+    sorted before they are dealt out. Against the slices this separates
+    even coverage of the range from the pairing itself.
     """
     if not _STRATA:
         block = getattr(FLAGS, 'stratified_block', 10)
         total = k * block
-        draws = [low + (j + random.random()) / total * (high - low)
-                 for j in range(total)]
+        draw = getattr(FLAGS, 'stratified_draw', 'slices')
+        if draw == 'slices':
+            draws = [low + (j + random.random()) / total * (high - low)
+                     for j in range(total)]
+        elif draw == 'uniform':
+            draws = sorted(random.uniform(low, high) for _ in range(total))
+        else:
+            raise ValueError('unknown stratified_draw {}'.format(draw))
         pairing = getattr(FLAGS, 'stratified_pairing', 'adjacent')
         if pairing == 'adjacent':
             groups = [draws[m * k:(m + 1) * k] for m in range(block)]
