@@ -9,7 +9,7 @@
 # 0.65-1.00. The sandwich rule always runs 0.25 and 1.00, so both heads
 # train every step. More heads means less sharing between widths and
 # fewer updates per head, and the sweep is there to find where those two
-# cross. Read against BX and CH, top-1 and NLL both.
+# cross. Read against BX and CH (77.21), on top-1.
 
 num_gpus_per_job: 1
 num_cpus_per_job: 4

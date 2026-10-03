@@ -638,34 +638,36 @@ its output, set `RESUME_FROM` and run again; CH will calibrate, print its
 table and exit in a minute.
 """
 
-HEAD_SWEEP = """How many classifier heads. Notebook 33 splits the width range into
-four bands with a head each; these split it into **2, 8 and 16**, on A
-only, so that with BX (one head) and CH (four) the number of heads is
-swept at 1, 2, 4, 8, 16. **Notebook 30 has to come back first**, and
-notebook 33 is the one that says whether heads help at all.
+HEAD_SWEEP = """How many classifier heads. SOLAR (WACV 2026) gives every subnet its own
+head; on a continuous width range the range is cut into bands and each
+band gets one. CH, four bands, came back at 77.21, 0.35 above A (BX
+76.86), the closest any published method has come to K (DD 77.50).
+These cut it into **8 and 16**, on A, so with BX and CH the number of
+heads runs 1, 4, 8, 16. At 16 every test width has a head of its own,
+which is SOLAR's one head per subnet as closely as a universally
+slimmable network allows.
 
-| | heads | test widths per head | a middle head trains on |
-|---|---|---|---|
-| BX | 1 | 16 | every step |
-| CJ | 2 | 8 | every step |
-| CH | 4 | 4 | about 44% of steps |
-| CK | 8 | 2 | about 23% of steps |
-| CL | 16 | 1 | about 12% of steps |
+| | heads | test widths per head | a middle head trains on | mean |
+|---|---|---|---|---|
+| BX | 1 | 16 | every step | 76.86 |
+| CH | 4 | 4 | about 44% of steps | 77.21 |
+| CK | 8 | 2 | about 23% of steps | |
+| CL | 16 | 1 | about 12% of steps | |
 
-The trade is in the last two columns. More heads let each band of widths
-set its own logit weights, and give each head fewer updates, because the
-sandwich rule runs only two free widths a step. At 16 every test width
-has its own head and a middle one is trained one step in eight - if that
-starves it, CL will show it at the middle widths first. The network runs
-at any width at every setting; only the bands move.
+The trade is in the middle columns. More heads let each band set its own
+logit weights and give each head fewer updates, because the sandwich
+rule runs only two free widths a step: at 16 a middle head trains one
+step in eight. If that starves it, CL shows it at the middle widths
+first. Each extra head is 2048 x 100, 0.2M parameters.
 
-Why on A and not K: A is half the time of K, and the sweep only has to
-find the number. The best one goes on K afterwards; CI in notebook 33 is
-already K with four.
+**How to read it.** Each against BX and CH: does cutting finer help A.
+The best count is then SOLAR's row in the table against K. CI, K with
+four heads, scored 77.27, level with K without them (BY 77.26).
 
-Each branch is A with one flag changed, so each takes about what A did
-in notebook 30, 10.7 hours, inside one session. Notebook 35 runs CL
-alone and leaves the second card idle.
+## Timing
+
+A with one flag changed: about A's 10.7 hours each, one session.
+Attach the CIFAR-100 dataset.
 """
 
 KNOTS = """K and A on ResNet-50 with **every BN scale and shift a continuous
@@ -1058,6 +1060,8 @@ QUEUE = [
     (41, 'dl_k_block_adjacent_r50', 'dm_k_block_spread_r50',
      'K with the free widths drawn in blocks, uniformly: close or far',
      BLOCK_UNIFORM),
+    (42, 'ck_a_heads8_r50', 'cl_a_heads16_r50',
+     'SOLAR on A: 8 heads and 16', HEAD_SWEEP),
 ]
 
 HEADER = """# {number}. {title}
