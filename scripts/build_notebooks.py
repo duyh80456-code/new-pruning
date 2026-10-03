@@ -1013,7 +1013,35 @@ number, not Latest) and run again: the notebook finds the checkpoints.
 Attach the CIFAR-100 dataset as well.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41}
+K_HEADS = """K with a classifier head per band of widths, SOLAR's idea (WACV 2026)
+on the K that is kept: DD, K on ResNet-50 with the feature transport
+from epoch 6, seed 1995, 77.50. Notebooks 43 and 44 put {pair} on it,
+so with DD (one head) the count runs 1, 2, 4, 8, 16.
+
+| | heads | test widths per head | a middle head trains on |
+|---|---|---|---|
+| DD | 1 | 16 | every step |
+| DN | 2 | 8 | every step |
+| DO | 4 | 4 | about 44% of steps |
+| DP | 8 | 2 | about 23% of steps |
+| DQ | 16 | 1 | about 12% of steps |
+
+**How to read it.** Each against DD: do heads help K. The earlier K with
+four heads (CI, 77.27) was level with that K without them (BY, 77.26),
+so the expectation is no; a gain here would be new. Against A with the
+same heads (CH 77.21 at 4; CK and CL at 8 and 16 in notebook 42): does
+K keep its lead when both have them. A gap under about 0.4 is not a
+result.
+
+## Timing
+
+K took about 14 hours on a T4, so these need two sessions. When the
+first ends, Save Version, attach that version's output (pick the version
+number, not Latest) and run again: the notebook finds the checkpoints.
+Attach the CIFAR-100 dataset as well.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 43, 44}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1062,6 +1090,10 @@ QUEUE = [
      BLOCK_UNIFORM),
     (42, 'ck_a_heads8_r50', 'cl_a_heads16_r50',
      'SOLAR on A: 8 heads and 16', HEAD_SWEEP),
+    (43, 'dn_k_late_heads2_r50', 'do_k_late_heads4_r50',
+     'K with 2 heads and 4', K_HEADS.replace('{pair}', '2 and 4 heads')),
+    (44, 'dp_k_late_heads8_r50', 'dq_k_late_heads16_r50',
+     'K with 8 heads and 16', K_HEADS.replace('{pair}', '8 and 16 heads')),
 ]
 
 HEADER = """# {number}. {title}
