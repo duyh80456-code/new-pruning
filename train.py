@@ -640,6 +640,30 @@ def run_model(model, input):
 _DYNAS = {}
 
 
+@torch.no_grad()
+def sam_ascend(model, rho):
+    """move every weight that has a gradient to w + rho g / |g| and say by
+    how much, so sam_descend can put it back; the gradients are left for
+    the second pass to overwrite"""
+    params = [p for p in model.parameters() if p.grad is not None]
+    norm = torch.norm(torch.stack([p.grad.detach().norm(2) for p in params]))
+    scale = rho / (norm + 1e-12)
+    moved = []
+    for param in params:
+        step = param.grad * scale
+        param.add_(step)
+        moved.append((param, step))
+    return moved
+
+
+@torch.no_grad()
+def sam_descend(moved):
+    """back to w, where the optimizer steps with the second pass's
+    gradient"""
+    for param, step in moved:
+        param.sub_(step)
+
+
 def check_dynas():
     """DYNAS steps each width as soon as its gradient exists, so it serves
     the plain per-width backward of the US-Net branch and nothing that
@@ -818,375 +842,393 @@ def run_one_epoch(
         if train:
             # change learning rate if necessary
             lr_schedule_per_iteration(optimizer, epoch, batch_idx)
-            optimizer.zero_grad()
-            if getattr(FLAGS, 'slimmable_training', False):
-                if getattr(FLAGS, 'universally_slimmable_training', False):
-                    # universally slimmable model (us-nets)
-                    # where the free samples land is width_sampling,
-                    # which US-Net left uniform without saying why
-                    # Hold the narrow end back for the first epochs, so
-                    # that the ordering of the channels stays arbitrary
-                    # while the weights become worth ranking. Without it
-                    # the two happen together: what makes a criterion
-                    # meaningful here is the prefix taking gradient at
-                    # every width, which is also what sorts it, so there
-                    # is no moment at which a permutation has both a
-                    # signal to use and something left to move. This is
-                    # what Once-for-All gets for free by making width
-                    # elastic last.
-                    # one width during the warm-up, so those epochs
-                    # cost less than a sandwich step rather than more:
-                    # the branch spends less total compute than the run
-                    # it is compared against, not more
-                    widths_train = training_widths(
-                        epoch, min_width, max_width)
-                    if getattr(FLAGS, 'teacher_chain', False):
-                        # each width is taught by the next larger one, so
-                        # they have to run widest first. mid_widths is put
-                        # back in the order horizontal_pairs documents
-                        # once the loop is done.
-                        widths_train = sorted(widths_train, reverse=True)
-                    # the class cost matrix is read off the classifier, which
-                    # keeps moving, so refresh it before the widths are run
-                    if wkd:
-                        # their 'fc' cost, from the shared classifier
-                        soft_criterion.set_cost(get_classifier_weight(model))
-                    if needs_cost:
-                        cost = build_cost_matrix(model, confusion)
-                        if isinstance(soft_criterion, WassersteinLossSoft):
-                            soft_criterion.set_cost(cost)
-                        if isinstance(pair_criterion, WassersteinPairLoss):
-                            pair_criterion.set_cost(cost)
-                    # with a horizontal term the graphs of two widths have to
-                    # be alive at the same time, so backward is deferred to
-                    # the end of the loop. Summing first and calling backward
-                    # once is arithmetically what the per-width backward did,
-                    # it only costs memory
-                    deferred = (pair_criterion is not None
-                                or feature_pair_criterion is not None
-                                or getattr(FLAGS, 'ensemble_teacher', False))
-                    # the classwise form needs this batch's labels, set
-                    # once a step the way the class cost matrix is
-                    for term in (feature_criterion, feature_pair_criterion):
-                        if isinstance(term, ClasswiseFeatureLoss):
-                            term.set_target(target)
-                    losses = []
-                    mid_outputs = []
-                    mid_features = []
-                    mid_widths = []
-                    teacher_feature = None
-                    # No teacher until a width at least as wide as this
-                    # one has run. Every sampler until now returned the
-                    # widest width first or alone, so this was always set
-                    # by the time the else branch below read it; a
-                    # narrow-first curriculum returns [low] alone and
-                    # nothing sets it, which is an UnboundLocalError on
-                    # the first step rather than a wrong number.
-                    chain_target = None
-                    # One graph at a time instead of one per width. The
-                    # pair term is the only thing that needs two widths
-                    # alive together, and its gradient splits exactly into
-                    # a part through each side: dP(a, b) is dP/da da plus
-                    # dP/db db. So each width can take its own part with
-                    # the partner detached and be freed at once - the
-                    # deferred gradient, up to the order floats are added
-                    # in. The cost is the partner's value before the
-                    # partner has run: one forward without a graph per
-                    # pair. A width in the middle keeps no BN statistics,
-                    # so that forward has no side effects. ResNet-50 needs
-                    # this: K deferred four graphs to 19.3 GB at batch 256
-                    # and a T4 has 15.
-                    split = deferred and getattr(
-                        FLAGS, 'split_pair_backward', False)
-                    conflict = None
-                    if getattr(FLAGS, 'conflict_from_epoch', None) is not None:
-                        if deferred:
-                            raise ValueError(
-                                'conflict_from_epoch needs the widest '
-                                'width to backward on its own, and a '
-                                'deferred step sums every width first')
-                        if getattr(FLAGS, 'amp', False):
-                            raise ValueError(
-                                'conflict_from_epoch reads gradients '
-                                'before amp unscales them')
-                        conflict = GradientConflict()
-                    if split:
-                        if getattr(FLAGS, 'ensemble_teacher', False):
-                            raise ValueError(
-                                'split_pair_backward cannot serve '
-                                'ensemble_teacher, whose target reads every '
-                                'width through its graph at once')
-                        deferred = False
-                        # the pairing the deferred path computes: the
-                        # non-teacher widths in run order, re-sorted
-                        # ascending under teacher_chain
-                        order = [i for i, w in enumerate(widths_train)
-                                 if w != max_width]
+            # sam_rho: Sharpness-Aware Minimization (Foret et al., ICLR
+            # 2021). The step below runs twice: the first pass leaves the
+            # gradient g at w, the weights move to w + rho g / |g|, the
+            # second pass, on the same batch and the same widths, leaves
+            # the gradient there, and the weights go back to w for the
+            # optimizer to step with it. Off by default.
+            sam_rho = getattr(FLAGS, 'sam_rho', 0.0) if train else 0.0
+            sam_widths = None
+            sam_moved = None
+            for sam_pass in range(2 if sam_rho else 1):
+                if sam_pass:
+                    sam_moved = sam_ascend(model, sam_rho)
+                optimizer.zero_grad()
+                if getattr(FLAGS, 'slimmable_training', False):
+                    if getattr(FLAGS, 'universally_slimmable_training', False):
+                        # universally slimmable model (us-nets)
+                        # where the free samples land is width_sampling,
+                        # which US-Net left uniform without saying why
+                        # Hold the narrow end back for the first epochs, so
+                        # that the ordering of the channels stays arbitrary
+                        # while the weights become worth ranking. Without it
+                        # the two happen together: what makes a criterion
+                        # meaningful here is the prefix taking gradient at
+                        # every width, which is also what sorts it, so there
+                        # is no moment at which a permutation has both a
+                        # signal to use and something left to move. This is
+                        # what Once-for-All gets for free by making width
+                        # elastic last.
+                        # one width during the warm-up, so those epochs
+                        # cost less than a sandwich step rather than more:
+                        # the branch spends less total compute than the run
+                        # it is compared against, not more
+                        # SAM's second pass runs the widths the first drew
+                        widths_train = (
+                            list(sam_widths) if sam_widths is not None
+                            else training_widths(epoch, min_width,
+                                                 max_width))
+                        sam_widths = list(widths_train)
                         if getattr(FLAGS, 'teacher_chain', False):
-                            order = sorted(order,
-                                           key=lambda i: widths_train[i])
-                        split_pairs = [
-                            (order[i], order[j]) for i, j in
-                            horizontal_pairs(
-                                [widths_train[k] for k in order])]
-                        pairs_at = {}
-                        for pair in split_pairs:
-                            for i in pair:
-                                pairs_at.setdefault(i, []).append(pair)
-                        # the later of each pair is read ahead, for the
-                        # earlier one to be charged against
-                        known = {}
-                        with torch.no_grad():
-                            for i in sorted({max(pair)
-                                             for pair in split_pairs}):
+                            # each width is taught by the next larger one, so
+                            # they have to run widest first. mid_widths is put
+                            # back in the order horizontal_pairs documents
+                            # once the loop is done.
+                            widths_train = sorted(widths_train, reverse=True)
+                        # the class cost matrix is read off the classifier, which
+                        # keeps moving, so refresh it before the widths are run
+                        if wkd:
+                            # their 'fc' cost, from the shared classifier
+                            soft_criterion.set_cost(get_classifier_weight(model))
+                        if needs_cost:
+                            cost = build_cost_matrix(model, confusion)
+                            if isinstance(soft_criterion, WassersteinLossSoft):
+                                soft_criterion.set_cost(cost)
+                            if isinstance(pair_criterion, WassersteinPairLoss):
+                                pair_criterion.set_cost(cost)
+                        # with a horizontal term the graphs of two widths have to
+                        # be alive at the same time, so backward is deferred to
+                        # the end of the loop. Summing first and calling backward
+                        # once is arithmetically what the per-width backward did,
+                        # it only costs memory
+                        deferred = (pair_criterion is not None
+                                    or feature_pair_criterion is not None
+                                    or getattr(FLAGS, 'ensemble_teacher', False))
+                        # the classwise form needs this batch's labels, set
+                        # once a step the way the class cost matrix is
+                        for term in (feature_criterion, feature_pair_criterion):
+                            if isinstance(term, ClasswiseFeatureLoss):
+                                term.set_target(target)
+                        losses = []
+                        mid_outputs = []
+                        mid_features = []
+                        mid_widths = []
+                        teacher_feature = None
+                        # No teacher until a width at least as wide as this
+                        # one has run. Every sampler until now returned the
+                        # widest width first or alone, so this was always set
+                        # by the time the else branch below read it; a
+                        # narrow-first curriculum returns [low] alone and
+                        # nothing sets it, which is an UnboundLocalError on
+                        # the first step rather than a wrong number.
+                        chain_target = None
+                        # One graph at a time instead of one per width. The
+                        # pair term is the only thing that needs two widths
+                        # alive together, and its gradient splits exactly into
+                        # a part through each side: dP(a, b) is dP/da da plus
+                        # dP/db db. So each width can take its own part with
+                        # the partner detached and be freed at once - the
+                        # deferred gradient, up to the order floats are added
+                        # in. The cost is the partner's value before the
+                        # partner has run: one forward without a graph per
+                        # pair. A width in the middle keeps no BN statistics,
+                        # so that forward has no side effects. ResNet-50 needs
+                        # this: K deferred four graphs to 19.3 GB at batch 256
+                        # and a T4 has 15.
+                        split = deferred and getattr(
+                            FLAGS, 'split_pair_backward', False)
+                        conflict = None
+                        if getattr(FLAGS, 'conflict_from_epoch', None) is not None:
+                            if deferred:
+                                raise ValueError(
+                                    'conflict_from_epoch needs the widest '
+                                    'width to backward on its own, and a '
+                                    'deferred step sums every width first')
+                            if getattr(FLAGS, 'amp', False):
+                                raise ValueError(
+                                    'conflict_from_epoch reads gradients '
+                                    'before amp unscales them')
+                            conflict = GradientConflict()
+                        if split:
+                            if getattr(FLAGS, 'ensemble_teacher', False):
+                                raise ValueError(
+                                    'split_pair_backward cannot serve '
+                                    'ensemble_teacher, whose target reads every '
+                                    'width through its graph at once')
+                            deferred = False
+                            # the pairing the deferred path computes: the
+                            # non-teacher widths in run order, re-sorted
+                            # ascending under teacher_chain
+                            order = [i for i, w in enumerate(widths_train)
+                                     if w != max_width]
+                            if getattr(FLAGS, 'teacher_chain', False):
+                                order = sorted(order,
+                                               key=lambda i: widths_train[i])
+                            split_pairs = [
+                                (order[i], order[j]) for i, j in
+                                horizontal_pairs(
+                                    [widths_train[k] for k in order])]
+                            pairs_at = {}
+                            for pair in split_pairs:
+                                for i in pair:
+                                    pairs_at.setdefault(i, []).append(pair)
+                            # the later of each pair is read ahead, for the
+                            # earlier one to be charged against
+                            known = {}
+                            with torch.no_grad():
+                                for i in sorted({max(pair)
+                                                 for pair in split_pairs}):
+                                    model.apply(lambda m: setattr(
+                                        m, 'width_mult', widths_train[i]))
+                                    ahead = run_model(model, input)
+                                    known[i] = (ahead if isinstance(ahead, tuple)
+                                                else (ahead, None))
+                            split_logged = 0.0
+                        for position, width_mult in enumerate(widths_train):
+                            # the sandwich rule
+                            if width_mult in [max_width, min_width]:
+                                model.apply(
+                                    lambda m: setattr(m, 'width_mult', width_mult))
+                            elif getattr(FLAGS, 'nonuniform', False):
                                 model.apply(lambda m: setattr(
-                                    m, 'width_mult', widths_train[i]))
-                                ahead = run_model(model, input)
-                                known[i] = (ahead if isinstance(ahead, tuple)
-                                            else (ahead, None))
-                        split_logged = 0.0
-                    for position, width_mult in enumerate(widths_train):
-                        # the sandwich rule
-                        if width_mult in [max_width, min_width]:
+                                    m, 'width_mult',
+                                    lambda: random.uniform(min_width, max_width)))
+                            else:
+                                model.apply(lambda m: setattr(
+                                    m, 'width_mult',
+                                    width_mult))
+
+                            # always track largest model and smallest model
+                            if is_master() and width_mult in [
+                                    max_width, min_width]:
+                                meter = meters[str(width_mult)]
+                            else:
+                                meter = None
+
+                            # inplace distillation. chain_target is what
+                            # this width learns from: the widest width
+                            # normally, the previous one under teacher_chain.
+                            if width_mult == max_width:
+                                (loss, soft_target, teacher_feature,
+                                 teacher_output) = forward_loss(
+                                    model, criterion, input, target, meter,
+                                    return_soft_target=True, return_output=True)
+                                if wkd:
+                                    soft_criterion.set_teacher(
+                                        teacher_output, target)
+                                if confusion is not None:
+                                    confusion.update(soft_target.detach(), target)
+                                # once a step, not once a width: the rows are
+                                # shared by every width, so charging it four
+                                # times would only rescale it
+                                chain_target = soft_target
+                                teacher_net = ema_teacher(model)
+                                if teacher_net is not None:
+                                    chain_target = ema_target(
+                                        teacher_net, input, width_mult)
+                                if spread_criterion is not None:
+                                    loss = loss + (
+                                        getattr(FLAGS, 'spread_weight', 0.0)
+                                        * spread_criterion(
+                                            get_classifier_weight(model)))
+                            else:
+                                if (getattr(FLAGS, 'inplace_distill', False)
+                                        and chain_target is not None):
+                                    loss, output, feature = forward_loss(
+                                        model, criterion, input, target,
+                                        meter,
+                                        soft_target=chain_target.detach(),
+                                        soft_criterion=soft_criterion,
+                                        return_output=True)
+                                else:
+                                    loss, output, feature = forward_loss(
+                                        model, criterion, input, target,
+                                        meter, return_output=True)
+                                if getattr(FLAGS, 'teacher_chain', False):
+                                    # the next width down learns from this one
+                                    # rather than from the widest, so the gap
+                                    # the soft target has to describe is small
+                                    with torch.no_grad():
+                                        hot = getattr(FLAGS, 'kd_temperature',
+                                                      1.0)
+                                        chain_target = torch.softmax(
+                                            output / hot, dim=1)
+                                # vertical term at the feature level, alongside
+                                # whatever the logits are being matched with
+                                if (feature_criterion is not None
+                                        and teacher_feature is not None
+                                        and transport_on):
+                                    loss = loss + (
+                                        getattr(FLAGS, 'feature_weight', 1.0)
+                                        * width_gate(width_mult)
+                                        * feature_criterion(
+                                            feature,
+                                            tuple(t.detach()
+                                                  for t in teacher_feature)))
+                                if (split and position in pairs_at
+                                        and transport_on):
+                                    share = 0.0
+                                    for left, right in pairs_at[position]:
+                                        one = ((output, feature)
+                                               if left == position
+                                               else known[left])
+                                        two = ((output, feature)
+                                               if right == position
+                                               else known[right])
+                                        gated = width_gate(0.5 * (
+                                            widths_train[left]
+                                            + widths_train[right])) * pair_term(
+                                                pair_criterion,
+                                                feature_pair_criterion,
+                                                one[0], one[1], two[0], two[1])
+                                        share = share + gated
+                                        # logged once, by whichever side runs
+                                        # second
+                                        if position == max(left, right):
+                                            split_logged = (split_logged
+                                                            + gated.detach())
+                                    loss = loss + (
+                                        getattr(FLAGS, 'horizontal_weight', 1.0)
+                                        * share / len(split_pairs))
+                                    known[position] = (
+                                        output.detach(),
+                                        None if feature is None else tuple(
+                                            t.detach() for t in feature))
+                                # every width but the teacher is a peer of
+                                # every other: none of them stands in a
+                                # teacher-student relation to another, which is
+                                # the whole argument for coupling them. Which
+                                # pairs are actually used is horizontal_pairs.
+                                if deferred:
+                                    mid_outputs.append(output)
+                                    mid_features.append(feature)
+                                    mid_widths.append(width_mult)
+                            if deferred:
+                                losses.append(loss)
+                            else:
+                                backward(loss)
+                                if 'dynas' in _DYNAS:
+                                    # this width's update, through its own
+                                    # group's momentum at its own rate
+                                    _DYNAS['rate'][width_mult] = (
+                                        _DYNAS['dynas'].step(
+                                            model, width_mult, epoch, batch_idx))
+                                if (conflict is not None
+                                        and width_mult == max_width):
+                                    conflict.hold(model)
+                        if conflict is not None:
+                            conflict.merge(model, epoch)
+                        if (split and split_pairs and transport_on
+                                and is_master()):
+                            meters[str(max_width)]['pair_loss'].cache(
+                                (split_logged / len(split_pairs)).item())
+                        if deferred:
+                            if getattr(FLAGS, 'teacher_chain', False):
+                                # the loop ran widest first; horizontal_pairs
+                                # documents narrowest first, so undo it here
+                                # rather than let the pairing quietly change
+                                order = sorted(range(len(mid_widths)),
+                                               key=lambda i: mid_widths[i])
+                                mid_widths = [mid_widths[i] for i in order]
+                                mid_outputs = [mid_outputs[i] for i in order]
+                                mid_features = [mid_features[i] for i in order]
+                            pair_loss = 0.0
+                            pairs = (horizontal_pairs(mid_widths)
+                                     if transport_on else [])
+                            for left, right in pairs:
+                                here = pair_term(
+                                    pair_criterion, feature_pair_criterion,
+                                    mid_outputs[left], mid_features[left],
+                                    mid_outputs[right], mid_features[right])
+                                # each pair spans two widths, so the schedule
+                                # reads the middle of that pair, not of the set
+                                pair_loss = pair_loss + width_gate(
+                                    0.5 * (mid_widths[left]
+                                           + mid_widths[right])) * here
+                            # A warm-up epoch runs the widest width alone,
+                            # so there are no middle widths, no pairs, and
+                            # pair_loss is still the float it was initialised
+                            # to. Adding that to losses is a no-op and calling
+                            # .item() on it is an AttributeError, which is
+                            # how bd and be died on their first real epoch.
+                            # The term is skipped rather than cached as a
+                            # zero, because a zero would read as a pair term
+                            # that ran and had nothing to say.
+                            # flush_scalar_meters drops the empty meter, so a
+                            # warm-up epoch simply has no pair_loss on its
+                            # line.
+                            if pairs:
+                                # averaged, so horizontal_weight keeps its
+                                # meaning when the number of pairs changes
+                                pair_loss = pair_loss / len(pairs)
+                                losses.append(
+                                    getattr(FLAGS, 'horizontal_weight', 1.0)
+                                    * pair_loss)
+                                if is_master():
+                                    meters[str(max_width)]['pair_loss'].cache(
+                                        pair_loss.item())
+                            # every sampled width learns from the mean of
+                            # what all of them said, the widest included.
+                            # US-Net trains the widest on the hard label alone
+                            # and makes it the sole teacher; EED's ablation
+                            # puts that configuration last of the five it
+                            # tried, and CoQuant's puts always-the-widest
+                            # fifth of six. Both found the weakest member
+                            # carries information the strongest one does not.
+                            if (getattr(FLAGS, 'ensemble_teacher', False)
+                                    and mid_outputs):
+                                hot = getattr(FLAGS, 'kd_temperature', 1.0)
+                                with torch.no_grad():
+                                    probs = [soft_target] + [
+                                        torch.nn.functional.softmax(o / hot, dim=1)
+                                        for o in mid_outputs]
+                                    mean_target = sum(probs) / len(probs)
+                                ens = 0.0
+                                for logits in [teacher_output] + mid_outputs:
+                                    ens = ens + (hot * hot) * torch.mean(
+                                        soft_criterion(logits / hot, mean_target))
+                                ens = ens / (1 + len(mid_outputs))
+                                losses.append(
+                                    getattr(FLAGS, 'ensemble_weight', 1.0) * ens)
+                                if is_master():
+                                    meters[str(max_width)]['ens_loss'].cache(
+                                        ens.item())
+                            loss = sum(losses)
+                            backward(loss)
+                    else:
+                        # slimmable model (s-nets)
+                        for width_mult in sorted(
+                                FLAGS.width_mult_list, reverse=True):
                             model.apply(
                                 lambda m: setattr(m, 'width_mult', width_mult))
-                        elif getattr(FLAGS, 'nonuniform', False):
-                            model.apply(lambda m: setattr(
-                                m, 'width_mult',
-                                lambda: random.uniform(min_width, max_width)))
-                        else:
-                            model.apply(lambda m: setattr(
-                                m, 'width_mult',
-                                width_mult))
-
-                        # always track largest model and smallest model
-                        if is_master() and width_mult in [
-                                max_width, min_width]:
-                            meter = meters[str(width_mult)]
-                        else:
-                            meter = None
-
-                        # inplace distillation. chain_target is what
-                        # this width learns from: the widest width
-                        # normally, the previous one under teacher_chain.
-                        if width_mult == max_width:
-                            (loss, soft_target, teacher_feature,
-                             teacher_output) = forward_loss(
-                                model, criterion, input, target, meter,
-                                return_soft_target=True, return_output=True)
-                            if wkd:
-                                soft_criterion.set_teacher(
-                                    teacher_output, target)
-                            if confusion is not None:
-                                confusion.update(soft_target.detach(), target)
-                            # once a step, not once a width: the rows are
-                            # shared by every width, so charging it four
-                            # times would only rescale it
-                            chain_target = soft_target
-                            teacher_net = ema_teacher(model)
-                            if teacher_net is not None:
-                                chain_target = ema_target(
-                                    teacher_net, input, width_mult)
-                            if spread_criterion is not None:
-                                loss = loss + (
-                                    getattr(FLAGS, 'spread_weight', 0.0)
-                                    * spread_criterion(
-                                        get_classifier_weight(model)))
-                        else:
-                            if (getattr(FLAGS, 'inplace_distill', False)
-                                    and chain_target is not None):
-                                loss, output, feature = forward_loss(
-                                    model, criterion, input, target,
-                                    meter,
-                                    soft_target=chain_target.detach(),
-                                    soft_criterion=soft_criterion,
-                                    return_output=True)
+                            if is_master():
+                                meter = meters[str(width_mult)]
                             else:
-                                loss, output, feature = forward_loss(
-                                    model, criterion, input, target,
-                                    meter, return_output=True)
-                            if getattr(FLAGS, 'teacher_chain', False):
-                                # the next width down learns from this one
-                                # rather than from the widest, so the gap
-                                # the soft target has to describe is small
-                                with torch.no_grad():
-                                    hot = getattr(FLAGS, 'kd_temperature',
-                                                  1.0)
-                                    chain_target = torch.softmax(
-                                        output / hot, dim=1)
-                            # vertical term at the feature level, alongside
-                            # whatever the logits are being matched with
-                            if (feature_criterion is not None
-                                    and teacher_feature is not None
-                                    and transport_on):
-                                loss = loss + (
-                                    getattr(FLAGS, 'feature_weight', 1.0)
-                                    * width_gate(width_mult)
-                                    * feature_criterion(
-                                        feature,
-                                        tuple(t.detach()
-                                              for t in teacher_feature)))
-                            if (split and position in pairs_at
-                                    and transport_on):
-                                share = 0.0
-                                for left, right in pairs_at[position]:
-                                    one = ((output, feature)
-                                           if left == position
-                                           else known[left])
-                                    two = ((output, feature)
-                                           if right == position
-                                           else known[right])
-                                    gated = width_gate(0.5 * (
-                                        widths_train[left]
-                                        + widths_train[right])) * pair_term(
-                                            pair_criterion,
-                                            feature_pair_criterion,
-                                            one[0], one[1], two[0], two[1])
-                                    share = share + gated
-                                    # logged once, by whichever side runs
-                                    # second
-                                    if position == max(left, right):
-                                        split_logged = (split_logged
-                                                        + gated.detach())
-                                loss = loss + (
-                                    getattr(FLAGS, 'horizontal_weight', 1.0)
-                                    * share / len(split_pairs))
-                                known[position] = (
-                                    output.detach(),
-                                    None if feature is None else tuple(
-                                        t.detach() for t in feature))
-                            # every width but the teacher is a peer of
-                            # every other: none of them stands in a
-                            # teacher-student relation to another, which is
-                            # the whole argument for coupling them. Which
-                            # pairs are actually used is horizontal_pairs.
-                            if deferred:
-                                mid_outputs.append(output)
-                                mid_features.append(feature)
-                                mid_widths.append(width_mult)
-                        if deferred:
-                            losses.append(loss)
-                        else:
-                            backward(loss)
-                            if 'dynas' in _DYNAS:
-                                # this width's update, through its own
-                                # group's momentum at its own rate
-                                _DYNAS['rate'][width_mult] = (
-                                    _DYNAS['dynas'].step(
-                                        model, width_mult, epoch, batch_idx))
-                            if (conflict is not None
-                                    and width_mult == max_width):
-                                conflict.hold(model)
-                    if conflict is not None:
-                        conflict.merge(model, epoch)
-                    if (split and split_pairs and transport_on
-                            and is_master()):
-                        meters[str(max_width)]['pair_loss'].cache(
-                            (split_logged / len(split_pairs)).item())
-                    if deferred:
-                        if getattr(FLAGS, 'teacher_chain', False):
-                            # the loop ran widest first; horizontal_pairs
-                            # documents narrowest first, so undo it here
-                            # rather than let the pairing quietly change
-                            order = sorted(range(len(mid_widths)),
-                                           key=lambda i: mid_widths[i])
-                            mid_widths = [mid_widths[i] for i in order]
-                            mid_outputs = [mid_outputs[i] for i in order]
-                            mid_features = [mid_features[i] for i in order]
-                        pair_loss = 0.0
-                        pairs = (horizontal_pairs(mid_widths)
-                                 if transport_on else [])
-                        for left, right in pairs:
-                            here = pair_term(
-                                pair_criterion, feature_pair_criterion,
-                                mid_outputs[left], mid_features[left],
-                                mid_outputs[right], mid_features[right])
-                            # each pair spans two widths, so the schedule
-                            # reads the middle of that pair, not of the set
-                            pair_loss = pair_loss + width_gate(
-                                0.5 * (mid_widths[left]
-                                       + mid_widths[right])) * here
-                        # A warm-up epoch runs the widest width alone,
-                        # so there are no middle widths, no pairs, and
-                        # pair_loss is still the float it was initialised
-                        # to. Adding that to losses is a no-op and calling
-                        # .item() on it is an AttributeError, which is
-                        # how bd and be died on their first real epoch.
-                        # The term is skipped rather than cached as a
-                        # zero, because a zero would read as a pair term
-                        # that ran and had nothing to say.
-                        # flush_scalar_meters drops the empty meter, so a
-                        # warm-up epoch simply has no pair_loss on its
-                        # line.
-                        if pairs:
-                            # averaged, so horizontal_weight keeps its
-                            # meaning when the number of pairs changes
-                            pair_loss = pair_loss / len(pairs)
-                            losses.append(
-                                getattr(FLAGS, 'horizontal_weight', 1.0)
-                                * pair_loss)
-                            if is_master():
-                                meters[str(max_width)]['pair_loss'].cache(
-                                    pair_loss.item())
-                        # every sampled width learns from the mean of
-                        # what all of them said, the widest included.
-                        # US-Net trains the widest on the hard label alone
-                        # and makes it the sole teacher; EED's ablation
-                        # puts that configuration last of the five it
-                        # tried, and CoQuant's puts always-the-widest
-                        # fifth of six. Both found the weakest member
-                        # carries information the strongest one does not.
-                        if (getattr(FLAGS, 'ensemble_teacher', False)
-                                and mid_outputs):
-                            hot = getattr(FLAGS, 'kd_temperature', 1.0)
-                            with torch.no_grad():
-                                probs = [soft_target] + [
-                                    torch.nn.functional.softmax(o / hot, dim=1)
-                                    for o in mid_outputs]
-                                mean_target = sum(probs) / len(probs)
-                            ens = 0.0
-                            for logits in [teacher_output] + mid_outputs:
-                                ens = ens + (hot * hot) * torch.mean(
-                                    soft_criterion(logits / hot, mean_target))
-                            ens = ens / (1 + len(mid_outputs))
-                            losses.append(
-                                getattr(FLAGS, 'ensemble_weight', 1.0) * ens)
-                            if is_master():
-                                meters[str(max_width)]['ens_loss'].cache(
-                                    ens.item())
-                        loss = sum(losses)
-                        backward(loss)
-                else:
-                    # slimmable model (s-nets)
-                    for width_mult in sorted(
-                            FLAGS.width_mult_list, reverse=True):
-                        model.apply(
-                            lambda m: setattr(m, 'width_mult', width_mult))
-                        if is_master():
-                            meter = meters[str(width_mult)]
-                        else:
-                            meter = None
-                        if width_mult == max_width:
-                            loss, soft_target, _ = forward_loss(
-                                model, criterion, input, target, meter,
-                                return_soft_target=True)
-                        else:
-                            if getattr(FLAGS, 'inplace_distill', False):
-                                loss = forward_loss(
+                                meter = None
+                            if width_mult == max_width:
+                                loss, soft_target, _ = forward_loss(
                                     model, criterion, input, target, meter,
-                                    soft_target=soft_target.detach(),
-                                    soft_criterion=soft_criterion)
+                                    return_soft_target=True)
                             else:
-                                loss = forward_loss(
-                                    model, criterion, input, target, meter)
-                        backward(loss)
-            else:
-                loss = forward_loss(
-                    model, criterion, input, target, meters)
-                backward(loss)
-            if (getattr(FLAGS, 'distributed', False)
-                    and getattr(FLAGS, 'distributed_all_reduce', False)):
-                allreduce_grads(model)
+                                if getattr(FLAGS, 'inplace_distill', False):
+                                    loss = forward_loss(
+                                        model, criterion, input, target, meter,
+                                        soft_target=soft_target.detach(),
+                                        soft_criterion=soft_criterion)
+                                else:
+                                    loss = forward_loss(
+                                        model, criterion, input, target, meter)
+                            backward(loss)
+                else:
+                    loss = forward_loss(
+                        model, criterion, input, target, meters)
+                    backward(loss)
+                if (getattr(FLAGS, 'distributed', False)
+                        and getattr(FLAGS, 'distributed_all_reduce', False)):
+                    allreduce_grads(model)
+            if sam_moved is not None:
+                sam_descend(sam_moved)
             # Four losses are summed into one step and the KD terms are not
             # all bounded the way cross entropy is, so a single bad batch
             # early on can take the weights somewhere they never come back
@@ -1427,6 +1469,11 @@ def train_val_test():
         print('Training only {}: {:.2f}M parameters.'.format(
             train_only, kept / 1e6))
 
+    if getattr(FLAGS, 'sam_rho', 0.0) and (
+            getattr(FLAGS, 'dynas', False) or getattr(FLAGS, 'amp', False)):
+        # dynas steps each width inside the pass and amp scales the
+        # gradient that SAM reads its direction from
+        raise ValueError('sam_rho does not combine with dynas or amp')
     optimizer = get_optimizer(model_wrapper)
     if getattr(FLAGS, 'dynas', False):
         check_dynas()

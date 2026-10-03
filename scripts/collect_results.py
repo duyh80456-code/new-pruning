@@ -200,6 +200,9 @@ LEGEND = [
      'optimizer'),
     ('pretrained', 'the run starts from these weights; keys a newer '
      'model adds keep their initial values'),
+    ('sam_rho', 'Sharpness-Aware Minimization: each step runs twice, at '
+     'the weights and at the worst nearby point rho away along the '
+     'gradient, and steps with the second gradient'),
     ('stratified_draw=uniform', "the block's widths are plain uniform "
      'draws, sorted, instead of one per slice'),
     ('student_kd_weight', 'the weight on logit KD for every student; 0 '

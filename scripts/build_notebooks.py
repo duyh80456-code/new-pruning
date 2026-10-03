@@ -1107,7 +1107,40 @@ added afterwards or grown with K. A gap under about 0.4 is not a result.
 20 epochs of K with the backbone frozen: about three hours, one session.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44}
+SAM_K = """K trained with Sharpness-Aware Minimization (Foret et al., ICLR 2021).
+Notebook 45 showed where K's remaining room is: a trained K sits at about
+0% train error, so width-private weights fitted to the same data added
+nothing, and what is left is generalisation. SAM targets exactly that:
+every step it computes the gradient g at the weights w, moves to the
+nearby point w + rho g/|g| where the loss is worst, takes the gradient
+there, and steps from w with it, so training settles where the loss is
+flat rather than in a sharp minimum. In SAM's paper, CIFAR-100 with the
+same basic augmentation as here gained about 2 points on WideResNet.
+
+Here the whole sandwich step (the four widths, KL and both transport
+terms) runs twice, at w and at the perturbed point, on the same batch
+and the same widths. Both branches are DD (K on ResNet-50, transport
+from epoch 6, seed 1995, 77.50) with SAM on:
+
+| | rho |
+|---|---|
+| DX | 0.05, SAM's default |
+| DY | 0.1 |
+
+**How to read it.** Each against DD: does SAM help K, and DX against DY
+which neighbourhood size. A gap under about 0.4 is not a result. If SAM
+helps, the fair follow-up is A with SAM, so that K's lead is measured
+with both sides flat.
+
+## Timing
+
+Every step is two passes, so each run takes about twice K's 14 hours:
+roughly three sessions. Each epoch writes a checkpoint; when a session
+ends, Save Version, attach that version's output (pick the version
+number, not Latest) and run again. Attach the CIFAR-100 dataset as well.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1164,6 +1197,8 @@ QUEUE = [
      'K with a low-rank update per width, continuous', LORA),
     (45, 'dt_k_frozen_lora_r50', 'du_k_frozen_bnknots_r50',
      'K frozen, width-private weights added on top', FROZEN_K),
+    (46, 'dx_k_late_sam05_r50', 'dy_k_late_sam10_r50',
+     'K with Sharpness-Aware Minimization', SAM_K),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after
@@ -1404,7 +1439,8 @@ SUITES_NOW = chr(10).join([
     "          'tests/test_amp.py',",
     "          'tests/test_wkd.py',",
     "          'tests/test_stratified.py',",
-    "          'tests/test_lora.py']"])
+    "          'tests/test_lora.py',",
+    "          'tests/test_sam.py']"])
 
 A_REF_WAS = chr(10).join([
     "# the published run, for reference",
