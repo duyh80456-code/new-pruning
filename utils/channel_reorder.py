@@ -242,6 +242,11 @@ def reorder(model, criterion='l1', optimizer=None):
     """permute every channel space so the prefix holds the best channels"""
     scorer = {'l1': score_l1, 'read': score_read,
               'taylor': score_taylor}[criterion]
+    if any(getattr(m, 'lora_up', None) is not None
+           for m in _unwrap(model).modules()):
+        # apply() moves kernels, BN and its knots, not the per-knot
+        # low-rank updates, which would then sit on the wrong channels
+        raise NotImplementedError('reorder does not move lora_knots')
     moved = 0
     already = []
     groups = collect(model)

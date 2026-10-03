@@ -191,6 +191,10 @@ LEGEND = [
      'narrow to wide, `spread` gives it one from each half and shuffles '
      'the steps'),
     ('stratified_block', 'the number of steps drawn together'),
+    ('lora_knots', 'every conv kernel gets a low-rank update at this '
+     'many evenly spaced widths, mixed by distance in between, so each '
+     'width has a little private weight'),
+    ('lora_rank', "the rank of each knot's update"),
     ('stratified_draw=uniform', "the block's widths are plain uniform "
      'draws, sorted, instead of one per slice'),
     ('student_kd_weight', 'the weight on logit KD for every student; 0 '

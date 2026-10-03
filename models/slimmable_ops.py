@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn as nn
 
@@ -117,6 +119,46 @@ class USConv2d(nn.Conv2d):
         self.width_mult = None
         self.us = us
         self.ratio = ratio
+        # A low-rank correction to the shared kernel that is a continuous
+        # function of the width. Every width slices the same tensor, so a
+        # wide width's gradient rewrites the leading channels the narrow
+        # ones run on. Here each of lora_knots evenly spaced widths owns a
+        # rank lora_rank update up @ down, and a width between two knots
+        # adds the two in proportion to how near it is, the hat function
+        # affine_knots uses for the BN affine. The shared kernel is still
+        # what every width mostly reads; the update is what lets
+        # neighbouring widths differ from it, and from far widths, by a
+        # little. up starts at zero, so epoch zero is the plain model, and
+        # at inference the update of a chosen width merges into its kernel.
+        knots = getattr(FLAGS, 'lora_knots', 0)
+        if knots:
+            if knots < 2:
+                raise ValueError('lora_knots needs at least two knots')
+            if depthwise:
+                raise NotImplementedError('lora is not written for '
+                                          'depthwise convs')
+            rank = getattr(FLAGS, 'lora_rank', 8)
+            fan_in = in_channels * self.kernel_size[0] * self.kernel_size[1]
+            self.lora_down = nn.ParameterList([
+                nn.Parameter(torch.randn(rank, in_channels,
+                                         *self.kernel_size)
+                             / math.sqrt(fan_in))
+                for _ in range(knots)])
+            self.lora_up = nn.ParameterList([
+                nn.Parameter(torch.zeros(out_channels, rank))
+                for _ in range(knots)])
+        else:
+            self.lora_down = None
+            self.lora_up = None
+
+    def lora_mix(self):
+        """each knot's share at this width: a hat function of the
+        distance to it, at most two non-zero, summing to one"""
+        low, high = FLAGS.width_mult_range
+        count = len(self.lora_up)
+        spot = (self.width_mult - low) / (high - low) * (count - 1)
+        spot = min(max(spot, 0.0), count - 1.0)
+        return [max(0.0, 1.0 - abs(spot - j)) for j in range(count)]
 
     def forward(self, input):
         if self.us[0]:
@@ -140,6 +182,12 @@ class USConv2d(nn.Conv2d):
             rows = slice(0, self.out_channels)
             cols = slice(0, self.in_channels)
         weight = self.weight[rows, cols, :, :]
+        if self.lora_up is not None:
+            for share, up, down in zip(self.lora_mix(), self.lora_up,
+                                       self.lora_down):
+                if share:
+                    weight = weight + share * torch.einsum(
+                        'or,rikl->oikl', up[rows], down[:, cols])
         if self.bias is not None:
             bias = self.bias[rows]
         else:

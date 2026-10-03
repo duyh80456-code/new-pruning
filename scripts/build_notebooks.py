@@ -1040,7 +1040,41 @@ number, not Latest) and run again: the notebook finds the checkpoints.
 Attach the CIFAR-100 dataset as well.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43}
+LORA = """K with a low-rank update to every conv kernel that is a continuous
+function of the width: LoRA used not to fine-tune but to give each width
+a little private weight. Every width slices the same kernel, so a wide
+width's gradient rewrites the leading channels the narrow ones run on;
+here each knot (an evenly spaced width) owns an update up @ down, and a
+width between two knots mixes their updates by distance. The up
+matrices start at zero, so epoch zero is DD (K on ResNet-50, transport
+from epoch 6, seed 1995, 77.50). At inference a chosen width's update
+merges into its kernel, so the deployed network is the size it was.
+
+| | knots | rank | stored parameters |
+|---|---|---|---|
+| DR | 4 (0.25, 0.50, 0.75, 1.00) | 4 | +1.27M (5.4%) |
+| DS | 2 (0.25, 1.00) | 8 | +1.27M (5.4%) |
+
+The same parameters spent two ways: DR's updates are local in width and
+small, DS's slide linearly from one end of the range to the other and
+are twice the rank. Peak memory at batch 256 measured locally: 9.45 GB
+for DR against 9.38 GB for DD, the same step time.
+
+**How to read it.** Each against DD: do private low-rank weights help
+K. DR against DS: locality in width or rank. Earlier width-private
+parameters helped little (BP, a scalar per width and residual branch,
++0.09 on ResNet-18; four heads on K, +0.01), so a gain here would be
+new. A gap under about 0.4 is not a result.
+
+## Timing
+
+K took about 14 hours on a T4, so these need two sessions. When the
+first ends, Save Version, attach that version's output (pick the version
+number, not Latest) and run again: the notebook finds the checkpoints.
+Attach the CIFAR-100 dataset as well.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1093,6 +1127,8 @@ QUEUE = [
     (43, 'dn_k_late_heads2_r50', 'do_k_late_heads4_r50',
      'K with 2 heads and 4', K_HEADS.replace('{pair}', '2 and 4 heads')
      .replace('{other}', '42')),
+    (44, 'dr_k_late_lora4x4_r50', 'ds_k_late_lora2x8_r50',
+     'K with a low-rank update per width, continuous', LORA),
 ]
 
 HEADER = """# {number}. {title}
@@ -1300,7 +1336,8 @@ SUITES_NOW = chr(10).join([
     "          'tests/test_feature_start.py',",
     "          'tests/test_amp.py',",
     "          'tests/test_wkd.py',",
-    "          'tests/test_stratified.py']"])
+    "          'tests/test_stratified.py',",
+    "          'tests/test_lora.py']"])
 
 A_REF_WAS = chr(10).join([
     "# the published run, for reference",
