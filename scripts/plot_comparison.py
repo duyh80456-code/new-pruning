@@ -3,7 +3,8 @@
     python scripts/plot_comparison.py
 
 Writes results/figures/compare_r50.png and .pdf: top-1 against width at
-the sixteen widths 0.25-1.00. Every run here is seed 1995 under the same
+the sixteen widths 0.25-1.00, for K, K with four heads (DO) and K with
+far free-width pairs (DM) against the published methods. Every run here is seed 1995 under the same
 protocol, read after BN recalibration. WKD-L in US-Net (74.72) and DYNAS
 (73.92) sit far below and are left out so the close methods stay
 readable.
@@ -18,8 +19,11 @@ import matplotlib.pyplot as plt  # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, 'results', 'figures')
 
-# letter, label, colour, emphasised
+# letter, label, colour, emphasised. DO and DM are one seed each, so
+# their lead over DD is not yet a result.
 METHODS = [
+    ('DM', 'K + far pairs (ours)', '#8c1d18', True),
+    ('DO', 'K + 4 heads (ours)', '#ff7f0e', True),
     ('DD', 'K (ours)', '#d62728', True),
     ('CH', 'SOLAR (WACV 2026)', '#1f77b4', False),
     ('BX', 'US-Net (ICCV 2019)', '#333333', False),
