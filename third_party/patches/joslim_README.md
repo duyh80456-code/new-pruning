@@ -175,7 +175,7 @@ Code changes (all in `joslim.patch`):
    `args.local_rank` reference that crashed at the very end (eval has no such arg); rewrote the
    `--uniform` branch, which upstream cannot run (`selfmodel`, `args.upper_flops`, `ratio` undefined),
    into the 16-width protocol with CE loss and our line format; `--tag`; `--bn_cal_batch_num`
-   (default 20; upstream = whole train set).
+   (default 20; upstream = whole train set); the Pareto-set fix below.
 
 Recipe (ours vs paper/upstream):
 5. 100 epochs, batch 256, lr 0.2 (`--baselr 0.2`; lr = baselr*batch/256), nesterov, wd 5e-4,
@@ -219,6 +219,18 @@ Recipe (ours vs paper/upstream):
 - 12 h limit: both runs need a resume. Copy `{name}.pt` from the previous version's output.
 - Two runs in parallel with the default 8 workers each on 4 vCPUs: set `JOSLIM_WORKERS=2` if
   host memory runs short.
+
+## Pareto eval under current numpy (changed after notebook 39)
+
+The Pareto branch of `eval_checkpoints.py` (run without `--uniform`) crashed in notebook 39 at
+`filters = np.array(filters)[efficient_mask]` with "ValueError: setting an array element with a
+sequence ... inhomogeneous shape". Each entry of `filters` is ragged (`[stem int, [stage widths],
+...]`, from `decode_wm`); numpy < 1.24 built an object array from it with a warning, numpy >= 1.24
+raises. The patch now selects with the mask in plain Python,
+`filters = [f for f, keep in zip(filters, efficient_mask) if keep]`, which keeps the same entries
+in the same order. The other mask selections in that function index numeric arrays (`costs`, `X`,
+test top-1/top-5, FLOPs ratios) and are unchanged. Checked with a numpy 2.1 snippet on ragged
+entries: the old line raises, the new one returns the masked entries.
 
 ## Validation split (changed after the first package)
 

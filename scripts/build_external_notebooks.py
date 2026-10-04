@@ -189,7 +189,7 @@ def run_pinned(jobs):
 
 TABLE = '''A_REF = {a_ref}
 K_REF = {k_ref}
-labels = ['joslim_r50', 'lcs_l_bn']
+labels = {labels}
 print('{{:>7}}{{:>8}}{{:>8}}'.format('width', 'A', 'K') + ''.join(
     '{{:>12}}{{:>7}}{{:>7}}'.format(b[:11], 'vs A', 'vs K') for b in labels))
 for width in sorted(A_REF):
@@ -277,10 +277,212 @@ KEEP = '''# keep the checkpoints in the output, under a name the next session fi
 print('checkpoints in', CK, sorted(os.listdir(CK)))
 '''
 
+SPEC_47 = {
+    'number': 47,
+    'name': 'kaggle_kd_47_slim_joslim_pareto',
+    'title': 'Joslim\'s code in US-Net mode, and Joslim\'s own Pareto set',
+    'upstreams': ['joslim'],
+    'labels': ['slim_r50'],
+    'intro': '''Two controls on notebook 39, where Joslim (`joslim_r50`) read 74.02 mean
+top-1, about 2.8 points under our US-Net A (76.86), and under A at width 1.0
+as well. Same protocol as notebook 39: CIFAR-100 32x32, CIFAR ResNet-50, 100
+epochs, batch 256, SGD nesterov lr 0.2 cosine with 5 warm-up epochs,
+wd 5e-4, widths 0.25-1.00, BN recalibrated on 20 batches per width.
+
+| | GPU | what | code |
+|---|---|---|---|
+| slim_r50 | 0 | Joslim's code in its "Slim" mode, the paper's US-Net baseline: `--slim --slim_uniform --tau 1` in place of `--tau 195 --prior_points 20`, every other flag as joslim_r50. Each step trains full width, the smallest width and two uniform widths from U(0.25, 1), the last three distilled from the full-width logits. Then the sixteen-width evaluation joslim_r50 had | enyac-group/Joslim at 9b743d9 + `third_party/patches/joslim.patch` |
+| joslim_r50 Pareto | 1 | No training. Joslim's own evaluation of the joslim_r50 checkpoint from notebook 39 (`eval_checkpoints.py` without `--uniform`): the non-dominated per-layer width configurations visited in training, each BN-recalibrated and tested, accuracy against FLOPs | same |
+
+The Pareto evaluation crashed in notebook 39 under current numpy (the
+per-layer widths are ragged and were turned into an ndarray);
+`joslim.patch` now selects them with the mask in plain Python, see
+`third_party/patches/joslim_README.md`.
+
+## Inputs
+
+Attach the CIFAR-100 dataset and the output of notebook 39, which holds
+`ckpt/joslim_r50.pt`. Without that checkpoint the Pareto job is skipped
+with a message and slim_r50 trains anyway.
+
+## More than one session
+
+slim_r50 took ~4.3 h on an RTX 5060 Ti (joslim_README.md, Timing), and a
+T4 is 2-3x slower in fp32: expect ~10-13 h, so one resume. It checkpoints
+every epoch. When the session ends, Save Version, then in a new run attach
+that version's output (pick the version by number, not Latest) together
+with notebook 39's output and run again: slim_r50 continues from its
+checkpoint and is evaluated when it finishes. The Pareto job takes about
+half a minute per configuration and runs again in every session next to
+the training; the repetition is harmless.
+''',
+    'reading': '''How to read slim_r50. It is US-Net trained by Joslim's code with our
+patch, on A's recipe. If it reaches about A's level (around 77 or more at
+width 1.0, where A has 78.04), Joslim's codebase and our patch are fine and
+Joslim's gap is the method. If it also lands around 75, the codebase or the
+patch is suspect, and joslim_r50 cannot be read as Joslim. A gap well under
+a point can come from the recipe details Joslim's code keeps
+(joslim_README.md, deviations 6-8: weight-decay groups, initialisation,
+1x1-conv classifier). The `WM: ... MFLOPs` lines of the slim_r50 evaluation
+give the FLOPs of each uniform width, to set against the Pareto table
+above.''',
+}
+
+RESUME_47 = '''CK = os.path.join(WORK, 'ckpt')
+os.makedirs(CK, exist_ok=True)
+# slim_r50 resumes from ckpt/slim_r50.pt (an earlier session of this notebook);
+# the Pareto job reads ckpt/joslim_r50.pt (the output of notebook 39)
+for name in ['slim_r50.pt', 'joslim_r50.pt']:
+    target = os.path.join(CK, name)
+    if not os.path.exists(target):
+        for root, _, files in os.walk('/kaggle/input', followlinks=True):
+            if name in files:
+                shutil.copy(os.path.join(root, name), target)
+                print('restored', name, 'from', root)
+                break
+print('slim_r50', 'resumes from its checkpoint'
+      if os.path.exists(os.path.join(CK, 'slim_r50.pt'))
+      else 'starts at epoch 1')
+HAVE_JOSLIM = os.path.exists(os.path.join(CK, 'joslim_r50.pt'))
+if HAVE_JOSLIM:
+    print('joslim_r50 checkpoint found: its Pareto set is evaluated on GPU 1')
+else:
+    print('NO joslim_r50.pt under /kaggle/input: attach the output of '
+          'notebook 39. The Pareto job is skipped; slim_r50 trains anyway.')
+'''
+
+TRAIN_47 = '''JOSLIM = ['--dataset', 'CIFAR100', '--datapath', DATA,
+          '--network', 'slim_resnet50_cifar', '--epochs', '100',
+          '--warmup', '5', '--baselr', '0.2', '--scheduler', 'cosine_decay',
+          '--batch_size', '256', '--wd', '5e-4', '--mmt', '0.9',
+          '--nesterov', '--label_smoothing', '0', '--lower_channel', '0.25',
+          '--num_sampled_arch', '2', '--baseline', '-3',
+          '--print_freq', '100', '--ckpt_dir', CK,
+          '--slim', '--slim_uniform', '--tau', '1']
+# the evaluation flags of notebook 39, without --name
+EVAL = ['--dataset', 'CIFAR100', '--datapath', DATA,
+        '--network', 'slim_resnet50_cifar', '--batch_size', '256',
+        '--lower_channel', '0.25', '--ckpt_dir', CK]
+jobs = [('slim_r50', '0', CODE['joslim'],
+         [sys.executable, '-u', 'joslim.py', '--name', 'slim_r50'] + JOSLIM)]
+if HAVE_JOSLIM:
+    # Joslim's own evaluation (no --uniform): its Pareto set over per-layer
+    # widths, printed as "(i/n) Acc: top1 top5, MFLOPs: x (y %)"
+    jobs.append(('joslim_r50_pareto', '1', CODE['joslim'],
+                 [sys.executable, '-u', 'eval_checkpoints.py',
+                  '--name', 'joslim_r50'] + EVAL))
+codes = run_pinned(jobs)
+print(codes)
+'''
+
+EVAL_47 = '''# slim_r50 at the sixteen uniform widths, the evaluation joslim_r50 had
+if codes.get('slim_r50') == 0:
+    run_pinned([('slim_r50', '0', CODE['joslim'],
+                 [sys.executable, '-u', 'eval_checkpoints.py',
+                  '--name', 'slim_r50'] + EVAL
+                 + ['--uniform', '--tag', 'slim_r50'])])
+else:
+    print('slim_r50 training exited with code', codes.get('slim_r50'),
+          '- not evaluated')
+'''
+
+PARETO_47 = '''# Joslim's Pareto set for joslim_r50 (per-layer widths), as a table
+import numpy as np
+FULL_MFLOPS = 1298.0  # CIFAR ResNet-50, conv MACs (joslim_README.md)
+path = os.path.join(CODE['joslim'], 'results', 'joslim_r50_eval_pareto.txt')
+if not os.path.exists(path):
+    print('no Pareto results: the job was skipped or failed, see its '
+          '[joslim_r50_pareto] lines above')
+else:
+    shutil.copy(path, os.path.join(WORK, 'joslim_r50_eval_pareto.txt'))
+    flops, top1, top5 = np.loadtxt(path, ndmin=2)
+    print('joslim_r50, Pareto set (smallest and full width included)')
+    print('{:>9}{:>9}{:>8}{:>8}'.format('FLOPs %', 'MFLOPs', 'top-1',
+                                        'top-5'))
+    for ratio, one, five in zip(flops, top1, top5):
+        print('{:>9.2f}{:>9.1f}{:>8.2f}{:>8.2f}'.format(
+            100.0 * ratio, FULL_MFLOPS * ratio, one, five))
+'''
+
+SPEC_48 = {
+    'number': 48,
+    'name': 'kaggle_kd_48_lcs_in',
+    'title': 'LCS with its published InstanceNorm',
+    'upstreams': ['lcs'],
+    'labels': ['lcs_l_in'],
+    'one_gpu': True,
+    'intro': '''A control on notebook 39, where LCS with BatchNorm (`lcs_l_bn`) read
+75.24 mean top-1, about 1.6 points under our US-Net A (76.86), and under A
+at width 1.0 as well. Same protocol: CIFAR-100 32x32, CIFAR ResNet-50, 100
+epochs, batch 256, SGD nesterov lr 0.2, wd 5e-4, widths 0.25-1.00.
+
+| | GPU | method | code |
+|---|---|---|---|
+| lcs_l_in | 0 | LCS+L (Nunez et al., WACV 2023) in the authors' published configuration: the line-subspace InstanceNorm `LinesAdaptiveIN`. Variant (a) of `lcs_README.md`: the flags of lcs_l_bn without `--norm BN --recal_batches 20` | apple/learning-compressible-subspaces at e6d3924 + `third_party/patches/lcs.patch` |
+
+One run: GPU 1 stays idle (T4 x2 is fine, one card is enough).
+
+Why: lcs_l_bn normalises with `LinesAdaptiveBN`, a class we wrote in
+`lcs.patch` (upstream has no BatchNorm line class). lcs_l_in uses only
+upstream norm classes, and InstanceNorm keeps no running statistics, so
+there is no recalibration either. If lcs_l_in lands near lcs_l_bn (75.24),
+our BN class is fine and LCS's gap is the method (a summed cross-entropy
+over four widths, no in-place distillation); if it is clearly higher, our
+BN class is suspect.
+
+## More than one session
+
+InstanceNorm is about 2x slower than BatchNorm here: ~9.2 h on an RTX 5060
+Ti (lcs_README.md, Timing), ~18-27 h on a T4, so 2-3 sessions. LCS writes
+`ckpt/lcs_l_in/last.pt` after every epoch. When the session ends, Save
+Version, then in a new run attach that version's output (pick the version
+by number, not Latest) and run again: the notebook finds the checkpoint and
+the run continues. It ends with the sixteen protocol lines. Attach the
+CIFAR-100 dataset as well.
+''',
+    'reading': '''How to read lcs_l_in: near lcs_l_bn (75.24 mean) means our BatchNorm
+class is fine and LCS's gap to A is the method; clearly higher means our
+BatchNorm class is suspect.''',
+}
+
+RESUME_48 = '''CK = os.path.join(WORK, 'ckpt')
+# LCS keeps ckpt/lcs_l_in/last.pt
+wanted = {'lcs_l_in': ('last.pt', 'lcs_l_in')}
+for label, (name, folder) in wanted.items():
+    target = os.path.join(CK, folder or '', name)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    if not os.path.exists(target):
+        for root, _, files in os.walk('/kaggle/input', followlinks=True):
+            if name in files and (folder is None
+                                  or os.path.basename(root) == folder):
+                shutil.copy(os.path.join(root, name), target)
+                print('restored', label, 'from', root)
+                break
+    print(label, 'resumes from its checkpoint' if os.path.exists(target)
+          else 'starts at epoch 1')
+'''
+
+TRAIN_48 = '''WIDTHS = ','.join('{:.2f}'.format(0.25 + 0.05 * i) for i in range(16))
+LCS = ['--model', 'cresnet50', '--dataset', 'cifar100', '--method', 'lcs_l',
+       '--data_dir', DATA, '--epochs', '100', '--batch_size', '256',
+       '--learning_rate', '0.2', '--momentum', '0.9', '--nesterov',
+       '--weight_decay', '5e-4', '--width_factor_limits', '0.25,1.0',
+       '--eval_width_factors', WIDTHS, '--skip_upstream_test',
+       '--save_dir', os.path.join(WORK, 'lcs_l_in'),
+       '--ckpt_dir', os.path.join(CK, 'lcs_l_in'), '--log_prefix', 'lcs_l_in']
+# LCS ends its run with the sixteen protocol lines
+codes = run_pinned([
+    ('lcs_l_in', '0', CODE['lcs'],
+     [sys.executable, '-u', 'train_structured.py'] + LCS)])
+print(codes)
+'''
+
 
 def build(spec, steps):
     head = '# {}. {}\n\n{}'.format(spec['number'], spec['title'],
                                    spec['intro'])
+    upstreams = {key: UPSTREAMS[key]
+                 for key in spec.get('upstreams', list(UPSTREAMS))}
     config = '''# Fixed for this notebook.
 REPO_URL = {repo!r}
 REPO_BRANCH = {branch!r}
@@ -288,13 +490,25 @@ REPO_BRANCH = {branch!r}
 UPSTREAMS = {upstreams}
 WORKER_ENV = {{'JOSLIM_WORKERS': '2', 'LCS_WORKERS': '2'}}
 '''.format(repo=REPO_URL, branch=REPO_BRANCH,
-           upstreams=repr(UPSTREAMS))
-    cells = [markdown(head), code(config), code(SETUP), code(DATA),
+           upstreams=repr(upstreams))
+    setup = SETUP
+    if spec.get('one_gpu'):
+        setup = setup.replace(
+            "if n_gpu < 2:\n    raise SystemExit('Needs GPU T4 x2: one card "
+            "per method.')",
+            "if n_gpu < 1:\n    raise SystemExit('Needs a GPU: the run uses "
+            "GPU 0 only.')")
+    results = ('## Results, against A (BX, 76.86) and K (DD, 77.50)\n\nSend '
+               'back this table and the `val ... -1/100` lines above it.')
+    if spec.get('reading'):
+        results += '\n\n' + spec['reading'].strip('\n')
+    labels = spec.get('labels', ['joslim_r50', 'lcs_l_bn'])
+    cells = [markdown(head), code(config), code(setup), code(DATA),
              code(RUN)]
     cells += [code(step) for step in steps]
-    cells += [markdown('## Results, against A (BX, 76.86) and K (DD, 77.50)\n\nSend back this '
-                       'table and the `val ... -1/100` lines above it.'),
-              code(TABLE.format(a_ref=repr(A_REF), k_ref=repr(K_REF))), code(KEEP)]
+    cells += [markdown(results),
+              code(TABLE.format(a_ref=repr(A_REF), k_ref=repr(K_REF),
+                                labels=repr(labels))), code(KEEP)]
     nb = {'cells': cells, 'metadata': {
         'kernelspec': {'display_name': 'Python 3', 'language': 'python',
                        'name': 'python3'},
@@ -309,3 +523,5 @@ WORKER_ENV = {{'JOSLIM_WORKERS': '2', 'LCS_WORKERS': '2'}}
 
 if __name__ == '__main__':
     build(SPEC, [RESUME, TRAIN, EVAL])
+    build(SPEC_47, [RESUME_47, TRAIN_47, EVAL_47, PARETO_47])
+    build(SPEC_48, [RESUME_48, TRAIN_48])

@@ -1,5 +1,5 @@
 diff --git a/eval_checkpoints.py b/eval_checkpoints.py
-index 6579829..f304e4a 100644
+index 6579829..f8a2b91 100644
 --- a/eval_checkpoints.py
 +++ b/eval_checkpoints.py
 @@ -6,6 +6,7 @@ import math
@@ -42,7 +42,16 @@ index 6579829..f304e4a 100644
  
          population_data = data_dict['population_data']
  
-@@ -188,7 +196,7 @@ class Joslim:
+@@ -182,13 +190,15 @@ class Joslim:
+                 global_efficient_mask = np.logical_or(global_efficient_mask, efficient_mask)
+                 tmp_costs[efficient_mask] = np.ones_like(tmp_costs[efficient_mask])
+             efficient_mask = global_efficient_mask 
+-            filters = np.array(filters)[efficient_mask]
++            # filters are ragged ([stem int, [stage widths], ...]); numpy >= 1.24
++            # refuses np.array on them, so select with the mask in plain Python
++            filters = [f for f, keep in zip(filters, efficient_mask) if keep]
+             ratios = costs[efficient_mask][:, 1]
+ 
              out_X = data_dict['X'][:-2, :]
              out_X = out_X[efficient_mask]
  
@@ -51,7 +60,7 @@ index 6579829..f304e4a 100644
  
              index_set = np.arange(len(filters))
  
-@@ -249,37 +257,41 @@ class Joslim:
+@@ -249,37 +259,41 @@ class Joslim:
  
                  print('Acc: {:.2f} {:.2f}, MFLOPs: {:.3f} ({:.2f} %)'.format(test_top1, test_top5, flops*1e-6, flops/og_flops*100.))
          else:
@@ -114,7 +123,7 @@ index 6579829..f304e4a 100644
  
  
          efficient_mask = is_pareto_efficient(np.stack([100-np.array(test_top1s), np.array(new_flops)], axis=1))
-@@ -297,7 +309,7 @@ class Joslim:
+@@ -297,7 +311,7 @@ class Joslim:
          test_top1s = test_top1s[sorted_idx]
          test_top5s = test_top5s[sorted_idx]
  
@@ -123,7 +132,7 @@ index 6579829..f304e4a 100644
              os.makedirs('./results/')
          if not args.uniform:
              np.savetxt('results/{}_eval_pareto.txt'.format(args.name), np.stack([new_flops, test_top1s, test_top5s]))
-@@ -319,6 +331,9 @@ def get_args():
+@@ -319,6 +333,9 @@ def get_args():
      parser.add_argument("--slim_dataaug", action='store_true', default=False, help='Use the data augmentation implemented in universally slimmable network')
      parser.add_argument("--sample_pool", type=str, default='none', help='Checkpoint to sample architectures from')
      parser.add_argument("--scale_ratio", type=float, default=0.08, help='Scale for random scaling, default: 0.08')
