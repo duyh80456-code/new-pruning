@@ -1140,7 +1140,40 @@ ends, Save Version, attach that version's output (pick the version
 number, not Latest) and run again. Attach the CIFAR-100 dataset as well.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46}
+SAM_K_HEADS = """K with four classifier heads, trained with Sharpness-Aware Minimization
+(Foret et al., ICLR 2021). Two findings set this up. A classifier head
+per band of widths lifted K (DO, 77.84, +0.34 on DD at 15 of 16 widths),
+while width-private conv or BN weights did not: the interference left is
+in the shared classifier. And a trained K sits at about 0% train error
+(notebook 45), so what remains is generalisation, which SAM targets:
+every step it takes the gradient at the weights w, moves to the nearby
+worst point w + rho g/|g|, takes the gradient there and steps from w with
+it, so training settles in flat minima. In SAM's paper, CIFAR-100 with
+the same basic augmentation gained about 2 points on WideResNet.
+
+The whole sandwich step (four widths, KL, both transport terms, the
+band heads) runs twice per step, on the same batch and widths. Both
+branches are DO with SAM on:
+
+| | rho |
+|---|---|
+| EC | 0.05, SAM's default |
+| ED | 0.1 |
+
+**How to read it.** Each against DO (77.84): what SAM adds on top of K
+with heads. EC against ED: which neighbourhood size. A gap under about
+0.4 is not a result. If SAM helps, A with SAM is the fair follow-up, so
+that K's lead is measured with both sides flat.
+
+## Timing
+
+Every step is two passes, so each run takes about twice DO's time:
+roughly three sessions. Each epoch writes a checkpoint; when a session
+ends, Save Version, attach that version's output (pick the version
+number, not Latest) and run again. Attach the CIFAR-100 dataset as well.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1197,8 +1230,8 @@ QUEUE = [
      'K with a low-rank update per width, continuous', LORA),
     (45, 'dt_k_frozen_lora_r50', 'du_k_frozen_bnknots_r50',
      'K frozen, width-private weights added on top', FROZEN_K),
-    (46, 'dx_k_late_sam05_r50', 'dy_k_late_sam10_r50',
-     'K with Sharpness-Aware Minimization', SAM_K),
+    (49, 'ec_k_heads4_sam05_r50', 'ed_k_heads4_sam10_r50',
+     'K with four heads and Sharpness-Aware Minimization', SAM_K_HEADS),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after
