@@ -1481,7 +1481,8 @@
         1.1383,
         1.1626,
         1.2015
-      ]
+      ],
+      "seed": 1995
     },
     {
       "name": "at_macs_widths",
@@ -1522,7 +1523,8 @@
         1.119,
         1.1256,
         1.1414
-      ]
+      ],
+      "seed": 1995
     },
     {
       "name": "ac_weight_half",
@@ -1563,7 +1565,8 @@
         1.1044,
         1.12,
         1.163
-      ]
+      ],
+      "seed": 1995
     },
     {
       "name": "ad_weight_double",
@@ -1604,7 +1607,8 @@
         1.1795,
         1.1886,
         1.2047
-      ]
+      ],
+      "seed": 1995
     },
     {
       "name": "au_entropy_kd",
@@ -1645,7 +1649,8 @@
         1.0993,
         1.1276,
         1.1634
-      ]
+      ],
+      "seed": 1995
     },
     {
       "name": "av_confidence_kd",
@@ -1686,7 +1691,8 @@
         1.42,
         1.4518,
         1.4891
-      ]
+      ],
+      "seed": 1995
     },
     {
       "name": "ak_bures",
@@ -1727,7 +1733,8 @@
         1.3575,
         1.3622,
         1.3665
-      ]
+      ],
+      "seed": 1995
     },
     {
       "name": "aw_teacher_chain",
@@ -1768,7 +1775,8 @@
         1.1049,
         1.1138,
         1.1308
-      ]
+      ],
+      "seed": 1995
     },
     {
       "name": "bh_warm10_taylor",
@@ -2411,7 +2419,8 @@
         1.3981,
         1.404,
         1.4092
-      ]
+      ],
+      "seed": 1995
     },
     {
       "name": "by_k_r50",
@@ -2452,7 +2461,8 @@
         1.0702,
         1.092,
         1.141
-      ]
+      ],
+      "seed": 1995
     },
     {
       "name": "cq_a_r50_seed2",
@@ -2493,7 +2503,8 @@
         1.4408,
         1.4476,
         1.4523
-      ]
+      ],
+      "seed": 2026
     },
     {
       "name": "ci_k_heads4_r50",
@@ -2534,7 +2545,8 @@
         0.9561,
         0.9905,
         1.0253
-      ]
+      ],
+      "seed": 1995
     },
     {
       "name": "cp_k_no_kd_r50",
@@ -2575,7 +2587,8 @@
         1.184,
         1.1898,
         1.2002
-      ]
+      ],
+      "seed": 1995
     },
     {
       "name": "ct_k_prerelu_r50",
@@ -2616,7 +2629,8 @@
         1.1142,
         1.1361,
         1.1862
-      ]
+      ],
+      "seed": 1995
     },
     {
       "name": "cu_k_prerelu_r50_seed2",
@@ -2657,7 +2671,8 @@
         1.1509,
         1.1771,
         1.2233
-      ]
+      ],
+      "seed": 2026
     },
     {
       "name": "de_a_amp_r50",
@@ -2698,7 +2713,8 @@
         1.4255,
         1.4299,
         1.4367
-      ]
+      ],
+      "seed": 1995
     },
     {
       "name": "df_k_amp_r50",
@@ -2739,7 +2755,8 @@
         1.2411,
         1.2751,
         1.3249
-      ]
+      ],
+      "seed": 1995
     },
     {
       "name": "dc_k_late_r50_seed2",
@@ -2780,7 +2797,8 @@
         1.065,
         1.0867,
         1.1304
-      ]
+      ],
+      "seed": 2026
     },
     {
       "name": "dd_k_late_r50",
@@ -2821,7 +2839,8 @@
         1.0551,
         1.0801,
         1.1294
-      ]
+      ],
+      "seed": 1995
     },
     {
       "name": "cf_scala_r50",
@@ -3207,7 +3226,8 @@
         1.4889,
         1.5098
       ],
-      "seed": null
+      "seed": null,
+      "seed_note": "the authors' code was launched without a seed (scripts/build_external_notebooks.py passes none)"
     },
     {
       "name": "lcs_l_bn",
@@ -3249,7 +3269,8 @@
         1.1617,
         1.1531
       ],
-      "seed": null
+      "seed": null,
+      "seed_note": "the authors' code was launched without a seed (scripts/build_external_notebooks.py passes none)"
     },
     {
       "name": "dj_k_strat_adjacent_r50",

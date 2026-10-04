@@ -56,6 +56,20 @@ def text_of(path):
     return ''.join(chunks)
 
 
+def config_seed(run):
+    """the random_seed the run's config sets, or None without a config
+
+    Seeds are read off the config rather than typed by hand: several R50
+    runs went in without one, and the seed then lived only in the prose.
+    """
+    config = os.path.join(ROOT, 'apps', 'cifar100_{}.yml'.format(run))
+    if not os.path.exists(config):
+        return None
+    with open(config, encoding='utf-8') as handle:
+        found = re.search(r'^random_seed:\s*(\d+)', handle.read(), re.M)
+    return int(found.group(1)) if found else None
+
+
 def ingest(path):
     store = load()
     widths = store['widths']
@@ -84,6 +98,9 @@ def ingest(path):
             'top1': [round(table[w][0], 2) for w in widths],
             'nll': [table[w][1] for w in widths],
         }
+        seed = config_seed(run)
+        if seed is not None:
+            entry['seed'] = seed
         existing = [r for r in store['runs'] if r['name'] == run]
         if existing:
             existing[0].update(
