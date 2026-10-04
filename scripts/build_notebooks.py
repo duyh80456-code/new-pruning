@@ -1173,7 +1173,36 @@ ends, Save Version, attach that version's output (pick the version
 number, not Latest) and run again. Attach the CIFAR-100 dataset as well.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49}
+FAR_HEADS = """Two runs on the best result so far, DM: K whose two free widths are
+always far apart. Every ten steps, 20 uniform draws in [0.25, 1.0] are
+sorted and step m takes the m-th and (m + 10)-th smallest, so each step
+pairs a narrow free width with a wide one (about 0.36 apart on average,
+against 0.25 for independent draws, a quarter of which fall under 0.1).
+At seed 1995 DM gave 78.16, 0.66 above K (DD) at 15 of 16 widths, while
+close pairs (DJ, DL) cost K about 0.9 both times they were tried.
+
+| | |
+|---|---|
+| EE | DM with four classifier heads (DO's head_groups 4), seed 1995 |
+| EF | DM unchanged at seed 2026 |
+
+**How to read it.** EE against DM (78.16) and DO (77.84): whether the
+far pairs, which act on the horizontal transport term, and the heads,
+which act on the shared classifier, add up. EF against DC (K at seed
+2026, 77.27): whether DM's lead over K repeats on a second seed. DK, the
+same pairing with one width per slice, came out 0.85 below DM, so a
+second seed is what decides whether DM is the method or a lucky draw. A
+gap under about 0.4 is not a result.
+
+## Timing
+
+K took about 14 hours on a T4 and the heads add little, so each run
+needs two sessions. When the first ends, Save Version, attach that
+version's output (pick the version number, not Latest) and run again:
+the notebook finds the checkpoints. Attach the CIFAR-100 dataset as well.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1232,6 +1261,9 @@ QUEUE = [
      'K frozen, width-private weights added on top', FROZEN_K),
     (49, 'ec_k_heads4_sam05_r50', 'ed_k_heads4_sam10_r50',
      'K with four heads and Sharpness-Aware Minimization', SAM_K_HEADS),
+    (50, 'ee_k_heads4_far_r50', 'ef_k_far_r50_seed2',
+     'K with far free-width pairs: with four heads, and a second seed',
+     FAR_HEADS),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after
