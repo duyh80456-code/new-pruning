@@ -1265,7 +1265,32 @@ version's output (pick the version number, not Latest) and run again:
 the notebook finds the checkpoints. Attach the CIFAR-100 dataset as well.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52}
+K_SEED3 = """K (DD, SlimOT) at seed 42, so that K and K with four heads have the same
+three seeds and the heads can be read seed by seed:
+
+| seed | K | K + four heads |
+|---|---|---|
+| 1995 | DD 77.50 | DO 77.84 |
+| 2026 | DC 77.27 | EI (notebook 52) |
+| 42 | **EL, this notebook** | EJ (notebook 52) |
+
+| | |
+|---|---|
+| EL | DD at seed 42, otherwise unchanged |
+
+**How to read it.** EL against EJ: the heads' gain at seed 42. With DD
+and DC it also gives K a mean and spread over three seeds. A gap under
+about 0.4 is not a result.
+
+## Timing
+
+K took about 14 hours on a T4, so the run needs two sessions. When the
+first ends, Save Version, attach that version's output (pick the version
+number, not Latest) and run again: the notebook finds the checkpoint.
+Attach the CIFAR-100 dataset as well. One branch: the second card idles.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 53}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1331,6 +1356,8 @@ QUEUE = [
      'K with the free widths paired at random, on both cards', PAIRING),
     (52, 'ei_k_heads4_r50_seed2', 'ej_k_heads4_r50_seed3',
      'K with four heads at seeds 2026 and 42', HEADS_SEEDS),
+    (53, 'el_k_late_r50_seed3', None,
+     'K at seed 42', K_SEED3),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after

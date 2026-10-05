@@ -3775,6 +3775,49 @@
         1.2084
       ],
       "seed": 2026
+    },
+    {
+      "name": "lcs_l_in",
+      "letter": "EK",
+      "what": "LCS (WACV 2023) in the authors' published configuration: lcs_l line subspace with their InstanceNorm (LinesAdaptiveIN), no running statistics and so no recalibration; authors' code at e6d3924 + third_party/patches/lcs.patch. 71.85, 3.4 under our BatchNorm version (EB 75.24) at every width, so the BN class we wrote is not what holds LCS down; EB stays as LCS's row",
+      "top1": [
+        69.14,
+        69.58,
+        70.19,
+        70.81,
+        71.18,
+        71.29,
+        71.68,
+        72.0,
+        72.31,
+        72.35,
+        72.48,
+        73.07,
+        73.26,
+        73.27,
+        73.5,
+        73.51
+      ],
+      "nll": [
+        1.0994,
+        1.1007,
+        1.0827,
+        1.0654,
+        1.0541,
+        1.0457,
+        1.0386,
+        1.0383,
+        1.0358,
+        1.0353,
+        1.0396,
+        1.0367,
+        1.0403,
+        1.0442,
+        1.0514,
+        1.0565
+      ],
+      "seed": null,
+      "seed_note": "the authors' code was launched without a seed (scripts/build_external_notebooks.py passes none)"
     }
   ]
 }
