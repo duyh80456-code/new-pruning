@@ -22,9 +22,9 @@ OUT = os.path.join(ROOT, 'results', 'figures')
 # letter, label, colour, emphasised. DO and DM are one seed each, so
 # their lead over DD is not yet a result.
 METHODS = [
-    ('DM', 'K + far pairs (ours)', '#8c1d18', True),
-    ('DO', 'K + 4 heads (ours)', '#ff7f0e', True),
-    ('DD', 'K (ours)', '#d62728', True),
+    ('DM', 'SlimOT + SPS (ours)', '#8c1d18', True),
+    ('DO', 'SlimOT + WBH (ours)', '#ff7f0e', True),
+    ('DD', 'SlimOT (ours)', '#d62728', True),
     ('CH', 'SOLAR (WACV 2026)', '#1f77b4', False),
     ('BX', 'US-Net (ICCV 2019)', '#333333', False),
     ('CF', 'Scala (NeurIPS 2024)', '#2ca02c', False),
