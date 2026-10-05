@@ -970,10 +970,16 @@ def stratified_widths(low, high, k):
                 from each 1/k of the range, and the steps are shuffled:
                 the free widths of a step are always far apart, as in
                 Scala's stable sampling
+      random    the draws are shuffled and dealt out k at a time, so a
+                step's free widths are any two of the block: near or far
+                by chance, as in US-Net, while the block still covers the
+                range evenly
 
-    The two read K's horizontal term from opposite ends: it compares the
-    two free widths, which adjacent makes nearly equal and spread keeps
-    about half the range apart. A resumed run starts a fresh block.
+    The first two read K's horizontal term from opposite ends: it compares
+    the two free widths, which adjacent makes nearly equal and spread keeps
+    about half the range apart. random keeps the coverage and leaves the
+    gap as US-Net leaves it, so against K it isolates the coverage and
+    against spread it isolates the gap. A resumed run starts a fresh block.
 
     stratified_draw: uniform drops the slices: the k * block widths are
     plain uniform draws, as US-Net makes them, only drawn together and
@@ -997,6 +1003,10 @@ def stratified_widths(low, high, k):
         elif pairing == 'spread':
             groups = [draws[m::block] for m in range(block)]
             random.shuffle(groups)
+        elif pairing == 'random':
+            mixed = list(draws)
+            random.shuffle(mixed)
+            groups = [sorted(mixed[m * k:(m + 1) * k]) for m in range(block)]
         else:
             raise ValueError('unknown stratified_pairing {}'.format(pairing))
         _STRATA.extend(groups)

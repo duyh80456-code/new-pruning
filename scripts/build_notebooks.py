@@ -1202,7 +1202,43 @@ version's output (pick the version number, not Latest) and run again:
 the notebook finds the checkpoints. Attach the CIFAR-100 dataset as well.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50}
+PAIRING = """The one cell left empty in the table of notebooks 40 and 41. There,
+one width per slice (DJ, DK) or uniform draws (DL, DM), sorted ten steps at
+a time, were dealt out as close pairs or far ones. Close pairs cost K about
+0.9 both times; far pairs gave DK 77.31 and DM 78.16, against K (DD) 77.50.
+
+| | |
+|---|---|
+| EG | one width per slice, as DK, but the 20 draws shuffled and taken two at a time: a step's pair is near or far by chance, as in US-Net, while each block still covers the range evenly |
+
+**How to read it.** Against DD (77.50): whether even coverage alone helps,
+with the gap left as US-Net leaves it (mean 0.26, about a fifth of pairs
+under 0.1). Against DK (77.31) and DJ (76.56), the same slices dealt far
+and close, it places random pairing between them. A gap under about 0.4 is
+not a result.
+
+## Both cards, one run
+
+EG is the only branch, so it runs on **both T4s**: train.py wraps the model
+in DataParallel, which splits each batch of 256 into 128 per card. The
+transport is unchanged, since the features of both halves are gathered
+before the loss and Sinkhorn still sees all 256 samples. **BatchNorm is
+not**: during training each card normalizes its own 128, where every
+earlier ResNet-50 run normalized 256 on one card. That is a protocol
+difference, small but real, and EG is read with it noted. The smoke step
+runs with both cards visible too, so the two-card path is exercised in a
+few minutes before the real run starts.
+
+## Timing
+
+K took about 14 hours on one T4. Two cards should cut that, though not in
+half; the epoch times in the log say by how much. If the session ends
+first, Save Version, attach that version's output (pick the version
+number, not Latest) and run again: the notebook finds the checkpoint.
+Attach the CIFAR-100 dataset as well.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1264,6 +1300,8 @@ QUEUE = [
     (50, 'ee_k_heads4_far_r50', 'ef_k_far_r50_seed2',
      'K with far free-width pairs: with four heads, and a second seed',
      FAR_HEADS),
+    (51, 'eg_k_strat_random_r50', None,
+     'K with the free widths paired at random, on both cards', PAIRING),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after
@@ -1483,6 +1521,15 @@ RESUME_REPORT_NOW = chr(10).join([
     "    print(branch, 'resumes from its checkpoint' if os.path.exists(ckpt)",
     "          else 'starts at epoch 1')"])
 
+# A notebook in BOTH_CARDS has one branch and gives it every card:
+# train.py's DataParallel then splits each batch across them.
+BOTH_CARDS = {51}
+PIN_WAS = "        env['CUDA_VISIBLE_DEVICES'] = str(index % max(n_gpu, 1))"
+PIN_NOW = chr(10).join([
+    "        env['CUDA_VISIBLE_DEVICES'] = (",
+    "            ','.join(str(i) for i in range(n_gpu)) if len(jobs) == 1",
+    "            else str(index % max(n_gpu, 1)))"])
+
 GPU_WAS = "if n_gpu < len(BRANCHES):"
 GPU_NOW = chr(10).join([
     "if n_gpu == 0:",
@@ -1628,6 +1675,7 @@ is the column that says whether the change helps."""
 
 for number, left, right, title, preamble in QUEUE:
     nb = json.loads(json.dumps(template))
+    pinned = False
     for cell in nb['cells']:
         body = ''.join(cell['source'])
         if number >= 30:
@@ -1645,6 +1693,9 @@ for number, left, right, title, preamble in QUEUE:
                          (RESUME_REPORT_WAS, RESUME_REPORT_NOW),
                          (FILTER_WAS, FILTER_NOW)):
             body = body.replace(old, new)
+        if number in BOTH_CARDS and PIN_WAS in body:
+            body = body.replace(PIN_WAS, PIN_NOW)
+            pinned = True
         cell['source'] = source(body) if body.strip() else cell['source']
     body = HEADER.format(number=number, title=title,
                          preamble=preamble)
@@ -1659,7 +1710,13 @@ for number, left, right, title, preamble in QUEUE:
         body = body.replace('three to five\nhours', 'ten to twelve\nhours')
     # a notebook may hold one branch and leave the second card idle
     branches = [branch for branch in (left, right) if branch]
-    if len(branches) == 1:
+    if number in BOTH_CARDS:
+        if not pinned or len(branches) != 1:
+            raise SystemExit('notebook {} cannot give one branch both '
+                             'cards'.format(number))
+        body = body.replace('Two branches, one per card,',
+                            'One branch, on both cards,')
+    elif len(branches) == 1:
         body = body.replace('Two branches, one per card,',
                             'One branch, on one card,')
     for branch in branches:

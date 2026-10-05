@@ -89,6 +89,24 @@ def main():
               for b in spread),
           'uniform draw, spread: the steps are shuffled')
 
+    # slices dealt out at random: the coverage stays, the gap is left to
+    # chance as in US-Net
+    shuffled = blocks('random', n_blocks=500)
+    check(all(sorted(slice_of(w) for step in b for w in step)
+              == list(range(20)) for b in shuffled),
+          'random: each block still hits each of the 20 slices once')
+    gaps = [abs(s[0] - s[1]) for b in shuffled for s in b]
+    close = sum(g < 0.1 for g in gaps) / len(gaps)
+    check(0.2 < sum(gaps) / len(gaps) < 0.3,
+          'random: mean gap {:.3f}, near US-Net\'s 0.25'.format(
+              sum(gaps) / len(gaps)))
+    check(close > 0.1,
+          'random: {:.0%} of pairs closer than 0.1, so not spread'.format(
+              close))
+    check(any(slice_of(s[1]) != slice_of(s[0]) + 1 for b in shuffled
+              for s in b),
+          'random: not adjacent')
+
     FLAGS.width_sampling = 'uniform'
     FLAGS.stratified_draw = 'slices'
     print('all checks passed')

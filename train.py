@@ -1701,15 +1701,28 @@ def train_val_test():
             new_model_wrapper.load_state_dict(
                 model_wrapper.state_dict(), strict=False)
             model_wrapper = new_model_wrapper
+        # On more than one card, DataParallel replicates every
+        # USBatchNorm2d per card with a shallow copy of its __dict__, so
+        # the replicas share one calibration_batches list: the count
+        # advances once per card per batch, the cumulative average stops
+        # being one, and part of the reset statistics can survive into
+        # the calibrated ones. Only the first card's statistics are kept
+        # anyway. Calibrate and read on that card alone; the module is the
+        # same, so the statistics land where model_wrapper saves them.
+        cal_wrapper = model_wrapper
+        if (isinstance(model_wrapper, torch.nn.DataParallel)
+                and len(model_wrapper.device_ids) > 1):
+            cal_wrapper = torch.nn.DataParallel(
+                model_wrapper.module, device_ids=[0])
         cal_meters = get_meters('cal')
         print('Start calibration.')
         results = run_one_epoch(
-            -1, train_loader, model_wrapper, criterion, optimizer,
+            -1, train_loader, cal_wrapper, criterion, optimizer,
             cal_meters, phase='cal')
         print('Start validation after calibration.')
         with torch.no_grad():
             results = run_one_epoch(
-                -1, val_loader, model_wrapper, criterion, optimizer,
+                -1, val_loader, cal_wrapper, criterion, optimizer,
                 cal_meters, phase='val')
         if is_master():
             torch.save(
