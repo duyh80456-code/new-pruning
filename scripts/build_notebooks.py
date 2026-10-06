@@ -1319,7 +1319,39 @@ version's output (pick the version number, not Latest) and run again:
 the notebook finds the checkpoints. Attach the CIFAR-100 dataset as well.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 53, 54}
+LEAVE_ONE_OUT = """The method (SlimOT + WBH, DO, seed 1995, 77.84) with one transport term
+taken out at a time, one per card. These are the two rows the ablation
+table still lacks:
+
+| configuration | run | top-1 |
+|---|---|---|
+| full: Teacher + Peer + Delayed Transport + WBH | DO | 77.84 |
+| w/o WBH | DD | 77.50 |
+| **w/o Teacher Transport** | **EN, this notebook** | |
+| **w/o Peer Transport** | **EO, this notebook** | |
+| none of them (US-Net) | BX | 76.86 |
+
+| | |
+|---|---|
+| EN | DO with feature_kd off: the two middle widths still transport to each other, nothing transports to the widest width |
+| EO | DO with horizontal_kd off: every width transports to the widest width, the middle pair is not coupled |
+
+**How to read it.** Each against DO: what that term is worth with the
+other in place. On ResNet-18 the peer term carried most of the gain
+(+0.60 of K's +0.74 over A, with the teacher term kept); this asks it on
+the method that is kept. One seed, so a gap under about 0.4 is not a
+result. EO prints no pair_loss: that is the peer term being off.
+
+## Timing
+
+K took about 14 hours on a T4 and the heads add little; EO, with no pair
+term, is somewhat faster. Each run needs two sessions: when the first
+ends, Save Version, attach that version's output (pick the version
+number, not Latest) and run again: the notebook finds the checkpoints.
+Attach the CIFAR-100 dataset as well.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 53, 54, 55}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1389,6 +1421,8 @@ QUEUE = [
      'K at seed 42', K_SEED3),
     (54, 'dh_a_r50_seed3', 'em_a_heads4_r50_seed3',
      'A and A with four heads at seed 42', A_SEED3),
+    (55, 'en_k_heads4_noteacher_r50', 'eo_k_heads4_nopeer_r50',
+     'K with four heads, one transport term left out', LEAVE_ONE_OUT),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after
