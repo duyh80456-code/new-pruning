@@ -1290,31 +1290,33 @@ number, not Latest) and run again: the notebook finds the checkpoint.
 Attach the CIFAR-100 dataset as well. One branch: the second card idles.
 """
 
-A_SEED3 = """A (US-Net as published, BX) at seed 42, the third seed beside BX and
-CQ, so that every row of the main table has the same three seeds:
+A_SEED3 = """A (US-Net as published, BX) and A with four band heads (CH, US-Net +
+WBH) at seed 42, one per card, so that every row of the main table has
+the same three seeds:
 
-| seed | A | K | K + four heads |
-|---|---|---|---|
-| 1995 | BX 76.86 | DD 77.50 | DO 77.84 |
-| 2026 | CQ 76.46 | DC 77.27 | EI 77.76 |
-| 42 | **DH, this notebook** | EL 76.58 | EJ 77.47 |
+| seed | A | A + four heads | K | K + four heads |
+|---|---|---|---|---|
+| 1995 | BX 76.86 | CH 77.21 | DD 77.50 | DO 77.84 |
+| 2026 | CQ 76.46 | (later) | DC 77.27 | EI 77.76 |
+| 42 | **DH, this notebook** | **EM, this notebook** | EL 76.58 | EJ 77.47 |
 
 | | |
 |---|---|
 | DH | BX at seed 42, otherwise unchanged |
+| EM | CH at seed 42, otherwise unchanged |
 
 **How to read it.** EL (K at 42) came in low. If DH is low too, seed 42
 is hard for every method and K's gain over A holds seed by seed; if DH
 sits near BX and CQ, K's spread over seeds is its own and the paper says
-so. Either way DH is reported: no seed is replaced after the fact.
+so. EJ against EM is the transport's share with the heads held fixed.
+Both are reported whatever they give: no seed is replaced after the fact.
 
 ## Timing
 
-A took about 10.7 hours on a T4, close to the 12-hour limit; if the
-session ends first, Save Version, attach that version's output (pick the
-version number, not Latest) and run again: the notebook finds the
-checkpoint. Attach the CIFAR-100 dataset as well. One branch: the second
-card idles.
+A took about 10.7 hours on a T4 and the heads add little, close to the
+12-hour limit; if the session ends first, Save Version, attach that
+version's output (pick the version number, not Latest) and run again:
+the notebook finds the checkpoints. Attach the CIFAR-100 dataset as well.
 """
 
 MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 53, 54}
@@ -1385,8 +1387,8 @@ QUEUE = [
      'K with four heads at seeds 2026 and 42', HEADS_SEEDS),
     (53, 'el_k_late_r50_seed3', None,
      'K at seed 42', K_SEED3),
-    (54, 'dh_a_r50_seed3', None,
-     'A at seed 42', A_SEED3),
+    (54, 'dh_a_r50_seed3', 'em_a_heads4_r50_seed3',
+     'A and A with four heads at seed 42', A_SEED3),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after
