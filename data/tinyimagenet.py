@@ -16,6 +16,7 @@ Where the data comes from, first hit wins: dataset_dir/tiny-imagenet-200,
 any tiny-imagenet-200 under /kaggle/input (an attached dataset), or the
 official zip from Stanford, downloaded into dataset_dir.
 """
+import hashlib
 import os
 import zipfile
 
@@ -58,6 +59,33 @@ def is_tiny(folder):
             and os.path.isdir(os.path.join(folder, 'train')))
 
 
+# md5 of the official release's 200 class ids, sorted, and of its 10,000
+# val labels as sorted "file<TAB>class" lines, read off the Stanford zip
+# (md5 90528d7ca1a48142e341f4ef8d21d0de). Order and line endings do not
+# enter, so a re-zipped Kaggle copy passes; other classes or relabelled
+# val images do not.
+WNIDS_MD5 = '62ec2c49c5abdc833b8ea5082c79667d'
+VAL_MD5 = '10ec1929ae7b5715fce6b8e1d04e1b39'
+
+
+def check_official(folder):
+    """raise unless folder holds the official classes and val labels"""
+    with open(os.path.join(folder, 'wnids.txt')) as handle:
+        wnids = sorted(line.strip() for line in handle if line.strip())
+    with open(os.path.join(folder, 'val', 'val_annotations.txt')) as handle:
+        val = sorted('\t'.join(line.split('\t')[:2])
+                     for line in handle if line.strip())
+    found = (hashlib.md5('\n'.join(wnids).encode()).hexdigest(),
+             hashlib.md5('\n'.join(val).encode()).hexdigest())
+    if found != (WNIDS_MD5, VAL_MD5):
+        raise ValueError(
+            '{} is not the official Tiny ImageNet: class ids {}, val labels '
+            '{} (expected {}, {})'.format(
+                folder, found[0], found[1], WNIDS_MD5, VAL_MD5))
+    print('Tiny ImageNet at {}: official classes and val labels'.format(
+        folder), flush=True)
+
+
 def locate(root):
     """the tiny-imagenet-200 folder, downloading it if nothing has it
 
@@ -76,6 +104,8 @@ def locate(root):
     os.makedirs(root, exist_ok=True)
     archive = os.path.join(root, FOLDER + '.zip')
     if not os.path.isfile(archive):
+        print('no Tiny ImageNet with the official layout under {}; '
+              'downloading {}'.format(INPUTS, URL), flush=True)
         torch.hub.download_url_to_file(URL, archive)
     with zipfile.ZipFile(archive) as handle:
         handle.extractall(root)
@@ -145,6 +175,7 @@ class TinyImageNet(torch.utils.data.Dataset):
 def dataset(train_transforms, val_transforms, test_transforms):
     root = getattr(FLAGS, 'dataset_dir', 'data')
     folder = locate(root)
+    check_official(folder)
     # the cache goes where it can be written: an attached Kaggle input is
     # read-only, so it lands under dataset_dir rather than beside the JPEGs
     cache = os.path.join(root, 'tinyimagenet_cache')
