@@ -1351,7 +1351,48 @@ number, not Latest) and run again: the notebook finds the checkpoints.
 Attach the CIFAR-100 dataset as well.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 53, 54, 55}
+SECOND_SETTINGS = """The method (SlimOT + WBH, DO's recipe, seed 1995) on a second backbone
+and on a second dataset, one per card:
+
+| | backbone | data | what it adds |
+|---|---|---|---|
+| EP | MobileNetV2 | CIFAR-100 | a light, depthwise backbone, US-Net's own |
+| EQ | ResNet-18 | Tiny ImageNet (200 classes, 64x64) | a harder, larger dataset |
+
+Everything else is DO's: widths 0.25 to 1.00, sixteen test widths, four
+band heads, feature transport from epoch 6, 100 epochs, batch 256.
+MobileNetV2 is US-Net's with the CIFAR strides (stem and second stage at
+stride 1) and its last 1x1 to 1280 unslimmed, as US-Net has it, so the
+transport reads the same 1280-channel feature at every width. ResNet-18
+on Tiny ImageNet halves the input at the stem (stem_stride 2), so its
+stages see the CIFAR sizes.
+
+**How to read it.** Alone, nothing: these say whether the method trains
+on each setting and what it reaches. The comparison is US-Net on the same
+two settings, which the next notebook runs; a gap under about 0.4 is not
+a result.
+
+## Data
+
+Attach CIFAR-100 as always, and a Tiny ImageNet dataset: the loader looks
+for a tiny-imagenet-200 folder (with wnids.txt) anywhere under
+/kaggle/input. Without one it downloads the official zip from Stanford,
+which ran at about 100 KB/s here, over half an hour. On first use the
+JPEGs are decoded once into arrays under data/tinyimagenet_cache.
+
+## Timing
+
+Measured locally against DO at batch 256 with the transport on, and
+scaled by DO's 515 s per epoch on a T4: EP takes a third of DO's time per
+step, about 170 s an epoch, so about 5 hours, one session. EQ takes half
+of DO's time per step but Tiny ImageNet has twice CIFAR's steps per epoch,
+about 525 s an epoch, so about 15 hours: when the session ends, Save
+Version, attach that version's output (pick the version number, not
+Latest) and run again; the notebook finds the checkpoint. The first EQ
+epoch also decodes the JPEGs, a few minutes.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 53, 54, 55, 56}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1423,6 +1464,9 @@ QUEUE = [
      'A and A with four heads at seed 42', A_SEED3),
     (55, 'en_k_heads4_noteacher_r50', 'eo_k_heads4_nopeer_r50',
      'K with four heads, one transport term left out', LEAVE_ONE_OUT),
+    (56, 'ep_k_heads4_mbv2', 'eq_k_heads4_r18_tiny',
+     'K with four heads on MobileNetV2 and on Tiny ImageNet',
+     SECOND_SETTINGS),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after

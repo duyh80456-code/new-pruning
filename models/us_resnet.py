@@ -128,13 +128,18 @@ class Model(nn.Module):
         expansion = 4 if depth == 50 else 1
 
         width_mult = FLAGS.width_mult_range[-1]
-        assert input_size % 8 == 0
+        assert input_size % (8 * getattr(FLAGS, 'stem_stride', 1)) == 0
         channels = make_divisible(64 * width_mult)
         self.outp = make_divisible(512 * expansion * width_mult)
 
         # The stem takes RGB, which does not slim, hence us=[False, True].
+        # stem_stride 2 is for 64x64 inputs (Tiny ImageNet): the stages then
+        # see the same 32, 16, 8 and 4 pixels as on CIFAR, at CIFAR's cost
+        # per image, rather than 64 to 8 at four times it.
+        stem_stride = getattr(FLAGS, 'stem_stride', 1)
         features = [nn.Sequential(
-            USConv2d(3, channels, 3, 1, 1, bias=False, us=[False, True]),
+            USConv2d(3, channels, 3, stem_stride, 1, bias=False,
+                     us=[False, True]),
             USBatchNorm2d(channels),
             nn.ReLU(inplace=True),
         )]
