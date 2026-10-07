@@ -164,10 +164,27 @@ def arrays(folder, cache):
            decode(val_paths), np.asarray(val_y, dtype=np.int64)]
     os.makedirs(cache, exist_ok=True)
     for f, a in zip(files, out):
-        # write then rename, so a reader never sees half a file
-        np.save(f + '.part.npy', a)
-        os.replace(f + '.part.npy', f)
+        save_atomic(f, a)
     return out
+
+
+def save_atomic(f, a):
+    """write then rename, so a reader never sees half a file
+
+    The two runs of a notebook start together and both decode when no
+    cache is there yet. Each writes its own part file, named by its pid,
+    so neither renames the other's away; the second rename overwrites the
+    first with the same arrays. Windows refuses that overwrite while the
+    other rename is under way; the file is then already there, complete.
+    """
+    part = '{}.{}.part.npy'.format(f, os.getpid())
+    np.save(part, a)
+    try:
+        os.replace(part, f)
+    except OSError:
+        if not os.path.isfile(f):
+            raise
+        os.remove(part)
 
 
 class TinyImageNet(torch.utils.data.Dataset):
