@@ -4112,6 +4112,48 @@
         1.3428
       ],
       "seed": 1995
+    },
+    {
+      "name": "eu_k_mbv2",
+      "letter": "EU",
+      "what": "EP without the band heads (head_groups 1): SlimOT alone on MobileNetV2, CIFAR-100, seed 1995 (notebook 58). 74.06: +0.04 against ER, +0.38 against EP and above EP at 16/16 widths, so on this backbone the heads cost every width, the reverse of ResNet-50. Against ER the narrow end is still down (0.25-0.35: -0.56 to -0.93) and the wide end up (0.85-1.0: +0.3 to +0.5). Its partner ET (feature_read last_slimmed) trained normally but scored about 1% at every width after calibration: batch-statistics accuracy on train was 99.6%, so the failure is in eval-mode BN, not recorded as a result.",
+      "top1": [
+        70.36,
+        72.01,
+        72.26,
+        73.55,
+        73.55,
+        73.81,
+        73.99,
+        74.44,
+        74.77,
+        74.7,
+        74.8,
+        74.95,
+        75.45,
+        75.48,
+        75.45,
+        75.4
+      ],
+      "nll": [
+        1.0611,
+        0.9967,
+        0.9704,
+        0.9387,
+        0.9425,
+        0.9483,
+        0.974,
+        0.9773,
+        1.0035,
+        1.0316,
+        1.0595,
+        1.0809,
+        1.1047,
+        1.1342,
+        1.1698,
+        1.2123
+      ],
+      "seed": 1995
     }
   ]
 }
