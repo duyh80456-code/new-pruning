@@ -4116,7 +4116,7 @@
     {
       "name": "eu_k_mbv2",
       "letter": "EU",
-      "what": "EP without the band heads (head_groups 1): SlimOT alone on MobileNetV2, CIFAR-100, seed 1995 (notebook 58). 74.06: +0.04 against ER, +0.38 against EP and above EP at 16/16 widths, so on this backbone the heads cost every width, the reverse of ResNet-50. Against ER the narrow end is still down (0.25-0.35: -0.56 to -0.93) and the wide end up (0.85-1.0: +0.3 to +0.5). Its partner ET (feature_read last_slimmed) trained normally but scored about 1% at every width after calibration: batch-statistics accuracy on train was 99.6%, so the failure is in eval-mode BN, not recorded as a result.",
+      "what": "EP without the band heads (head_groups 1): SlimOT alone on MobileNetV2, CIFAR-100, seed 1995 (notebook 58). 74.06: +0.04 against ER, +0.38 against EP and above EP at 16/16 widths, so on this backbone the heads cost every width, the reverse of ResNet-50. Against ER the narrow end is still down (0.25-0.35: -0.56 to -0.93) and the wide end up (0.85-1.0: +0.3 to +0.5). Its partner ET is recorded separately, recalibrated by hand.",
       "top1": [
         70.36,
         72.01,
@@ -4154,6 +4154,48 @@
         1.2123
       ],
       "seed": 1995
+    },
+    {
+      "name": "et_k_heads4_mbv2_slimread",
+      "letter": "ET",
+      "seed": 1995,
+      "top1": [
+        74.65,
+        74.37,
+        74.29,
+        74.15,
+        74.28,
+        73.99,
+        73.52,
+        73.53,
+        73.36,
+        73.08,
+        72.78,
+        72.37,
+        71.81,
+        71.07,
+        70.61,
+        69.14
+      ],
+      "nll": [
+        NaN,
+        NaN,
+        NaN,
+        NaN,
+        NaN,
+        NaN,
+        NaN,
+        NaN,
+        NaN,
+        NaN,
+        NaN,
+        NaN,
+        NaN,
+        NaN,
+        NaN,
+        NaN
+      ],
+      "what": "EP with the transport reading the last slimmed layer (feature_read last_slimmed, the 320 x width linear bottleneck), notebook 58. The log reads 1% at every width: the 1x1 to 1280 is unslimmed and its BN is a plain BatchNorm2d with one set of running statistics for all widths. Nothing here holds the widths' 1280 features together, and they ended nearly constant within a width (channel sd 0.006-0.02) with means 0.1 apart across widths, so statistics averaged over the sixteen widths are many sd off for each; train.py calibrates every width on one model. Recalibrated one width at a time from the checkpoint, locally: 72.94, below EP (73.68), ER (74.02) and EU (74.06), though that protocol only favours it. Not a train.py result: top1 from the notebook 58 checkpoint, each width calibrated alone on 20 train batches, no NLL."
     }
   ]
 }
