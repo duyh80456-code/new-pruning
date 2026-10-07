@@ -4028,6 +4028,90 @@
         1.1479
       ],
       "seed": 42
+    },
+    {
+      "name": "ep_k_heads4_mbv2",
+      "letter": "EP",
+      "what": "SlimOT + WBH (DO recipe) on MobileNetV2, CIFAR-100, seed 1995. 73.68: -0.34 against ER, above at 2/16 widths; the loss is at the narrow end (0.25-0.40: -0.5 to -1.4), the wide half level. The transport reads the unslimmed 1280-channel feature, so prefix alignment is the whole feature at every width, unlike ResNet where it reads the slimmed last block.",
+      "top1": [
+        70.02,
+        71.57,
+        71.96,
+        72.7,
+        73.34,
+        73.68,
+        73.87,
+        74.23,
+        74.26,
+        74.6,
+        74.69,
+        74.62,
+        74.87,
+        74.7,
+        74.79,
+        74.93
+      ],
+      "nll": [
+        1.084,
+        1.0,
+        0.9809,
+        0.9549,
+        0.9503,
+        0.9528,
+        0.9582,
+        0.9759,
+        0.9819,
+        0.9989,
+        1.0102,
+        1.0266,
+        1.1049,
+        1.1289,
+        1.1593,
+        1.1801
+      ],
+      "seed": 1995
+    },
+    {
+      "name": "er_a_mbv2",
+      "letter": "ER",
+      "what": "US-Net as published (BX recipe) on MobileNetV2, CIFAR-100, seed 1995: the baseline for EP. models/us_mobilenet_v2_cifar.py, CIFAR strides, last 1x1 to 1280 unslimmed as in US-Net. 74.02.",
+      "top1": [
+        70.92,
+        72.94,
+        73.01,
+        73.23,
+        73.45,
+        73.88,
+        74.2,
+        74.19,
+        74.46,
+        74.62,
+        74.61,
+        74.75,
+        74.91,
+        75.03,
+        75.02,
+        75.1
+      ],
+      "nll": [
+        1.0111,
+        0.9607,
+        0.9673,
+        0.9733,
+        0.9857,
+        1.0065,
+        1.0477,
+        1.0632,
+        1.1033,
+        1.1325,
+        1.1633,
+        1.2197,
+        1.2545,
+        1.2889,
+        1.3217,
+        1.3428
+      ],
+      "seed": 1995
     }
   ]
 }
