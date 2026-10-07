@@ -1417,7 +1417,37 @@ output (pick the version number, not Latest) and run again; the notebook
 finds the checkpoints.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 53, 54, 55, 56, 57}
+MBV2_DIAGNOSE = """Why the method lost on MobileNetV2. Notebook 56: ER (US-Net) 74.02, EP
+(SlimOT + WBH) 73.68, -0.34, above at 2 of 16 widths; the wide half level,
+the narrow end down (0.25 -0.90, 0.30 -1.37, 0.35 -1.05, 0.40 -0.53).
+Two runs, one per card, each EP with one thing changed, seed 1995:
+
+| | |
+|---|---|
+| ET | EP with the transport reading the last layer that slims (feature_read: last_slimmed) |
+| EU | EP without the band heads (head_groups: 1), SlimOT alone |
+
+On ResNet the transport reads the last block's output, which slims, so a
+narrow width is compared with the teacher's leading channels. EP read
+US-Net's unslimmed 1x1 to 1280 instead, and held every width to the
+teacher's whole feature. ET reads the output of the last inverted
+residual, 320 x width channels, which is the ResNet arrangement on this
+backbone; the logits are untouched. EU asks whether the heads, which
+helped the narrow widths on ResNet-50, cost them here.
+
+**How to read it.** Each against EP (73.68) and ER (74.02). ET was
+designed after EP was seen, so EP stays in the record beside it. One
+seed: a gap under about 0.4 is not a result. The table the last cell
+prints compares with ResNet-50's BX and DD; on this backbone read the
+branch columns against each other and against ER and EP instead.
+
+## Timing
+
+EP took 362 minutes in notebook 56 beside ER on the other card; ET and
+EU are EP's cost, one session.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1493,6 +1523,8 @@ QUEUE = [
      'A and K with four heads on MobileNetV2', MBV2_PAIR),
     (57, 'es_a_r18_tiny', 'eq_k_heads4_r18_tiny',
      'A and K with four heads on Tiny ImageNet', TINY_PAIR),
+    (58, 'et_k_heads4_mbv2_slimread', 'eu_k_mbv2',
+     'Why K with four heads lost on MobileNetV2', MBV2_DIAGNOSE),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after

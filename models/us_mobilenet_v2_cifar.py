@@ -14,6 +14,16 @@ head_groups gives each band of widths its own classifier (WBH), and with
 return_features the forward also returns the pooled 1280-channel feature
 after the last ReLU6, the 'final' tap, which is where the feature transport
 reads. No other tap and no pre-activation read exist here.
+
+feature_read picks which pooled feature 'final' is. 'head' (the default,
+what EP ran) is the unslimmed 1280-channel output above. Every width then
+has the full 1280 channels, so prefix alignment compares all of them and
+width 0.25 is held to the teacher's whole feature. 'last_slimmed' reads
+the output of the last inverted residual instead, 320 x width channels,
+the last layer that slims: a narrow width is then compared with the
+teacher's leading channels only, as on ResNet, where the read is the last
+block's output and that block slims. That output is the block's linear
+bottleneck, before any activation, where ResNet's is after a ReLU.
 """
 import math
 
@@ -33,6 +43,10 @@ class Model(nn.Module):
         if taps != ('final',):
             raise ValueError('us_mobilenet_v2_cifar has only the final tap, '
                              'not {}'.format(taps))
+        self.feature_read = getattr(FLAGS, 'feature_read', 'head')
+        if self.feature_read not in ('head', 'last_slimmed'):
+            raise ValueError('feature_read is head or last_slimmed, not '
+                             '{}'.format(self.feature_read))
 
         # t, c, n, s; ImageNet's second stride of 2 becomes 1
         self.block_setting = [
@@ -99,11 +113,22 @@ class Model(nn.Module):
         return self.narrow_heads[band]
 
     def forward(self, x):
-        x = self.features(x)
+        if (not getattr(FLAGS, 'return_features', False)
+                or self.feature_read == 'head'):
+            x = self.features(x)
+            x = x.view(-1, self.outp)
+            if not getattr(FLAGS, 'return_features', False):
+                return self.head()(x)
+            return self.head()(x), (x,)
+        # the last inverted residual is third from the end, before the
+        # unslimmed 1x1 and the pooling
+        last_block = len(self.features) - 3
+        for index, layer in enumerate(self.features):
+            x = layer(x)
+            if index == last_block:
+                feature = x.mean(dim=(2, 3))
         x = x.view(-1, self.outp)
-        if not getattr(FLAGS, 'return_features', False):
-            return self.head()(x)
-        return self.head()(x), (x,)
+        return self.head()(x), (feature,)
 
     def reset_parameters(self):
         for m in self.modules():
