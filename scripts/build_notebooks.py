@@ -1480,7 +1480,34 @@ ER took about 6 hours and EP 362 minutes in notebook 56; slimming the
 last layer only removes work, so one session each.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59}
+MBV2_RECIPE = """MobileNetV2 trained the way MobileNets are trained. Every MobileNetV2
+run so far (ER, EP, EU, ET, notebook 59) took ResNet-50's optimiser: lr 0.2
+and weight decay 5e-4. MobileNetV2 and US-Net train MobileNets with
+weight decay 4e-5, and US-Net's lr of 0.5 at batch 1024 is about 0.125 at
+our 256. This notebook takes lr 0.1 and weight decay 4e-5 and changes
+nothing else: US-Net's backbone (last 1x1 to 1280 unslimmed), widths 0.25
+to 1.00, 100 epochs, batch 256, seed 1995. Depthwise kernels and BN take
+no decay either way, as in US-Net.
+
+| | |
+|---|---|
+| EX | US-Net (ER with lr 0.1, weight decay 4e-5) |
+| EY | SlimOT + WBH (EP with lr 0.1, weight decay 4e-5) |
+
+**How to read it.** EY against EX. The recipe is the first point of a
+search over recipes, each run as a US-Net and method pair; the one
+chosen is then repeated at seeds 2026 and 42 before anything is claimed.
+EX against ER (74.02) says what the recipe does for US-Net itself. One
+seed: a gap under about 0.4 is not a result. The table the last cell
+prints compares with ResNet-50's BX and DD; read the two branch columns
+against each other instead.
+
+## Timing
+
+ER took about 6 hours and EP 362 minutes in notebook 56; one session.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1561,6 +1588,9 @@ QUEUE = [
     (59, 'ev_a_mbv2_slimlast', 'ew_k_heads4_mbv2_slimlast',
      'A and K with four heads on MobileNetV2, last layer slimmed',
      MBV2_SLIMLAST),
+    (60, 'ex_a_mbv2_lr01wd4e5', 'ey_k_heads4_mbv2_lr01wd4e5',
+     'A and K with four heads on MobileNetV2, MobileNet optimiser',
+     MBV2_RECIPE),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after
