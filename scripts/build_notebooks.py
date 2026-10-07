@@ -1398,11 +1398,15 @@ about 0.4 is not a result.
 
 ## Data
 
-Attach a Tiny ImageNet dataset, e.g. nikhilshingadiya/tinyimagenet200:
-the loader finds any folder with the official layout (wnids.txt,
-val/val_annotations.txt, train/) under /kaggle/input, whatever it is
-called. Without one it downloads the official zip from Stanford, which
-ran at about 100 KB/s here, over half an hour. The first epoch decodes
+Attach a Tiny ImageNet dataset. The loader takes, in this order: any
+folder with the official layout (wnids.txt, val/val_annotations.txt,
+train/) under /kaggle/input, whatever it is called; any zip under
+/kaggle/input holding tiny-imagenet-200/, which it unpacks; or, with
+neither, the official zip from Stanford, which ran at about 100 KB/s
+here, over half an hour. Whichever it takes is checked against the
+official class ids and val labels before training. Kaggle once failed to
+mount nikhilshingadiya/tinyimagenet200 (120,000 files); a copy uploaded
+as one zip mounts as one file. The first epoch decodes
 the JPEGs once into arrays under data/tinyimagenet_cache, a few minutes.
 Attach CIFAR-100 as well; the notebook's data cell expects it.
 

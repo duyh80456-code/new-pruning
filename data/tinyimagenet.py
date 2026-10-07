@@ -95,14 +95,26 @@ def locate(root):
     here = os.path.join(root, FOLDER)
     if is_tiny(here):
         return here
+    # An unpacked copy is used where it lies. A copy uploaded as the zip
+    # mounts as one file rather than 120,000, which Kaggle has failed to
+    # mount at least once; it is unpacked into root like the download.
+    archives = []
     for top, dirs, files in os.walk(INPUTS):
         if 'wnids.txt' in files and is_tiny(top):
             return top
+        archives += [os.path.join(top, f) for f in files
+                     if f.lower().endswith('.zip')]
         # do not descend into the 200 class folders of a train split
         dirs[:] = [d for d in dirs if not d.startswith('n0')
                    and not d.startswith('n1') and d != 'images']
     os.makedirs(root, exist_ok=True)
     archive = os.path.join(root, FOLDER + '.zip')
+    for candidate in archives:
+        with zipfile.ZipFile(candidate) as handle:
+            if FOLDER + '/wnids.txt' in handle.namelist():
+                print('unpacking Tiny ImageNet from', candidate, flush=True)
+                handle.extractall(root)
+                return here
     if not os.path.isfile(archive):
         print('no Tiny ImageNet with the official layout under {}; '
               'downloading {}'.format(INPUTS, URL), flush=True)
