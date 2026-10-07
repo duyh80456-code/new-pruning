@@ -4196,6 +4196,90 @@
         NaN
       ],
       "what": "EP with the transport reading the last slimmed layer (feature_read last_slimmed, the 320 x width linear bottleneck), notebook 58. The log reads 1% at every width: the 1x1 to 1280 is unslimmed and its BN is a plain BatchNorm2d with one set of running statistics for all widths. Nothing here holds the widths' 1280 features together, and they ended nearly constant within a width (channel sd 0.006-0.02) with means 0.1 apart across widths, so statistics averaged over the sixteen widths are many sd off for each; train.py calibrates every width on one model. Recalibrated one width at a time from the checkpoint, locally: 72.94, below EP (73.68), ER (74.02) and EU (74.06), though that protocol only favours it. Not a train.py result: top1 from the notebook 58 checkpoint, each width calibrated alone on 20 train batches, no NLL."
+    },
+    {
+      "name": "eq_k_heads4_r18_tiny",
+      "letter": "EQ",
+      "what": "SlimOT + WBH (DO recipe) on ResNet-18, Tiny ImageNet, seed 1995, notebook 57: the second dataset. 59.27: +1.14 against ES, above at 15/16 widths (0.25 level, -0.05; 0.40-0.60 +1.5 to +2.0; 0.80-1.0 +1.2 to +1.5), beside DO against BX on CIFAR-100 (+0.98). One seed. 630 min on a T4, one session.",
+      "top1": [
+        54.93,
+        56.03,
+        56.56,
+        57.92,
+        58.43,
+        59.18,
+        59.72,
+        59.8,
+        59.47,
+        60.05,
+        60.41,
+        60.9,
+        61.18,
+        60.9,
+        61.23,
+        61.62
+      ],
+      "nll": [
+        1.8828,
+        1.8307,
+        1.8153,
+        1.7947,
+        1.7747,
+        1.769,
+        1.7562,
+        1.7717,
+        1.8002,
+        1.8063,
+        1.8089,
+        1.8008,
+        1.7997,
+        1.8423,
+        1.8631,
+        1.896
+      ],
+      "seed": 1995
+    },
+    {
+      "name": "es_a_r18_tiny",
+      "letter": "ES",
+      "what": "US-Net as published (BX recipe) on ResNet-18, Tiny ImageNet (200 classes, 64x64, official val split as test), stem_stride 2, seed 1995, notebook 57: the baseline EQ is read against. 58.13. Width 1.0 ends at 0.15% train error against 39.5% on val.",
+      "top1": [
+        54.98,
+        55.5,
+        55.96,
+        56.43,
+        57.48,
+        57.26,
+        57.69,
+        58.27,
+        58.79,
+        59.18,
+        59.41,
+        59.39,
+        59.72,
+        59.54,
+        59.98,
+        60.46
+      ],
+      "nll": [
+        1.979,
+        1.9821,
+        1.9792,
+        2.0033,
+        2.0098,
+        2.052,
+        2.1021,
+        2.1246,
+        2.1644,
+        2.1856,
+        2.209,
+        2.2559,
+        2.2915,
+        2.3288,
+        2.356,
+        2.3601
+      ],
+      "seed": 1995
     }
   ]
 }
