@@ -24,6 +24,16 @@ the last layer that slims: a narrow width is then compared with the
 teacher's leading channels only, as on ResNet, where the read is the last
 block's output and that block slims. That output is the block's linear
 bottleneck, before any activation, where ResNet's is after a ReLU.
+
+slim_last slims that 1x1 to 1280 as well, with its BN and the classifier's
+input: width w ends in 1280 x w channels after the last ReLU6, and the
+'head' read is then that slimmed feature, as on ResNet, where the last
+block and the classifier's input slim with the width. US-Net keeps the
+layer whole so every width has the full feature to classify from; this
+gives that up. Its BN becomes a USBatchNorm2d, so each width keeps its own
+statistics there, where the plain BN shares one set across all widths:
+under last_slimmed (ET) the widths' 1280 features drifted apart, and
+statistics calibrated over all of them read 1% at every width.
 """
 import math
 
@@ -47,6 +57,10 @@ class Model(nn.Module):
         if self.feature_read not in ('head', 'last_slimmed'):
             raise ValueError('feature_read is head or last_slimmed, not '
                              '{}'.format(self.feature_read))
+        self.slim_last = getattr(FLAGS, 'slim_last', False)
+        if self.slim_last and self.feature_read != 'head':
+            raise ValueError('slim_last already reads a slimmed feature; '
+                             'leave feature_read at head')
 
         # t, c, n, s; ImageNet's second stride of 2 becomes 1
         self.block_setting = [
@@ -78,8 +92,9 @@ class Model(nn.Module):
                 channels = outp
         features.append(nn.Sequential(
             USConv2d(channels, self.outp, 1, 1, 0, bias=False,
-                     us=[True, False]),
-            nn.BatchNorm2d(self.outp),
+                     us=[True, self.slim_last]),
+            (USBatchNorm2d(self.outp) if self.slim_last
+             else nn.BatchNorm2d(self.outp)),
             nn.ReLU6(inplace=True),
         ))
         features.append(nn.AdaptiveAvgPool2d(1))
@@ -87,16 +102,18 @@ class Model(nn.Module):
 
         # WBH, as in us_resnet: one head per band of widths, the widest
         # band's head keeping the name classifier and registered last, so
-        # get_classifier_weight and the teacher read it. The feature does
-        # not slim, so no head slims either; they are USLinear only so that
-        # model.apply gives them the width the band is chosen by.
+        # get_classifier_weight and the teacher read it. Unless slim_last,
+        # the feature does not slim, so no head slims either; they are then
+        # USLinear only so that model.apply gives them the width the band
+        # is chosen by.
         groups = getattr(FLAGS, 'head_groups', 1)
+        us = [self.slim_last, False]
         if groups > 1:
             self.narrow_heads = nn.ModuleList([
-                USLinear(self.outp, num_classes, us=[False, False])
+                USLinear(self.outp, num_classes, us=us)
                 for _ in range(groups - 1)])
         self.classifier = nn.Sequential(
-            USLinear(self.outp, num_classes, us=[False, False]))
+            USLinear(self.outp, num_classes, us=us))
         if FLAGS.reset_parameters:
             self.reset_parameters()
 
@@ -116,7 +133,7 @@ class Model(nn.Module):
         if (not getattr(FLAGS, 'return_features', False)
                 or self.feature_read == 'head'):
             x = self.features(x)
-            x = x.view(-1, self.outp)
+            x = x.view(x.size(0), -1)
             if not getattr(FLAGS, 'return_features', False):
                 return self.head()(x)
             return self.head()(x), (x,)
@@ -127,7 +144,7 @@ class Model(nn.Module):
             x = layer(x)
             if index == last_block:
                 feature = x.mean(dim=(2, 3))
-        x = x.view(-1, self.outp)
+        x = x.view(x.size(0), -1)
         return self.head()(x), (feature,)
 
     def reset_parameters(self):

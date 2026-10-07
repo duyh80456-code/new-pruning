@@ -1451,7 +1451,36 @@ EP took 362 minutes in notebook 56 beside ER on the other card; ET and
 EU are EP's cost, one session.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58}
+MBV2_SLIMLAST = """MobileNetV2 with the last layer slimmed. Notebooks 56 and 58, on US-Net's
+MobileNetV2, where the last 1x1 to 1280 does not slim (as MobileNetV2
+itself has it below width 1): ER (US-Net) 74.02, EP (SlimOT + WBH) 73.68,
+EU (SlimOT alone) 74.06, ET (transport on the last inverted residual)
+72.94. On ResNet the last block and the classifier's input slim with the
+width; there the transport meets a narrow width on the teacher's leading
+channels and each band head sees a narrower input. Here neither held.
+
+Two runs, one per card, seed 1995, both with that 1x1 slimmed too
+(slim_last: True), with its BN and the classifier's input, so width w
+ends in 1280 x w channels:
+
+| | |
+|---|---|
+| EV | US-Net on this backbone (ER with slim_last) |
+| EW | SlimOT + WBH on this backbone (EP with slim_last) |
+
+**How to read it.** EW against EV: the backbone changed, so ER is not
+its baseline. EV against ER says what slimming the last layer costs
+US-Net itself. One seed: a gap under about 0.4 is not a result. The table
+the last cell prints compares with ResNet-50's BX and DD; on this
+backbone read the two branch columns against each other.
+
+## Timing
+
+ER took about 6 hours and EP 362 minutes in notebook 56; slimming the
+last layer only removes work, so one session each.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1529,6 +1558,9 @@ QUEUE = [
      'A and K with four heads on Tiny ImageNet', TINY_PAIR),
     (58, 'et_k_heads4_mbv2_slimread', 'eu_k_mbv2',
      'Why K with four heads lost on MobileNetV2', MBV2_DIAGNOSE),
+    (59, 'ev_a_mbv2_slimlast', 'ew_k_heads4_mbv2_slimlast',
+     'A and K with four heads on MobileNetV2, last layer slimmed',
+     MBV2_SLIMLAST),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after
