@@ -1,14 +1,8 @@
-# =========================== Branch EM ===========================
-# CH (A with four band heads, US-Net + WBH) at seed 42, otherwise
-# unchanged. CH is the row of the main table that has the heads and not
-# the transport, so SlimOT + WBH against it isolates the transport's
-# share. It had one seed (1995, 77.21); EM is its seed-42 partner of EJ
-# (SlimOT + WBH at 42) and runs beside DH (A at 42) in notebook 54.
-#
-# The heads, from SOLAR (WACV 2026), adapted to continuous width: four
-# equal bands of the range, 0.25-0.40, 0.45-0.60, 0.65-0.80, 0.85-1.00,
-# each with its own classifier over the shared backbone. See CH's config
-# for the full account.
+# =========================== Branch FC ===========================
+# DO (SlimOT + Width-Band Heads: K as DD, ResNet-50, post-ReLU read,
+# feature transport from epoch 6, head_groups 4) at seed 2006, the third
+# seed of the main table, otherwise unchanged. DO gave 77.84 at 1995 and
+# EI 77.76 at 2026. Read against FB, A at 2006.
 
 num_gpus_per_job: 1
 num_cpus_per_job: 4
@@ -52,12 +46,12 @@ pretrained: ''
 resume: ''
 test_only: False
 
-random_seed: 42
+random_seed: 2006
 batch_size: 256
 reset_parameters: True
 
 # =========================== Override Settings ===========================
-log_dir: logs/cifar100_em_a_heads4_r50_seed3
+log_dir: logs/cifar100_fc_k_heads4_r50_seed3
 slimmable_training: True
 universally_slimmable_training: True
 num_sample_training: 4
@@ -76,5 +70,27 @@ width_mult_list_test: [0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.
 # =========================== Distillation ===========================
 inplace_distill: True
 kd_loss: soft_ce
-horizontal_kd: False
+sinkhorn_eps: 0.2
+sinkhorn_iters: 100
+sinkhorn_debiased: True
+cost_normalize: True
+horizontal_kd: True
+horizontal_weight: 1.0
+feature_kd: True
+feature_align: prefix
+feature_weight: 1.0
+horizontal_where: feature
+
+# Deferred, K holds all four widths' graphs until the end of the step:
+# 19.3 GB at batch 256 on ResNet-50, and a T4 has 15. Only the pair term
+# needs two widths at once, and its gradient splits exactly into one part
+# per side, so each width takes its part with the partner detached and is
+# freed. Same gradient to a relative 5e-8 on ResNet-18, checked against
+# the deferred path through train.py's own loop. Costs one extra forward
+# without a graph per step.
+split_pair_backward: True
+
+feature_start_epoch: 6
+
+# =========================== Heads ===========================
 head_groups: 4

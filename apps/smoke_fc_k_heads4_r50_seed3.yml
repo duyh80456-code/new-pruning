@@ -1,9 +1,8 @@
-# =========================== Branch EJ ===========================
+# =========================== Branch FC ===========================
 # DO (SlimOT + Width-Band Heads: K as DD, ResNet-50, post-ReLU read,
-# feature transport from epoch 6, head_groups 4) at seed 42, otherwise
-# unchanged: the third seed of the method for the mean and spread in the
-# results table. Nothing at seed 42 exists yet to read it against; the
-# heads' gain at this seed needs K (DD) at seed 42 as well.
+# feature transport from epoch 6, head_groups 4) at seed 2006, the third
+# seed of the main table, otherwise unchanged. DO gave 77.84 at 1995 and
+# EI 77.76 at 2026. Read against FB, A at 2006.
 
 num_gpus_per_job: 1
 num_cpus_per_job: 4
@@ -47,13 +46,13 @@ pretrained: ''
 resume: ''
 test_only: False
 
-random_seed: 42
+random_seed: 2006
 batch_size: 64
 max_iters_per_epoch: 3
 reset_parameters: True
 
 # =========================== Override Settings ===========================
-log_dir: logs/smoke_ej_k_heads4_r50_seed3
+log_dir: logs/smoke_fc_k_heads4_r50_seed3
 slimmable_training: True
 universally_slimmable_training: True
 num_sample_training: 4

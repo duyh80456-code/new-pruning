@@ -1,14 +1,9 @@
-# =========================== Branch EM ===========================
-# CH (A with four band heads, US-Net + WBH) at seed 42, otherwise
-# unchanged. CH is the row of the main table that has the heads and not
-# the transport, so SlimOT + WBH against it isolates the transport's
-# share. It had one seed (1995, 77.21); EM is its seed-42 partner of EJ
-# (SlimOT + WBH at 42) and runs beside DH (A at 42) in notebook 54.
-#
-# The heads, from SOLAR (WACV 2026), adapted to continuous width: four
-# equal bands of the range, 0.25-0.40, 0.45-0.60, 0.65-0.80, 0.85-1.00,
-# each with its own classifier over the shared backbone. See CH's config
-# for the full account.
+# =========================== Branch FD ===========================
+# CH (SOLAR adapted to US-Net: A on ResNet-50 with four band heads) at
+# seed 2026 instead of 1995, otherwise unchanged. CH gave 77.21 at 1995.
+# Gives SOLAR the seeds the method has, and is the "WBH without
+# transport" row at 2026: read against EI (the method at 2026, 77.76)
+# and CQ (A at 2026, 76.46).
 
 num_gpus_per_job: 1
 num_cpus_per_job: 4
@@ -41,8 +36,8 @@ grad_clip: 5.0
 lr: 0.2
 lr_scheduler: cosine_decaying
 lr_warmup: True
-lr_warmup_epochs: 1
-num_epochs: 2
+lr_warmup_epochs: 5
+num_epochs: 100
 
 # model profiling
 profiling: [gpu]
@@ -52,17 +47,16 @@ pretrained: ''
 resume: ''
 test_only: False
 
-random_seed: 42
-batch_size: 64
-max_iters_per_epoch: 3
+random_seed: 2026
+batch_size: 256
 reset_parameters: True
 
 # =========================== Override Settings ===========================
-log_dir: logs/smoke_em_a_heads4_r50_seed3
+log_dir: logs/cifar100_fd_a_heads4_r50_seed2
 slimmable_training: True
 universally_slimmable_training: True
 num_sample_training: 4
-bn_cal_batch_num: 2
+bn_cal_batch_num: 20
 calibrate_bn: true
 cumulative_bn_stats: true
 
@@ -72,7 +66,7 @@ width_mult: 1.0
 width_mult_list: [0.25, 1.0]
 width_mult_range: [0.25, 1.0]
 # widths that get a calibrated BN and an entry in the final table
-width_mult_list_test: [0.25, 0.5, 0.75, 1.0]
+width_mult_list_test: [0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
 
 # =========================== Distillation ===========================
 inplace_distill: True

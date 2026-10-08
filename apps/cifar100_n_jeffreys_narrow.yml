@@ -10,7 +10,7 @@
 #
 # Seed noise on the mean over widths measured 0.01, so 0.13 would be a
 # real gap. It is also a schedule chosen from the same run it would be
-# judged against, which is what a_seed3 is for.
+# judged against.
 #
 # F also cut the mean NLL from 1.361 to 1.255, against 0.016 of seed
 # noise, by holding down the overconfidence of the wide widths. Whether

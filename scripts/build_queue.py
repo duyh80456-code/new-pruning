@@ -52,8 +52,6 @@ HELD = [
      'variance, and its reversal. Variance and activation disagree about '
      'a channel that is large and constant, so they are separate '
      'questions; ResNet-18, and the pair it followed up was never run.'),
-    ('a_seed3', 'a third seed of A on ResNet-18. The seed question has '
-     'moved to ResNet-50, notebook 32.'),
     ('z_eps_100', 'a control built to lose: blur the plan away and see '
      'what is left. Y at eps 0.5 has since made most of its point for '
      'a quarter of the cost.'),

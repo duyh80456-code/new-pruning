@@ -1,7 +1,7 @@
-# =========================== Branch DH ===========================
-# A on ResNet-50 exactly as BX, at a third seed, 42. BX (1995) and CQ
-# (2026) are the first two; a third gives A a mean and a spread over
-# seeds, which every comparison in the paper is read against.
+# =========================== Branch FB ===========================
+# A on ResNet-50 (US-Net as published, BX) at seed 2006, the third seed
+# of the main table, otherwise unchanged. BX gave 76.86 at 1995 and CQ
+# 76.46 at 2026. Read against FC, the method at 2006.
 
 num_gpus_per_job: 1
 num_cpus_per_job: 4
@@ -45,13 +45,13 @@ pretrained: ''
 resume: ''
 test_only: False
 
-random_seed: 42
+random_seed: 2006
 batch_size: 64
 max_iters_per_epoch: 3
 reset_parameters: True
 
 # =========================== Override Settings ===========================
-log_dir: logs/smoke_dh_a_r50_seed3
+log_dir: logs/smoke_fb_a_r50_seed3
 slimmable_training: True
 universally_slimmable_training: True
 num_sample_training: 4

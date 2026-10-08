@@ -938,7 +938,7 @@ finish, attach this version's output (pick the version number, not
 Latest) and run again.
 """
 
-WKD_AND_SEED3 = """Two ways of bringing Wasserstein into US-Net's inplace distillation,
+WKD_PAIR = """Two ways of bringing Wasserstein into US-Net's inplace distillation,
 both from WKD-L (Lv et al., NeurIPS 2024), on ResNet-50 under BX's protocol.
 
 | | the students learn from | read against |
@@ -1238,8 +1238,8 @@ number, not Latest) and run again: the notebook finds the checkpoint.
 Attach the CIFAR-100 dataset as well.
 """
 
-HEADS_SEEDS = """DO, K with four classifier heads (SlimOT + Width-Band Heads), at two
-more seeds. At seed 1995 DO gave 77.84, 0.34 above K (DD 77.50); every
+HEADS_SEEDS = """DO, K with four classifier heads (SlimOT + Width-Band Heads), at a
+second seed. At seed 1995 DO gave 77.84, 0.34 above K (DD 77.50); every
 run with heads so far is at that seed, and their gain has ranged from
 +0.01 (CI on the older K) to +0.35 (CH on A). Notebook 50 showed why one
 seed is not enough: far pairs gave DM 78.16 at 1995 and EF 76.51 at 2026,
@@ -1248,75 +1248,19 @@ seed is not enough: far pairs gave DM 78.16 at 1995 and EF 76.51 at 2026,
 | | |
 |---|---|
 | EI | DO at seed 2026 |
-| EJ | DO at seed 42 |
 
 **How to read it.** EI against DC (K at seed 2026, 77.27) and CQ (A at
 seed 2026, 76.46): whether the heads' gain over K repeats. That is the
-run that decides whether the heads join the method. EJ is the third
-seed for the mean and spread of the results table; nothing at seed 42
-exists yet, so the heads' gain at that seed waits for K at seed 42. A gap
-under about 0.4 is not a result.
+run that decides whether the heads join the method. A gap under about
+0.4 is not a result.
 
 ## Timing
 
-K took about 14 hours on a T4 and the heads add little, so each run
-needs two sessions. When the first ends, Save Version, attach that
-version's output (pick the version number, not Latest) and run again:
-the notebook finds the checkpoints. Attach the CIFAR-100 dataset as well.
-"""
-
-K_SEED3 = """K (DD, SlimOT) at seed 42, so that K and K with four heads have the same
-three seeds and the heads can be read seed by seed:
-
-| seed | K | K + four heads |
-|---|---|---|
-| 1995 | DD 77.50 | DO 77.84 |
-| 2026 | DC 77.27 | EI (notebook 52) |
-| 42 | **EL, this notebook** | EJ (notebook 52) |
-
-| | |
-|---|---|
-| EL | DD at seed 42, otherwise unchanged |
-
-**How to read it.** EL against EJ: the heads' gain at seed 42. With DD
-and DC it also gives K a mean and spread over three seeds. A gap under
-about 0.4 is not a result.
-
-## Timing
-
-K took about 14 hours on a T4, so the run needs two sessions. When the
-first ends, Save Version, attach that version's output (pick the version
-number, not Latest) and run again: the notebook finds the checkpoint.
-Attach the CIFAR-100 dataset as well. One branch: the second card idles.
-"""
-
-A_SEED3 = """A (US-Net as published, BX) and A with four band heads (CH, US-Net +
-WBH) at seed 42, one per card, so that every row of the main table has
-the same three seeds:
-
-| seed | A | A + four heads | K | K + four heads |
-|---|---|---|---|---|
-| 1995 | BX 76.86 | CH 77.21 | DD 77.50 | DO 77.84 |
-| 2026 | CQ 76.46 | (later) | DC 77.27 | EI 77.76 |
-| 42 | **DH, this notebook** | **EM, this notebook** | EL 76.58 | EJ 77.47 |
-
-| | |
-|---|---|
-| DH | BX at seed 42, otherwise unchanged |
-| EM | CH at seed 42, otherwise unchanged |
-
-**How to read it.** EL (K at 42) came in low. If DH is low too, seed 42
-is hard for every method and K's gain over A holds seed by seed; if DH
-sits near BX and CQ, K's spread over seeds is its own and the paper says
-so. EJ against EM is the transport's share with the heads held fixed.
-Both are reported whatever they give: no seed is replaced after the fact.
-
-## Timing
-
-A took about 10.7 hours on a T4 and the heads add little, close to the
-12-hour limit; if the session ends first, Save Version, attach that
-version's output (pick the version number, not Latest) and run again:
-the notebook finds the checkpoints. Attach the CIFAR-100 dataset as well.
+K took about 14 hours on a T4 and the heads add little, so the run needs
+two sessions. When the first ends, Save Version, attach that version's
+output (pick the version number, not Latest) and run again: the notebook
+finds the checkpoints. Attach the CIFAR-100 dataset as well. One branch:
+the second card idles.
 """
 
 LEAVE_ONE_OUT = """The method (SlimOT + WBH, DO, seed 1995, 77.84) with one transport term
@@ -1536,7 +1480,60 @@ per step EP does (EP: 362 minutes on a T4 in notebook 56) and peaks at
 6.4 GB; one session.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61}
+THIRD_SEED = """A third seed for the main table: US-Net and the method (SlimOT + WBH) at
+seed 2006, one per card. The table has two seeds so far, and the
+method's gain over US-Net moved between them:
+
+| | seed 1995 | seed 2026 | seed 2006 |
+|---|---|---|---|
+| A (US-Net) | BX 76.86 | CQ 76.46 | **FB, this notebook** |
+| SlimOT + WBH | DO 77.84 | EI 77.76 | **FC, this notebook** |
+
+| | |
+|---|---|
+| FB | BX at seed 2006 |
+| FC | DO at seed 2006 |
+
+**How to read it.** FC against FB: the gap and the number of widths it
+holds at, beside +0.98 at 1995 and +1.30 at 2026. SOLAR and Scala have
+no run at 2006 yet; notebook 63 gives them 2026 first.
+
+## Timing
+
+FB takes about BX's 10.7 hours, FC about K's 14, so FC needs a second
+session. When the first ends, Save Version, attach that version's output
+(pick the version number, not Latest) and run again: the notebook finds
+the checkpoints. Attach the CIFAR-100 dataset as well.
+"""
+
+BASELINES_SEED2 = """The two strongest published baselines at seed 2026, one per card. Both
+ran at 1995 only, while US-Net and the method have 1995 and 2026:
+
+| | seed 1995 | seed 2026 |
+|---|---|---|
+| A (US-Net) | BX 76.86 | CQ 76.46 |
+| SlimOT + WBH | DO 77.84 | EI 77.76 |
+| SOLAR (CH) | CH 77.21 | **FD, this notebook** |
+| Scala (CF) | CF 76.80 | **FE, this notebook** |
+
+| | |
+|---|---|
+| FD | CH (SOLAR adapted to US-Net: four band heads, no transport) at seed 2026 |
+| FE | CF (Scala, ported from the authors' code) at seed 2026 |
+
+**How to read it.** Each against EI, the method at the same seed. FD is
+also the "WBH without transport" row of the ablation: at 1995 the
+transport added +0.63 on top of the heads (DO 77.84 against CH 77.21).
+
+## Timing
+
+About A's 10.7 hours each, inside one session if the card is not slow.
+If it ends first, Save Version, attach that version's output (pick the
+version number, not Latest) and run again: the notebook finds the
+checkpoints. Attach the CIFAR-100 dataset as well.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 55, 56, 57, 58, 59, 60, 61, 62, 63}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1576,7 +1573,7 @@ QUEUE = [
     (37, 'de_a_amp_r50', 'df_k_amp_r50',
      'A and K with mixed precision, against BX and BY', AMP_CHECK),
     (38, 'dg_wkd_r50', 'di_kl_wkd_r50',
-     'Wasserstein instead of KL, and beside it', WKD_AND_SEED3),
+     'Wasserstein instead of KL, and beside it', WKD_PAIR),
     (40, 'dj_k_strat_adjacent_r50', 'dk_k_strat_spread_r50',
      'K with the free widths drawn in blocks: close pairs or far ones',
      STRATIFIED),
@@ -1600,12 +1597,8 @@ QUEUE = [
      FAR_HEADS),
     (51, 'eg_k_strat_random_r50', None,
      'K with the free widths paired at random, on both cards', PAIRING),
-    (52, 'ei_k_heads4_r50_seed2', 'ej_k_heads4_r50_seed3',
-     'K with four heads at seeds 2026 and 42', HEADS_SEEDS),
-    (53, 'el_k_late_r50_seed3', None,
-     'K at seed 42', K_SEED3),
-    (54, 'dh_a_r50_seed3', 'em_a_heads4_r50_seed3',
-     'A and A with four heads at seed 42', A_SEED3),
+    (52, 'ei_k_heads4_r50_seed2', None,
+     'K with four heads at seed 2026', HEADS_SEEDS),
     (55, 'en_k_heads4_noteacher_r50', 'eo_k_heads4_nopeer_r50',
      'K with four heads, one transport term left out', LEAVE_ONE_OUT),
     (56, 'er_a_mbv2', 'ep_k_heads4_mbv2',
@@ -1622,6 +1615,10 @@ QUEUE = [
      MBV2_RECIPE),
     (61, 'ez_a_mbv1', 'fa_k_heads4_mbv1',
      'A and K with four heads on MobileNetV1', MBV1_PAIR),
+    (62, 'fb_a_r50_seed3', 'fc_k_heads4_r50_seed3',
+     'A and K with four heads at seed 2006', THIRD_SEED),
+    (63, 'fd_a_heads4_r50_seed2', 'fe_scala_r50_seed2',
+     'SOLAR and Scala at seed 2026', BASELINES_SEED2),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after
