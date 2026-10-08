@@ -1507,7 +1507,36 @@ against each other instead.
 ER took about 6 hours and EP 362 minutes in notebook 56; one session.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60}
+MBV1_PAIR = """US-Net and the method on MobileNetV1. On MobileNetV2, whose last 1x1 to
+1280 does not slim, the method was level with US-Net (EU 74.06, ER
+74.02); with that layer slimmed it won by 0.77 at 15 of 16 widths (EW
+against EV, notebook 59), the margin it has on ResNet-50 and on Tiny
+ImageNet, but slimming the layer cost US-Net 0.61. US-Net's MobileNetV1
+slims its last layer and the classifier's input as published, so it is a
+MobileNet with that arrangement at no cost to the baseline.
+
+| | |
+|---|---|
+| EZ | US-Net as published (BX recipe) |
+| FA | SlimOT + WBH (DO recipe) |
+
+models/us_mobilenet_v1_cifar.py: US-Net's MobileNetV1 with the CIFAR
+strides (stem and first 128-channel stage at stride 1, 8x downsampling),
+175.7 M MACs at width 1.0 and 12.1 M at 0.25. Widths 0.25 to 1.00, 100
+epochs, batch 256, seed 1995, one per card.
+
+**How to read it.** FA against EZ. One seed: a gap under about 0.4 is
+not a result. The table the last cell prints compares with ResNet-50's
+BX and DD; read the two branch columns against each other instead.
+
+## Timing
+
+Measured locally at batch 256 with the transport on, FA takes the time
+per step EP does (EP: 362 minutes on a T4 in notebook 56) and peaks at
+6.4 GB; one session.
+"""
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1591,6 +1620,8 @@ QUEUE = [
     (60, 'ex_a_mbv2_lr01wd4e5', 'ey_k_heads4_mbv2_lr01wd4e5',
      'A and K with four heads on MobileNetV2, MobileNet optimiser',
      MBV2_RECIPE),
+    (61, 'ez_a_mbv1', 'fa_k_heads4_mbv1',
+     'A and K with four heads on MobileNetV1', MBV1_PAIR),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after
