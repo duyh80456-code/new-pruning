@@ -563,7 +563,7 @@ checkpoints and both continue. Attach the CIFAR-100 dataset as well.
     return spec, steps
 
 
-SEEDS = [(82, 2, 2026, 'second'), (83, 3, 2006, 'third')]
+SEEDS = [(65, 2, 2026, 'second'), (66, 3, 2006, 'third')]
 
 
 if __name__ == '__main__':

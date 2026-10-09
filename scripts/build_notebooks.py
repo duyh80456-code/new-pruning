@@ -1496,7 +1496,7 @@ method's gain over US-Net moved between them:
 
 **How to read it.** FC against FB: the gap and the number of widths it
 holds at, beside +0.98 at 1995 and +1.30 at 2026. SOLAR and Scala at
-2006 are FM (notebook 64) and FN (notebook 69).
+2006 are FM and FN (notebook 61).
 
 ## Timing
 
@@ -1536,10 +1536,10 @@ checkpoints. Attach the CIFAR-100 dataset as well.
 LOO_TABLE = """| configuration | 1995 | 2026 | 2006 |
 |---|---|---|---|
 | full: SlimOT + WBH | DO 77.84 | EI 77.76 | FC, notebook 60 |
-| w/o Teacher Transport | EN 77.60 | FF, notebook 61 | FJ, notebook 63 |
-| w/o Peer Transport | EO 77.03 | FG, notebook 61 | FK, notebook 63 |
-| w/o Delayed Transport | CI 77.27 | FH, notebook 62 | FL, notebook 64 |
-| w/o WBH | DD 77.50 | DC 77.27 | FI, notebook 62 |
+| w/o Teacher Transport | EN 77.60 | FF, notebook 67 | FJ, notebook 68 |
+| w/o Peer Transport | EO 77.03 | FG, notebook 67 | FK, notebook 68 |
+| w/o Delayed Transport | CI 77.27 | FH, notebook 69 | FL, notebook 69 |
+| w/o WBH | DD 77.50 | DC 77.27 | FI, notebook 70 |
 
 The table reports each row as a mean over the three seeds. A run that
 collapses counts in that mean: the collapse is what the configuration
@@ -1569,21 +1569,22 @@ it asks whether Peer Transport alone holds there.
 
 About K's 14 hours each, so two sessions. """ + RESUME + "\n"
 
-LOO_MIXED = """Two rows of the leave-one-out ablation of the method (SlimOT + WBH), one
-per card: Delayed Transport off at seed 2026, and WBH off at seed 2006.
+LOO_DELAYED = """The row "w/o Delayed Transport" of the leave-one-out ablation of the
+method (SlimOT + WBH) at seeds 2026 and 2006, one per card: both transport
+terms from epoch 1, everything else the method's.
 
 """ + LOO_TABLE + """
 
 | | |
 |---|---|
-| FH | CI at seed 2026: both transport terms from epoch 1 |
-| FI | DD at seed 2006: one shared classifier |
+| FH | CI at seed 2026 |
+| FL | CI at seed 2006 |
 
-**How to read it.** FH against EI (77.76). Seed 2026 is where K without
-Delayed Transport collapsed (CR, widths up to 0.60 at chance by epoch 3);
-FH is the same change with the heads. If its narrow widths sit at 1 per
-cent, let it run to the end anyway: the final table is what the
-ablation records. FI against FC (notebook 60).
+**How to read it.** FH against EI (77.76), FL against FC (notebook 60).
+Seed 2026 is where K without Delayed Transport collapsed (CR, widths up
+to 0.60 at chance by epoch 3), and either run may do the same. If its
+narrow widths sit at 1 per cent, let it run to the end anyway: the final
+table is what the ablation records, collapse included.
 
 ## Timing
 
@@ -1605,24 +1606,21 @@ the two transport terms, one per card.
 
 About K's 14 hours each, so two sessions. """ + RESUME + "\n"
 
-LOO_LAST = """The last row of the leave-one-out ablation at seed 2006, and SOLAR's
-third seed for the main table, one per card.
+LOO_WBH = """The row "w/o WBH" of the leave-one-out ablation of the method
+(SlimOT + WBH) at seed 2006: one shared classifier, everything else the
+method's. One branch: the second card idles.
 
 """ + LOO_TABLE + """
 
 | | |
 |---|---|
-| FL | CI at seed 2006: Delayed Transport off |
-| FM | CH at seed 2006: SOLAR adapted to US-Net, four band heads, no transport |
+| FI | DD at seed 2006 |
 
-**How to read it.** FL against FC (notebook 60); if it collapses, let
-it run to the end. FM against FC and FB (notebook 60): SOLAR gave 77.21
-at 1995 and 76.86 at 2026, against the method's 77.84 and 77.76.
+**How to read it.** FI against FC (notebook 60), the method at 2006.
 
 ## Timing
 
-FL takes about K's 14 hours, so two sessions; FM about A's 10.7.
-""" + RESUME + "\n"
+About K's 14 hours, so two sessions. """ + RESUME + "\n"
 
 TINY_SEED = """US-Net and the method (SlimOT + WBH) on ResNet-18, Tiny ImageNet, at
 seed {seed}, one per card. At 1995 the method gained 1.14 (EQ 59.27
@@ -1661,19 +1659,21 @@ slimmed, at seed {seed}, one per card. At 1995 the method gained 0.77
 About 6 hours each; one session.
 """
 
-SCALA_SEED3 = """Scala (CF) at seed 2006, the third seed of the main table. One branch:
-the second card idles.
+BASELINES_SEED3 = """The two strongest published baselines at seed 2006, one per card: the
+third seed of the main table.
 
 | | 1995 | 2026 | 2006 |
 |---|---|---|---|
-| Scala | CF 76.80 | FE 76.73 | **FN, this notebook** |
+| SOLAR (CH) | CH 77.21 | FD 76.86 | **FM, this notebook** |
+| Scala (CF) | CF 76.80 | FE 76.73 | **FN, this notebook** |
 | SlimOT + WBH | DO 77.84 | EI 77.76 | FC, notebook 60 |
 
-**How to read it.** FN against FC.
+**How to read it.** Each against FC.
 
 ## Timing
 
-About A's 10.7 hours; one session if the card is not slow. """ + RESUME + "\n"
+About A's 10.7 hours each; one session if the card is not slow.
+""" + RESUME + "\n"
 
 MAIN_SEEDS = """{name} on ResNet-50 at seeds 2026 and 2006, one per card: every row of
 the main table is read as a mean over three seeds, and this baseline ran
@@ -1744,8 +1744,8 @@ CIFAR-100, both at seed 2006.
 | GM | SOLAR (four band heads) on ES, Tiny ImageNet, seed 2006 |
 | GV | SOLAR (four band heads) on EV, MobileNetV2, seed 2006 |
 
-**How to read it.** GM against FQ and FR (notebook 66), GV against FU and
-FV (notebook 68).
+**How to read it.** GM against FQ and FR (notebook 72), GV against FU and
+FV (notebook 79).
 
 ## Data
 
@@ -1756,7 +1756,7 @@ Attach a Tiny ImageNet dataset (the one notebook 57 used) and CIFAR-100.
 GV about 6 hours, GM 8 to 12; a second session if GM runs over.
 """ + RESUME + "\n"
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81}
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1833,44 +1833,41 @@ QUEUE = [
     (59, 'ev_a_mbv2_slimlast', 'ew_k_heads4_mbv2_slimlast',
      'A and K with four heads on MobileNetV2, last layer slimmed',
      MBV2_SLIMLAST),
+    # the main table, ResNet-50 on CIFAR-100 (65 and 66 are Joslim and LCS,
+    # from scripts/build_external_notebooks.py)
     (60, 'fb_a_r50_seed3', 'fc_k_heads4_r50_seed3',
      'A and K with four heads at seed 2006', THIRD_SEED),
-    (61, 'ff_k_heads4_noteacher_r50_seed2', 'fg_k_heads4_nopeer_r50_seed2',
-     'The method without Teacher or Peer Transport at seed 2026', LOO_2026),
-    (62, 'fh_k_early_heads4_r50_seed2', 'fi_k_late_r50_seed3',
-     'The method without Delayed Transport (2026) and without WBH (2006)',
-     LOO_MIXED),
-    (63, 'fj_k_heads4_noteacher_r50_seed3', 'fk_k_heads4_nopeer_r50_seed3',
-     'The method without Teacher or Peer Transport at seed 2006', LOO_2006),
-    (64, 'fl_k_early_heads4_r50_seed3', 'fm_a_heads4_r50_seed3',
-     'The method without Delayed Transport, and SOLAR, at seed 2006',
-     LOO_LAST),
-    (65, 'fo_a_r18_tiny_seed2', 'fp_k_heads4_r18_tiny_seed2',
-     'A and K with four heads on Tiny ImageNet at seed 2026',
-     TINY_SEED.format(seed=2026, nth='second', a='FO', k='FP')),
-    (66, 'fq_a_r18_tiny_seed3', 'fr_k_heads4_r18_tiny_seed3',
-     'A and K with four heads on Tiny ImageNet at seed 2006',
-     TINY_SEED.format(seed=2006, nth='third', a='FQ', k='FR')),
-    (67, 'fs_a_mbv2_slimlast_seed2', 'ft_k_heads4_mbv2_slimlast_seed2',
-     'A and K with four heads on MobileNetV2, last layer slimmed, seed 2026',
-     MBV2_SEED.format(seed=2026, nth='second', a='FS', k='FT')),
-    (68, 'fu_a_mbv2_slimlast_seed3', 'fv_k_heads4_mbv2_slimlast_seed3',
-     'A and K with four heads on MobileNetV2, last layer slimmed, seed 2006',
-     MBV2_SEED.format(seed=2006, nth='third', a='FU', k='FV')),
-    (69, 'fn_scala_r50_seed3', None,
-     'Scala at seed 2006', SCALA_SEED3),
-    (70, 'fy_alphanet_r50_seed2', 'fz_alphanet_r50_seed3',
+    (61, 'fm_a_heads4_r50_seed3', 'fn_scala_r50_seed3',
+     'SOLAR and Scala at seed 2006', BASELINES_SEED3),
+    (62, 'fy_alphanet_r50_seed2', 'fz_alphanet_r50_seed3',
      'AlphaNet at seeds 2026 and 2006',
      MAIN_SEEDS.format(name='AlphaNet (ICML 2021)', ref='CV 76.18',
                        a='FY', b='FZ', hours='9.9')),
-    (71, 'ga_dynas_r50_seed2', 'gb_dynas_r50_seed3',
+    (63, 'ga_dynas_r50_seed2', 'gb_dynas_r50_seed3',
      'DYNAS at seeds 2026 and 2006',
      MAIN_SEEDS.format(name='DYNAS (CVPR 2025)', ref='DB 73.92',
                        a='GA', b='GB', hours='10.9')),
-    (72, 'gc_wkd_r50_seed2', 'gd_wkd_r50_seed3',
+    (64, 'gc_wkd_r50_seed2', 'gd_wkd_r50_seed3',
      'WKD at seeds 2026 and 2006',
      MAIN_SEEDS.format(name='WKD-L (NeurIPS 2024)', ref='DG 74.72',
                        a='GC', b='GD', hours='11.0')),
+    # the leave-one-out ablation, ResNet-50 on CIFAR-100
+    (67, 'ff_k_heads4_noteacher_r50_seed2', 'fg_k_heads4_nopeer_r50_seed2',
+     'The method without Teacher or Peer Transport at seed 2026', LOO_2026),
+    (68, 'fj_k_heads4_noteacher_r50_seed3', 'fk_k_heads4_nopeer_r50_seed3',
+     'The method without Teacher or Peer Transport at seed 2006', LOO_2006),
+    (69, 'fh_k_early_heads4_r50_seed2', 'fl_k_early_heads4_r50_seed3',
+     'The method without Delayed Transport at seeds 2026 and 2006',
+     LOO_DELAYED),
+    (70, 'fi_k_late_r50_seed3', None,
+     'The method without WBH at seed 2006', LOO_WBH),
+    # the extension table: Tiny ImageNet (71-77), MobileNetV2 (77-83)
+    (71, 'fo_a_r18_tiny_seed2', 'fp_k_heads4_r18_tiny_seed2',
+     'A and K with four heads on Tiny ImageNet at seed 2026',
+     TINY_SEED.format(seed=2026, nth='second', a='FO', k='FP')),
+    (72, 'fq_a_r18_tiny_seed3', 'fr_k_heads4_r18_tiny_seed3',
+     'A and K with four heads on Tiny ImageNet at seed 2006',
+     TINY_SEED.format(seed=2006, nth='third', a='FQ', k='FR')),
     (73, 'ge_alphanet_r18_tiny', 'gh_dynas_r18_tiny',
      'AlphaNet and DYNAS on Tiny ImageNet at seed 1995',
      EXT_TINY.format(seed=1995, a='GE', am='AlphaNet', b='GH', bm='DYNAS')),
@@ -1886,16 +1883,22 @@ QUEUE = [
                      b='GL', bm='SOLAR (2026)')),
     (77, 'gm_a_heads4_r18_tiny_seed3', 'gv_a_heads4_mbv2_slimlast_seed3',
      'SOLAR on Tiny ImageNet and on MobileNetV2 at seed 2006', EXT_MIXED),
-    (78, 'gn_alphanet_mbv2_slimlast', 'gq_dynas_mbv2_slimlast',
+    (78, 'fs_a_mbv2_slimlast_seed2', 'ft_k_heads4_mbv2_slimlast_seed2',
+     'A and K with four heads on MobileNetV2, last layer slimmed, seed 2026',
+     MBV2_SEED.format(seed=2026, nth='second', a='FS', k='FT')),
+    (79, 'fu_a_mbv2_slimlast_seed3', 'fv_k_heads4_mbv2_slimlast_seed3',
+     'A and K with four heads on MobileNetV2, last layer slimmed, seed 2006',
+     MBV2_SEED.format(seed=2006, nth='third', a='FU', k='FV')),
+    (80, 'gn_alphanet_mbv2_slimlast', 'gq_dynas_mbv2_slimlast',
      'AlphaNet and DYNAS on MobileNetV2, last layer slimmed, seed 1995',
      EXT_MBV2.format(seed=1995, a='GN', am='AlphaNet', b='GQ', bm='DYNAS')),
-    (79, 'go_alphanet_mbv2_slimlast_seed2', 'gr_dynas_mbv2_slimlast_seed2',
+    (81, 'go_alphanet_mbv2_slimlast_seed2', 'gr_dynas_mbv2_slimlast_seed2',
      'AlphaNet and DYNAS on MobileNetV2, last layer slimmed, seed 2026',
      EXT_MBV2.format(seed=2026, a='GO', am='AlphaNet', b='GR', bm='DYNAS')),
-    (80, 'gp_alphanet_mbv2_slimlast_seed3', 'gs_dynas_mbv2_slimlast_seed3',
+    (82, 'gp_alphanet_mbv2_slimlast_seed3', 'gs_dynas_mbv2_slimlast_seed3',
      'AlphaNet and DYNAS on MobileNetV2, last layer slimmed, seed 2006',
      EXT_MBV2.format(seed=2006, a='GP', am='AlphaNet', b='GS', bm='DYNAS')),
-    (81, 'gt_a_heads4_mbv2_slimlast', 'gu_a_heads4_mbv2_slimlast_seed2',
+    (83, 'gt_a_heads4_mbv2_slimlast', 'gu_a_heads4_mbv2_slimlast_seed2',
      'SOLAR on MobileNetV2, last layer slimmed, seeds 1995 and 2026',
      EXT_MBV2.format(seed='1995 and 2026', a='GT', am='SOLAR (1995)',
                      b='GU', bm='SOLAR (2026)')),
