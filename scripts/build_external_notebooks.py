@@ -521,7 +521,54 @@ WORKER_ENV = {{'JOSLIM_WORKERS': '2', 'LCS_WORKERS': '2'}}
     print('wrote', path)
 
 
+def seeded(text, joslim, lcs, seed):
+    """a step of notebook 39 for another run: its own labels and checkpoint
+    names, so nothing restores notebook 39's checkpoints, and LCS's seed"""
+    text = text.replace('joslim_r50', joslim).replace('lcs_l_bn', lcs)
+    flag = "'--norm', 'BN', '--recal_batches', '20',"
+    assert text.count(flag) <= 1
+    return text.replace(flag, flag + "\n       '--seed', '{}',".format(seed))
+
+
+def seeds_spec(number, run, seed, nth):
+    joslim = 'joslim_r50_run{}'.format(run)
+    lcs = 'lcs_l_bn_seed{}'.format(run)
+    spec = {
+        'number': number,
+        'name': 'kaggle_kd_{}_joslim_lcs_{}'.format(number, run),
+        'title': "Joslim and LCS from the authors' code, {} run".format(nth),
+        'labels': [joslim, lcs],
+        'intro': '''Joslim and LCS (BatchNorm) exactly as in notebook 39, one per card, as
+the {nth} run of each: every row of the main table is a mean over three
+runs, and notebook 39 gave Joslim 74.02 and LCS 75.24.
+
+| | GPU | method | seed |
+|---|---|---|---|
+| {joslim} | 0 | Joslim (ECML-PKDD 2021), flags of joslim_r50 | none: Joslim's code takes no seed, so its runs are independent draws |
+| {lcs} | 1 | LCS (WACV 2023), flags of lcs_l_bn | {seed}, through the patch's `--seed` |
+
+The checkpoints are named after these labels, so an attached output of
+notebook 39 is never restored into them.
+
+## More than one session
+
+On a T4 LCS takes about 9-13 hours and Joslim longer, since its Bayesian
+optimisation runs on the CPU. Both checkpoint every epoch. When the session
+ends, Save Version, then in a new run attach that version's output (pick the
+version by number, not Latest) and run again: the notebook finds the
+checkpoints and both continue. Attach the CIFAR-100 dataset as well.
+'''.format(nth=nth, joslim=joslim, lcs=lcs, seed=seed),
+    }
+    steps = [seeded(step, joslim, lcs, seed) for step in (RESUME, TRAIN, EVAL)]
+    return spec, steps
+
+
+SEEDS = [(82, 2, 2026, 'second'), (83, 3, 2006, 'third')]
+
+
 if __name__ == '__main__':
     build(SPEC, [RESUME, TRAIN, EVAL])
     build(SPEC_47, [RESUME_47, TRAIN_47, EVAL_47, PARETO_47])
     build(SPEC_48, [RESUME_48, TRAIN_48])
+    for number, run, seed, nth in SEEDS:
+        build(*seeds_spec(number, run, seed, nth))
