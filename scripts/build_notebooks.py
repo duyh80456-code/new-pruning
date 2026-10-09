@@ -1495,8 +1495,8 @@ method's gain over US-Net moved between them:
 | FC | DO at seed 2006 |
 
 **How to read it.** FC against FB: the gap and the number of widths it
-holds at, beside +0.98 at 1995 and +1.30 at 2026. SOLAR and Scala have
-no run at 2006 yet; notebook 63 gives them 2026 first.
+holds at, beside +0.98 at 1995 and +1.30 at 2026. SOLAR and Scala at
+2006 are FM (notebook 67) and FN (notebook 73).
 
 ## Timing
 
@@ -1533,7 +1533,164 @@ version number, not Latest) and run again: the notebook finds the
 checkpoints. Attach the CIFAR-100 dataset as well.
 """
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 55, 56, 57, 58, 59, 60, 61, 62, 63}
+LOO_TABLE = """| configuration | 1995 | 2026 | 2006 |
+|---|---|---|---|
+| full: SlimOT + WBH | DO 77.84 | EI 77.76 | FC, notebook 62 |
+| w/o Teacher Transport | EN 77.60 | FF, notebook 64 | FJ, notebook 66 |
+| w/o Peer Transport | EO 77.03 | FG, notebook 64 | FK, notebook 66 |
+| w/o Delayed Transport | CI 77.27 | FH, notebook 65 | FL, notebook 67 |
+| w/o WBH | DD 77.50 | DC 77.27 | FI, notebook 65 |
+
+The table reports each row as a mean over the three seeds. A run that
+collapses counts in that mean: the collapse is what the configuration
+does at that seed."""
+
+RESUME = """When the first session ends, Save Version, attach that version's output
+(pick the version number, not Latest) and run again: the notebook finds
+the checkpoints. Attach the CIFAR-100 dataset as well."""
+
+LOO_2026 = """The leave-one-out ablation of the method (SlimOT + WBH) at seed 2026,
+the two transport terms, one per card.
+
+""" + LOO_TABLE + """
+
+| | |
+|---|---|
+| FF | EN at seed 2026: Teacher Transport off |
+| FG | EO at seed 2026: Peer Transport off |
+
+**How to read it.** Each against EI (77.76). At 1995 Peer Transport
+carried the gain (EO 0.81 under DO at 16/16 widths) and Teacher
+Transport was inside the noise (EN 0.24 under). Seed 2026 is where K
+without Delayed Transport collapsed (CR); FF keeps Delayed Transport, so
+it asks whether Peer Transport alone holds there.
+
+## Timing
+
+About K's 14 hours each, so two sessions. """ + RESUME + "\n"
+
+LOO_MIXED = """Two rows of the leave-one-out ablation of the method (SlimOT + WBH), one
+per card: Delayed Transport off at seed 2026, and WBH off at seed 2006.
+
+""" + LOO_TABLE + """
+
+| | |
+|---|---|
+| FH | CI at seed 2026: both transport terms from epoch 1 |
+| FI | DD at seed 2006: one shared classifier |
+
+**How to read it.** FH against EI (77.76). Seed 2026 is where K without
+Delayed Transport collapsed (CR, widths up to 0.60 at chance by epoch 3);
+FH is the same change with the heads. If its narrow widths sit at 1 per
+cent, let it run to the end anyway: the final table is what the
+ablation records. FI against FC (notebook 62).
+
+## Timing
+
+About K's 14 hours each, so two sessions. """ + RESUME + "\n"
+
+LOO_2006 = """The leave-one-out ablation of the method (SlimOT + WBH) at seed 2006,
+the two transport terms, one per card.
+
+""" + LOO_TABLE + """
+
+| | |
+|---|---|
+| FJ | EN at seed 2006: Teacher Transport off |
+| FK | EO at seed 2006: Peer Transport off |
+
+**How to read it.** Each against FC (notebook 62), the method at 2006.
+
+## Timing
+
+About K's 14 hours each, so two sessions. """ + RESUME + "\n"
+
+LOO_LAST = """The last row of the leave-one-out ablation at seed 2006, and SOLAR's
+third seed for the main table, one per card.
+
+""" + LOO_TABLE + """
+
+| | |
+|---|---|
+| FL | CI at seed 2006: Delayed Transport off |
+| FM | CH at seed 2006: SOLAR adapted to US-Net, four band heads, no transport |
+
+**How to read it.** FL against FC (notebook 62); if it collapses, let
+it run to the end. FM against FC and FB (notebook 62): SOLAR gave 77.21
+at 1995 and 76.86 at 2026, against the method's 77.84 and 77.76.
+
+## Timing
+
+FL takes about K's 14 hours, so two sessions; FM about A's 10.7.
+""" + RESUME + "\n"
+
+TINY_SEED = """US-Net and the method (SlimOT + WBH) on ResNet-18, Tiny ImageNet, at
+seed {seed}, one per card. At 1995 the method gained 1.14 (EQ 59.27
+against ES 58.13); this is the {nth} seed of that setting.
+
+| | |
+|---|---|
+| {a} | ES at seed {seed} |
+| {k} | EQ at seed {seed} |
+
+**How to read it.** {k} against {a}.
+
+## Data
+
+Attach a Tiny ImageNet dataset (the one notebook 57 used), and CIFAR-100
+as well; the notebook's data cell expects it.
+
+## Timing
+
+About 525 s an epoch for the method on a T4, so two sessions.
+""" + RESUME + "\n"
+
+MBV2_SEED = """US-Net and the method (SlimOT + WBH) on MobileNetV2 with the last layer
+slimmed, at seed {seed}, one per card. At 1995 the method gained 0.77
+(EW 74.18 against EV 73.41); this is the {nth} seed of that setting.
+
+| | |
+|---|---|
+| {a} | EV at seed {seed} |
+| {k} | EW at seed {seed} |
+
+**How to read it.** {k} against {a}.
+
+## Timing
+
+About 6 hours each; one session.
+"""
+
+MBV1_SEED = """US-Net and the method (SlimOT + WBH) on MobileNetV1 at seed 2026, one
+per card: the second seed of notebook 61.
+
+| | |
+|---|---|
+| FW | EZ at seed 2026 |
+| FX | FA at seed 2026 |
+
+**How to read it.** FX against FW, beside FA against EZ (notebook 61).
+
+## Timing
+
+About 6 hours each; one session.
+"""
+
+SCALA_SEED3 = """Scala (CF) at seed 2006, the third seed of the main table. One branch:
+the second card idles.
+
+| | 1995 | 2026 | 2006 |
+|---|---|---|---|
+| Scala | CF 76.80 | FE 76.73 | **FN, this notebook** |
+| SlimOT + WBH | DO 77.84 | EI 77.76 | FC, notebook 62 |
+
+**How to read it.** FN against FC.
+
+## Timing
+
+About A's 10.7 hours; one session if the card is not slow. """ + RESUME + "\n"
+
+MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73}
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1619,6 +1776,32 @@ QUEUE = [
      'A and K with four heads at seed 2006', THIRD_SEED),
     (63, 'fd_a_heads4_r50_seed2', 'fe_scala_r50_seed2',
      'SOLAR and Scala at seed 2026', BASELINES_SEED2),
+    (64, 'ff_k_heads4_noteacher_r50_seed2', 'fg_k_heads4_nopeer_r50_seed2',
+     'The method without Teacher or Peer Transport at seed 2026', LOO_2026),
+    (65, 'fh_k_early_heads4_r50_seed2', 'fi_k_late_r50_seed3',
+     'The method without Delayed Transport (2026) and without WBH (2006)',
+     LOO_MIXED),
+    (66, 'fj_k_heads4_noteacher_r50_seed3', 'fk_k_heads4_nopeer_r50_seed3',
+     'The method without Teacher or Peer Transport at seed 2006', LOO_2006),
+    (67, 'fl_k_early_heads4_r50_seed3', 'fm_a_heads4_r50_seed3',
+     'The method without Delayed Transport, and SOLAR, at seed 2006',
+     LOO_LAST),
+    (68, 'fo_a_r18_tiny_seed2', 'fp_k_heads4_r18_tiny_seed2',
+     'A and K with four heads on Tiny ImageNet at seed 2026',
+     TINY_SEED.format(seed=2026, nth='second', a='FO', k='FP')),
+    (69, 'fq_a_r18_tiny_seed3', 'fr_k_heads4_r18_tiny_seed3',
+     'A and K with four heads on Tiny ImageNet at seed 2006',
+     TINY_SEED.format(seed=2006, nth='third', a='FQ', k='FR')),
+    (70, 'fs_a_mbv2_slimlast_seed2', 'ft_k_heads4_mbv2_slimlast_seed2',
+     'A and K with four heads on MobileNetV2, last layer slimmed, seed 2026',
+     MBV2_SEED.format(seed=2026, nth='second', a='FS', k='FT')),
+    (71, 'fu_a_mbv2_slimlast_seed3', 'fv_k_heads4_mbv2_slimlast_seed3',
+     'A and K with four heads on MobileNetV2, last layer slimmed, seed 2006',
+     MBV2_SEED.format(seed=2006, nth='third', a='FU', k='FV')),
+    (72, 'fw_a_mbv1_seed2', 'fx_k_heads4_mbv1_seed2',
+     'A and K with four heads on MobileNetV1 at seed 2026', MBV1_SEED),
+    (73, 'fn_scala_r50_seed3', None,
+     'Scala at seed 2006', SCALA_SEED3),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after
