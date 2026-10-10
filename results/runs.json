@@ -5128,6 +5128,48 @@
         1.1325
       ],
       "seed": 2006
+    },
+    {
+      "name": "fi_k_late_r50_seed3",
+      "letter": "FI",
+      "what": "DD (the method without WBH: one shared classifier) at seed 2006 (notebook 70), over two sessions. 77.66: 0.28 ABOVE the method with WBH at the same seed (FC 77.38), above it at 15/16 widths; +0.93 over US-Net (FB 76.73). DD 77.50 and DC 77.27 at the other seeds, so SlimOT without WBH is 77.47 +- 0.20 against 77.66 +- 0.24 with it: WBH on SlimOT is +0.34, +0.49, -0.28 by seed (+0.19 +- 0.41), while on US-Net it is +0.35, +0.40, +0.44. The 2x2 interaction, about 0 at 1995 and 2026, is -0.72 at 2006",
+      "top1": [
+        76.05,
+        76.03,
+        76.76,
+        76.82,
+        77.34,
+        77.68,
+        77.64,
+        78.06,
+        78.11,
+        78.05,
+        78.2,
+        78.41,
+        78.27,
+        78.33,
+        78.27,
+        78.51
+      ],
+      "nll": [
+        0.9792,
+        0.9525,
+        0.9399,
+        0.9357,
+        0.9363,
+        0.9419,
+        0.9535,
+        0.9638,
+        0.964,
+        0.9743,
+        0.9859,
+        0.996,
+        1.0081,
+        1.0248,
+        1.0479,
+        1.0922
+      ],
+      "seed": 2006
     }
   ]
 }
