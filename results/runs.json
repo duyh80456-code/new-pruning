@@ -5170,6 +5170,90 @@
         1.0922
       ],
       "seed": 2006
+    },
+    {
+      "name": "fh_k_early_heads4_r50_seed2",
+      "letter": "FH",
+      "what": "CI (the method without Delayed Transport: both transport terms from epoch 1) at seed 2026 (notebook 69), over two sessions. 77.55: no collapse, at the seed where K without Delayed Transport and without heads collapsed (CR, widths up to 0.60 at chance); 0.22 under the method at the same seed (EI 77.76), above it at 1/16 widths",
+      "top1": [
+        75.51,
+        76.08,
+        76.53,
+        76.86,
+        76.93,
+        77.51,
+        77.48,
+        78.18,
+        77.94,
+        78.13,
+        78.15,
+        78.14,
+        78.35,
+        78.32,
+        78.35,
+        78.29
+      ],
+      "nll": [
+        0.9676,
+        0.9338,
+        0.9159,
+        0.9114,
+        0.8702,
+        0.8941,
+        0.9085,
+        0.9115,
+        0.8982,
+        0.922,
+        0.9408,
+        0.9465,
+        0.9213,
+        0.9476,
+        0.9753,
+        1.0145
+      ],
+      "seed": 2026
+    },
+    {
+      "name": "fl_k_early_heads4_r50_seed3",
+      "letter": "FL",
+      "what": "CI (the method without Delayed Transport) at seed 2006 (notebook 69), over two sessions. 77.62: no collapse; 0.23 ABOVE the method at the same seed (FC 77.38), above it at 15/16 widths, as FI (without WBH, 77.66) was: at 2006 FC sits under both of its ablations. Row 'w/o Delayed Transport' over three seeds: CI 77.27, FH 77.55, FL 77.62, mean 77.48 +- 0.19",
+      "top1": [
+        75.84,
+        76.23,
+        76.72,
+        76.91,
+        77.07,
+        77.74,
+        77.98,
+        77.94,
+        77.83,
+        78.13,
+        78.2,
+        78.1,
+        78.32,
+        78.22,
+        78.27,
+        78.35
+      ],
+      "nll": [
+        0.9274,
+        0.9075,
+        0.8947,
+        0.8861,
+        0.849,
+        0.8576,
+        0.8653,
+        0.8761,
+        0.8634,
+        0.887,
+        0.9108,
+        0.9189,
+        0.8942,
+        0.9206,
+        0.9467,
+        0.9769
+      ],
+      "seed": 2006
     }
   ]
 }
