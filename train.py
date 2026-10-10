@@ -19,6 +19,7 @@ from utils.distributed import dist_all_reduce_tensor
 from utils.distributed import master_only_print as print
 from utils.distributed import AllReduceDistributedDataParallel, allreduce_grads
 from utils.loss_ops import CrossEntropyLossSoft, CrossEntropyLossSmooth
+from utils.mixing import MixedCriterion, mix_batch, mixing_on
 from utils.loss_ops import WassersteinLossSoft, WassersteinPairLoss
 from utils.loss_ops import WKDLogitLoss, wkd_gamma
 from utils.loss_ops import build_soft_criterion, build_pair_criterion
@@ -831,6 +832,8 @@ def run_one_epoch(
 
     if getattr(FLAGS, 'distributed', False):
         loader.sampler.set_epoch(epoch)
+    # mixup and cutmix (utils/mixing.py) swap in a criterion per batch
+    base_criterion = criterion
     for batch_idx, (input, target) in enumerate(loader):
         if phase == 'cal':
             if batch_idx == getattr(FLAGS, 'bn_cal_batch_num', -1):
@@ -839,6 +842,11 @@ def run_one_epoch(
         if batch_idx == getattr(FLAGS, 'max_iters_per_epoch', -1):
             break
         target = target.cuda(non_blocking=True)
+        criterion = base_criterion
+        if train and mixing_on():
+            input, partner, lam = mix_batch(
+                input.cuda(non_blocking=True), target)
+            criterion = MixedCriterion(base_criterion, partner, lam)
         if train:
             # change learning rate if necessary
             lr_schedule_per_iteration(optimizer, epoch, batch_idx)

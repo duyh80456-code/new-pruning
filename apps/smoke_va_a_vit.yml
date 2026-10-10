@@ -1,0 +1,87 @@
+# =========================== Branch VA ===========================
+#
+# US-Net on a ViT (US-Net†): the ViT pilot's baseline, read against VB.
+# US-Net (ICCV 2019) is a CNN method; this applies its recipe, the
+# sandwich rule and inplace distillation, to a ViT, as Scala (NeurIPS
+# 2024) does for its US-Net row. There is no BatchNorm to calibrate.
+#
+# The ViT protocol, shared by every row of the ViT table: CIFAR-100, a
+# ViT with patch 4, dim 384, 8 heads of 48, depth 7, MLP ratio 2 (about
+# 8.3M parameters, 0.56 GMACs at full width); AdamW lr 1e-3, weight decay
+# 0.05, 10 warm-up epochs, cosine, batch 256, 100 epochs; RandAugment
+# (2, 9), random erasing 0.25, mixup 0.8 / cutmix 1.0, label smoothing
+# 0.1; drop path 0.1; no external teacher; seed 1995.
+#
+# Width w keeps the first round(384 w) channels everywhere, with
+# floor(d / 48) whole heads and one partial head (vit_slicing:
+# fractional); at w = k/8 that is HydraViT's head-count slicing. Read at
+# the common grid k/8 (0.25, 0.375, ..., 1.0) and at the CNN table's
+# sixteen widths, which for this model are off-grid widths.
+
+num_gpus_per_job: 1
+num_cpus_per_job: 4
+memory_per_job: 30
+gpu_type: "nvidia-tesla-t4"
+
+# data
+dataset: data.cifar100
+data_transforms: data.cifar100_vit
+data_loader: data.cifar100
+dataset_dir: data
+data_loader_workers: 2
+num_classes: 100
+image_size: 32
+topk: [1, 5]
+randaug_ops: 2
+randaug_magnitude: 9
+random_erasing: 0.25
+mixup: 0.8
+cutmix: 1.0
+mix_switch_prob: 0.5
+label_smoothing: 0.1
+
+# optimizer
+optimizer: utils.adamw_optimizer
+weight_decay: 0.05
+grad_clip: 5.0
+lr: 0.001
+lr_scheduler: cosine_decaying
+lr_warmup: True
+lr_warmup_epochs: 1
+num_epochs: 3
+
+# info
+profiling: [gpu]
+pretrained: ''
+resume: ''
+test_only: False
+random_seed: 1995
+batch_size: 64
+reset_parameters: True
+log_dir: logs/smoke_va_a_vit
+max_iters_per_epoch: 3
+
+# slimmable
+slimmable_training: True
+universally_slimmable_training: True
+num_sample_training: 4
+# LayerNorm only: the cal phase recomputes nothing and is kept so the
+# reported numbers come from the same post-training pass as every row
+bn_cal_batch_num: 2
+calibrate_bn: true
+cumulative_bn_stats: true
+model: models.us_vit
+vit_dim: 384
+vit_depth: 7
+vit_heads: 8
+vit_patch: 4
+vit_mlp_ratio: 2
+vit_slicing: fractional
+drop_path: 0.1
+width_mult: 1.0
+width_mult_list: [0.25, 1.0]
+width_mult_range: [0.25, 1.0]
+width_mult_list_test: [0.25, 0.375, 0.5, 1.0]
+inplace_distill: True
+kd_loss: soft_ce
+horizontal_kd: False

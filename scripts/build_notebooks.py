@@ -1758,6 +1758,35 @@ GV about 6 hours, GM 8 to 12; a second session if GM runs over.
 
 MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83}
 
+VIT_PILOT = """The ViT pilot: does the method's gain on CNNs carry over to a vision
+transformer? US-Net and the method (SlimOT + WBH) on the same ViT, one per
+card, seed 1995. This notebook clones the branch `vit`, not `nhan`.
+
+| | |
+|---|---|
+| VA | US-Net on the ViT (US-Net\u2020): sandwich rule and inplace distillation |
+| VB | SlimOT + WBH on the ViT, exactly as DO on ResNet-50 |
+
+The ViT, shared by every row of the ViT table: patch 4, dim 384, 8 heads
+of 48, depth 7, MLP ratio 2, 8.4M parameters and 0.56 GMACs at full width.
+Width w keeps the first round(384 w) channels of every layer. AdamW lr
+1e-3, weight decay 0.05, 10 warm-up epochs, cosine, batch 256, 100 epochs,
+RandAugment, random erasing, mixup/cutmix, label smoothing 0.1, drop path
+0.1, no external teacher.
+
+**How to read it.** VB against VA at every width, above all at the common
+grid 0.25, 0.375, ..., 1.0; the other widths are off the grid HydraViT
+and Scala train on. The vs A and vs K columns of the last table compare
+with the ResNet-50 runs BX and DD and mean nothing here: ignore them.
+VB clearly above VA (about +0.4 or more, at most widths) sends Scala and
+HydraViT to the next notebook; otherwise the pilot stops here.
+
+## Timing
+
+Measured on a local card at batch 256: 4.4 GB peak, so a T4 holds it.
+Expect about 4 to 5 hours for VA and 6 to 7 for VB, inside one session.
+"""
+
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
     # whose results are already recorded. OFF_AXIS is kept because it is
@@ -1902,6 +1931,9 @@ QUEUE = [
      'SOLAR on MobileNetV2, last layer slimmed, seeds 1995 and 2026',
      EXT_MBV2.format(seed='1995 and 2026', a='GT', am='SOLAR (1995)',
                      b='GU', bm='SOLAR (2026)')),
+    # the ViT pilot, on branch vit
+    (84, 'va_a_vit', 'vb_k_heads4_vit',
+     'US-Net and the method on a ViT (pilot)', VIT_PILOT),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after
@@ -1993,7 +2025,7 @@ BRANCHES = {branches!r}
 SMOKE_FIRST = True
 
 REPO_URL = 'https://github.com/duyh80456-code/new-pruning.git'
-REPO_BRANCH = 'nhan'
+REPO_BRANCH = {repo_branch!r}
 
 CIFAR_DIR = ('/kaggle/input/datasets/nlnk1607/cifar100/cifar-100-python')
 
@@ -2124,6 +2156,11 @@ RESUME_REPORT_NOW = chr(10).join([
 # A notebook in BOTH_CARDS has one branch and gives it every card:
 # train.py's DataParallel then splits each batch across them.
 BOTH_CARDS = {51}
+
+# notebooks whose code lives on a branch other than nhan: the ViT pilot
+# is developed on vit so that the notebooks still queued on nhan clone
+# exactly what they were written against
+ON_BRANCH = {84: 'vit'}
 PIN_WAS = "        env['CUDA_VISIBLE_DEVICES'] = str(index % max(n_gpu, 1))"
 PIN_NOW = chr(10).join([
     "        env['CUDA_VISIBLE_DEVICES'] = (",
@@ -2324,7 +2361,7 @@ for number, left, right, title, preamble in QUEUE:
     nb['cells'][0]['source'] = source(body + FOOTER)
     nb['cells'][1]['source'] = source(CONFIG.format(
         number=number, total=max(entry[0] for entry in QUEUE),
-        branches=branches))
+        branches=branches, repo_branch=ON_BRANCH.get(number, 'nhan')))
     if number in NEEDS_DD:
         at = next(i for i, cell in enumerate(nb['cells'])
                   if "TARGET = 'data/cifar-100-python'"

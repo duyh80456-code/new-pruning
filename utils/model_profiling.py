@@ -74,6 +74,13 @@ def module_profiling(self, input, output, verbose):
     # NOTE: There are some difference between type and isinstance, thus please
     # be careful.
     t = type(self)
+    if hasattr(self, 'analytic_macs'):
+        # a model that computes through sliced weights (models/us_vit.py)
+        # calls no nn.Linear for these hooks to see, so it counts itself
+        self.n_macs = self.analytic_macs()
+        self.n_params = self.analytic_params()
+        self.n_seconds = 0
+        return
     if isinstance(self, nn.Conv2d):
         self.n_macs = (ins[1] * outs[1] *
                        self.kernel_size[0] * self.kernel_size[1] *
