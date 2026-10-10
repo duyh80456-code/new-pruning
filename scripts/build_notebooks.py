@@ -1787,6 +1787,23 @@ Measured on a local card at batch 256: 4.4 GB peak, so a T4 holds it.
 Expect about 4 to 5 hours for VA and 6 to 7 for VB, inside one session.
 """
 
+VIT_TABLE = """{what} One branch per card, seed 1995. This notebook clones
+the branch `vit`, not `nhan`. Every row of the ViT table runs on the same
+ViT and recipe as notebook 84 (VA, VB); only the method differs.
+
+| | |
+|---|---|
+{rows}
+
+**How to read it.** {read} The vs A and vs K columns of the last table
+compare with the ResNet-50 runs BX and DD and mean nothing here: ignore
+them.
+
+## Timing
+
+{timing}
+"""
+
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
     # whose results are already recorded. OFF_AXIS is kept because it is
@@ -1934,6 +1951,37 @@ QUEUE = [
     # the ViT pilot, on branch vit
     (84, 'va_a_vit', 'vb_k_heads4_vit',
      'US-Net and the method on a ViT (pilot)', VIT_PILOT),
+    (85, 'vd_scala_vit', 've_hydravit_vit',
+     'Scala and HydraViT on the ViT',
+     VIT_TABLE.format(
+         what='The two published slimmable ViT methods, from their authors\' '
+              'code, on the ViT of notebook 84.',
+         rows='| VD | Scala\u2020 (NeurIPS 2024): its own slicing, stable '
+              'sampling, progressive KD, label on every width, 10 warm-up '
+              'epochs; grid 1/8 |\n'
+              '| VE | HydraViT\u2020 (NeurIPS 2024): head-count slicing, '
+              'one subnet per step, label only, shared classifier |',
+         read='Each against VB (the method, notebook 84) at the common '
+              'grid 0.25, 0.375, ..., 1.0, the only widths these two read.',
+         timing='VD runs four widths a step like VA, about 4 to 5 hours on '
+                'a T4; VE one, about 2. One session.')),
+    (86, 'vf_matformer_vit', 'vc_k_early_heads4_vit',
+     'MatFormer and the method without Delayed Transport on the ViT',
+     VIT_TABLE.format(
+         what='The third published row of the ViT table, and the ablation '
+              'that asks whether Delayed Transport is needed on a ViT.',
+         rows='| VF | MatFormer\u2020 (NeurIPS 2024), as MatViT: only the '
+              'MLP nests, four granularities summed every step, '
+              'Mix\'n\'Match at inference |\n'
+              '| VC | VB without Delayed Transport: both transport terms '
+              'from epoch 1 |',
+         read='VF against VB at 0.75, 0.875 and 1.0, the grid points its '
+              'MACs can reach (0.75 is its floor, 1.8% above the target); '
+              'its 0.125 row is that floor again. VC against VB: level means '
+              'the trivial solution is no trap without the ReLU, a '
+              'collapse means Delayed Transport is needed on a ViT too.',
+         timing='VF runs four full-width-attention passes a step, about 6 '
+                'to 7 hours on a T4; VC about VB\'s 6 to 7. One session.')),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after
@@ -2160,7 +2208,7 @@ BOTH_CARDS = {51}
 # notebooks whose code lives on a branch other than nhan: the ViT pilot
 # is developed on vit so that the notebooks still queued on nhan clone
 # exactly what they were written against
-ON_BRANCH = {84: 'vit'}
+ON_BRANCH = {84: 'vit', 85: 'vit', 86: 'vit'}
 PIN_WAS = "        env['CUDA_VISIBLE_DEVICES'] = str(index % max(n_gpu, 1))"
 PIN_NOW = chr(10).join([
     "        env['CUDA_VISIBLE_DEVICES'] = (",

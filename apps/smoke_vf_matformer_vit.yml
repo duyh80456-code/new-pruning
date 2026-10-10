@@ -1,10 +1,17 @@
-# =========================== Branch VB ===========================
+# =========================== Branch VF ===========================
 #
-# The method (SlimOT + WBH) on the ViT: VA plus the method's terms, as DO
-# on ResNet-50 - Teacher Transport and Peer Transport on the final feature
-# (the class token after the last LayerNorm), Sinkhorn at 0.2 for 100
-# iterations, debiased, scale-free cost, Delayed Transport from epoch 6,
-# four band heads. Read against VA.
+# MatFormer (NeurIPS 2024) on the ViT (MatFormer†), as MatViT in the
+# authors' Scenic project (google-research/scenic, projects/matvit):
+#   slicing      only the MLP's hidden layer nests, at 1/8, 1/4, 1/2 and
+#                1 of 768; the residual stream and attention stay full
+#   sampling     all four granularities every step, losses summed
+#   loss         the label alone, no distillation
+#   inference    Mix'n'Match: per-layer granularities, non-decreasing with
+#                depth, chosen to match the MACs of each grid point
+# The attention and the residual stream never shrink, so it cannot go
+# below about 58% of the full MACs: read at the three grid points it can
+# reach (0.75, 0.875, 1.0) and at its floor (0.125 below). Differences:
+# 100 epochs and the protocol's recipe instead of their 300.
 #
 # The ViT protocol, shared by every row of the ViT table: CIFAR-100, a
 # ViT with patch 4, dim 384, 8 heads of 48, depth 7, MLP ratio 2 (8.4M
@@ -56,7 +63,7 @@ test_only: False
 random_seed: 1995
 batch_size: 64
 reset_parameters: True
-log_dir: logs/smoke_vb_k_heads4_vit
+log_dir: logs/smoke_vf_matformer_vit
 max_iters_per_epoch: 3
 
 # slimmable
@@ -76,22 +83,11 @@ vit_patch: 4
 vit_mlp_ratio: 2
 drop_path: 0.1
 width_mult: 1.0
-vit_slicing: fractional
-width_mult_list: [0.25, 1.0]
-width_mult_range: [0.25, 1.0]
-width_mult_list_test: [0.25, 0.375, 0.5, 1.0]
-inplace_distill: True
-kd_loss: soft_ce
-sinkhorn_eps: 0.2
-sinkhorn_iters: 100
-sinkhorn_debiased: True
-cost_normalize: True
-horizontal_kd: True
-horizontal_weight: 1.0
-feature_kd: True
-feature_align: prefix
-feature_weight: 1.0
-horizontal_where: feature
-split_pair_backward: True
-feature_start_epoch: 2
-head_groups: 4
+vit_slicing: ffn
+matformer_granularities: [0.125, 0.25, 0.5, 1.0]
+width_mult_list: [0.125, 1.0]
+width_mult_range: [0.125, 1.0]
+width_mult_list_test: [0.75, 0.875, 1.0]
+inplace_distill: False
+horizontal_kd: False
+width_sampling: matformer

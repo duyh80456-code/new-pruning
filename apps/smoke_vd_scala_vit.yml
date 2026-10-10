@@ -1,10 +1,23 @@
-# =========================== Branch VB ===========================
+# =========================== Branch VD ===========================
 #
-# The method (SlimOT + WBH) on the ViT: VA plus the method's terms, as DO
-# on ResNet-50 - Teacher Transport and Peer Transport on the final feature
-# (the class token after the last LayerNorm), Sinkhorn at 0.2 for 100
-# iterations, debiased, scale-free cost, Delayed Transport from epoch 6,
-# four band heads. Read against VA.
+# Scala (NeurIPS 2024) on the ViT (Scala†), from the authors' code,
+# BeSpontaneous/Scala-pytorch (models_scala.py, engine_scala.py); where
+# paper and code differ the code wins.
+#   slicing      int(w * 384) channels and int(w * 768) hidden; the
+#                narrowest and widest widths take the first channels of
+#                every tensor, every width between the last ones
+#                (isolated activation); qkv cut as one block and reshaped
+#                to all 8 heads (vit_slicing: scala)
+#   sampling     widest, narrowest, one width on the grid in each half
+#                (stable sampling, granularity 1/8 = the common grid)
+#   distillation each width from the next larger one in the step
+#                (progressive KD), every student also on the label at 1.0
+#   warm-up      the widest width alone for the first 10 epochs
+# Differences: no external DeiT teacher (their code path
+# distillation_type none, which the protocol uses for every row); grid
+# 1/8 instead of their 1/16, so every width it trains is a grid point;
+# the protocol's recipe instead of theirs (theirs: RandAugment m1). Read
+# at the grid only: its slicing needs d to divide by 8.
 #
 # The ViT protocol, shared by every row of the ViT table: CIFAR-100, a
 # ViT with patch 4, dim 384, 8 heads of 48, depth 7, MLP ratio 2 (8.4M
@@ -56,7 +69,7 @@ test_only: False
 random_seed: 1995
 batch_size: 64
 reset_parameters: True
-log_dir: logs/smoke_vb_k_heads4_vit
+log_dir: logs/smoke_vd_scala_vit
 max_iters_per_epoch: 3
 
 # slimmable
@@ -76,22 +89,15 @@ vit_patch: 4
 vit_mlp_ratio: 2
 drop_path: 0.1
 width_mult: 1.0
-vit_slicing: fractional
+vit_slicing: scala
 width_mult_list: [0.25, 1.0]
 width_mult_range: [0.25, 1.0]
-width_mult_list_test: [0.25, 0.375, 0.5, 1.0]
+width_mult_list_test: [0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
 inplace_distill: True
 kd_loss: soft_ce
-sinkhorn_eps: 0.2
-sinkhorn_iters: 100
-sinkhorn_debiased: True
-cost_normalize: True
-horizontal_kd: True
-horizontal_weight: 1.0
-feature_kd: True
-feature_align: prefix
-feature_weight: 1.0
-horizontal_where: feature
-split_pair_backward: True
-feature_start_epoch: 2
-head_groups: 4
+horizontal_kd: False
+width_sampling: stable
+stable_granularity: 0.125
+teacher_chain: True
+student_ce_weight: 1.0
+narrow_start_epoch: 1

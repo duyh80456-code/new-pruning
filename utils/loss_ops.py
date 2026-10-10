@@ -942,6 +942,15 @@ def training_widths(epoch, low, high):
         return [getattr(FLAGS, 'narrow_first_width', low)]
     if epoch < getattr(FLAGS, 'narrow_start_epoch', 0):
         return [high]
+    if getattr(FLAGS, 'width_sampling', 'uniform') == 'hydravit':
+        # HydraViT (ds-kiel/HydraViT, train.py): one subnet per step,
+        # drawn uniformly from its list, trained on the label alone
+        return [random.choice(FLAGS.hydravit_widths)]
+    if getattr(FLAGS, 'width_sampling', 'uniform') == 'matformer':
+        # MatViT (scenic projects/matvit, trainer.py): every granularity
+        # every step, the losses summed; widest first so its forward is
+        # the one the loop treats as the widest
+        return sorted(FLAGS.matformer_granularities, reverse=True)
     if getattr(FLAGS, 'width_sampling', 'uniform') == 'stable':
         return [high, low] + stable_widths(low, high)
     if getattr(FLAGS, 'width_sampling', 'uniform') == 'stratified':

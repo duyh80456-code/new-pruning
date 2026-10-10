@@ -1,10 +1,16 @@
-# =========================== Branch VB ===========================
+# =========================== Branch VE ===========================
 #
-# The method (SlimOT + WBH) on the ViT: VA plus the method's terms, as DO
-# on ResNet-50 - Teacher Transport and Peer Transport on the final feature
-# (the class token after the last LayerNorm), Sinkhorn at 0.2 for 100
-# iterations, debiased, scale-free cost, Delayed Transport from epoch 6,
-# four band heads. Read against VA.
+# HydraViT (NeurIPS 2024) on the ViT (HydraViT†), from the authors'
+# code, ds-kiel/HydraViT (timm/models/hydravit.py, train.py):
+#   slicing      the first k heads, head dimension fixed at 48, and every
+#                embedding and weight matrix cut to match; one classifier
+#                shared by every subnet, its input sliced
+#   sampling     one subnet per step, uniformly from its list (stochastic
+#                tail-drop); here k = 2..8, the grid
+#   loss         the label alone: no distillation, no sandwich rule
+# vit_slicing fractional at w = k/8 is exactly that slicing. Differences:
+# 100 epochs and the protocol's recipe instead of their 300 epochs with
+# model EMA. Read at the grid only: it has no other widths.
 #
 # The ViT protocol, shared by every row of the ViT table: CIFAR-100, a
 # ViT with patch 4, dim 384, 8 heads of 48, depth 7, MLP ratio 2 (8.4M
@@ -45,8 +51,8 @@ grad_clip: 5.0
 lr: 0.001
 lr_scheduler: cosine_decaying
 lr_warmup: True
-lr_warmup_epochs: 1
-num_epochs: 3
+lr_warmup_epochs: 10
+num_epochs: 100
 
 # info
 profiling: [gpu]
@@ -54,10 +60,9 @@ pretrained: ''
 resume: ''
 test_only: False
 random_seed: 1995
-batch_size: 64
+batch_size: 256
 reset_parameters: True
-log_dir: logs/smoke_vb_k_heads4_vit
-max_iters_per_epoch: 3
+log_dir: logs/cifar100_ve_hydravit_vit
 
 # slimmable
 slimmable_training: True
@@ -65,7 +70,7 @@ universally_slimmable_training: True
 num_sample_training: 4
 # LayerNorm only: the cal phase recomputes nothing and is kept so the
 # reported numbers come from the same post-training pass as every row
-bn_cal_batch_num: 2
+bn_cal_batch_num: 20
 calibrate_bn: true
 cumulative_bn_stats: true
 model: models.us_vit
@@ -79,19 +84,8 @@ width_mult: 1.0
 vit_slicing: fractional
 width_mult_list: [0.25, 1.0]
 width_mult_range: [0.25, 1.0]
-width_mult_list_test: [0.25, 0.375, 0.5, 1.0]
-inplace_distill: True
-kd_loss: soft_ce
-sinkhorn_eps: 0.2
-sinkhorn_iters: 100
-sinkhorn_debiased: True
-cost_normalize: True
-horizontal_kd: True
-horizontal_weight: 1.0
-feature_kd: True
-feature_align: prefix
-feature_weight: 1.0
-horizontal_where: feature
-split_pair_backward: True
-feature_start_epoch: 2
-head_groups: 4
+width_mult_list_test: [0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
+inplace_distill: False
+horizontal_kd: False
+width_sampling: hydravit
+hydravit_widths: [0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]

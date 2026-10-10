@@ -1,10 +1,12 @@
-# =========================== Branch VB ===========================
+# =========================== Branch VC ===========================
 #
-# The method (SlimOT + WBH) on the ViT: VA plus the method's terms, as DO
-# on ResNet-50 - Teacher Transport and Peer Transport on the final feature
-# (the class token after the last LayerNorm), Sinkhorn at 0.2 for 100
-# iterations, debiased, scale-free cost, Delayed Transport from epoch 6,
-# four band heads. Read against VA.
+# VB without Delayed Transport: both transport terms from epoch 1. On
+# ResNet the trivial solution of the transport terms (two clouds at one
+# point cost nothing) became a trap because the ReLU stopped the KL
+# gradient that would pull a dead width out (CR, CU). A ViT has GELU and
+# LayerNorm instead; this asks whether the trap exists there. Read against
+# VB: level or above means Delayed Transport is a ReLU matter, a collapse
+# means it is general.
 #
 # The ViT protocol, shared by every row of the ViT table: CIFAR-100, a
 # ViT with patch 4, dim 384, 8 heads of 48, depth 7, MLP ratio 2 (8.4M
@@ -56,7 +58,7 @@ test_only: False
 random_seed: 1995
 batch_size: 64
 reset_parameters: True
-log_dir: logs/smoke_vb_k_heads4_vit
+log_dir: logs/smoke_vc_k_early_heads4_vit
 max_iters_per_epoch: 3
 
 # slimmable
@@ -93,5 +95,5 @@ feature_align: prefix
 feature_weight: 1.0
 horizontal_where: feature
 split_pair_backward: True
-feature_start_epoch: 2
+feature_start_epoch: 0
 head_groups: 4
