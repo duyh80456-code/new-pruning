@@ -104,6 +104,54 @@
         3.375
       ],
       "seed": 1995
+    },
+    {
+      "name": "vc_k_early_heads4_vit",
+      "letter": "VC",
+      "what": "VB without Delayed Transport: both transport terms from epoch 1; seed 1995, notebook 86. Collapsed like VB, slightly less (19.47 against 15.50): on this ViT the transport hurts with or without the delay",
+      "top1": [
+        12.5,
+        12.51,
+        12.99,
+        16.28,
+        23.7,
+        27.77,
+        30.57
+      ],
+      "nll": [
+        3.9384,
+        3.9383,
+        3.9442,
+        3.8615,
+        3.4074,
+        3.2396,
+        3.132
+      ],
+      "seed": 1995
+    },
+    {
+      "name": "vf_matformer_vit",
+      "letter": "VF",
+      "what": "MatFormer† (NeurIPS 2024) on the ViT as MatViT, MLP-only nesting, four granularities summed, label only, Mix'n'Match at inference; seed 1995, notebook 86. Reaches 0.75 to 1.0 only (0.75 is its floor, the 0.125 row repeats it). 0.875 reads 13.08, under its own floor: the Mix'n'Match path at that point is broken, not trusted",
+      "top1": [
+        null,
+        null,
+        null,
+        null,
+        52.27,
+        13.08,
+        55.15
+      ],
+      "nll": [
+        null,
+        null,
+        null,
+        null,
+        2.352,
+        4.2197,
+        2.2394
+      ],
+      "seed": 1995
     }
   ]
 }
