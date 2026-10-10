@@ -1756,7 +1756,25 @@ Attach a Tiny ImageNet dataset (the one notebook 57 used) and CIFAR-100.
 GV about 6 hours, GM 8 to 12; a second session if GM runs over.
 """ + RESUME + "\n"
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83}
+MULTI_SESSION = {87, 27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83}
+
+RERUN_SEED = """The method (SlimOT + WBH) twice more, one per card: once again at seed
+2006, where FC came out under both of its own ablations, and once at a
+fourth seed.
+
+| | 1995 | 2026 | 2006 | 2027 |
+|---|---|---|---|---|
+| SlimOT + WBH | DO 77.84 | EI 77.76 | FC 77.38, **HA, this notebook** | **HB, this notebook** |
+| w/o WBH | DD 77.50 | DC 77.27 | FI 77.66 | |
+| w/o Delayed Transport | CI 77.27 | FH 77.55 | FL 77.62 | |
+
+**How to read it.** HA against FC: the same config at the same seed, so
+the gap between them is run-to-run noise alone, and it is reported beside
+FC, never in its place. HB is a fourth seed of the main row.
+
+## Timing
+
+About K's 14 hours each, so two sessions. """ + RESUME + "\n"
 
 QUEUE = [
     # 13 to 15 have come back; regenerating them would rewrite files
@@ -1902,6 +1920,9 @@ QUEUE = [
      'SOLAR on MobileNetV2, last layer slimmed, seeds 1995 and 2026',
      EXT_MBV2.format(seed='1995 and 2026', a='GT', am='SOLAR (1995)',
                      b='GU', bm='SOLAR (2026)')),
+    # FC again and a fourth seed of the method
+    (87, 'ha_k_heads4_r50_seed3_rerun', 'hb_k_heads4_r50_seed4',
+     'The method again at seed 2006, and at a fourth seed', RERUN_SEED),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after
