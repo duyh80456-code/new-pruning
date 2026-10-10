@@ -6,3 +6,5 @@ CIFAR-100, a ViT with patch 4, dim 384, 8 heads of 48, depth 7, MLP ratio 2, tra
 |---|---|---|---|---|---|---|---|---|---|---|
 | **VD** | 1995 | 46.45 | 53.09 | 55.15 | 56.73 | 57.83 | 58.30 | 59.09 | **55.23** | Scala† (NeurIPS 2024) on the ViT, from the authors' code: isolated activation, stable sampling on the 1/8 grid, progressive KD, label on every width, 10 warm-up epochs; seed 1995 |
 | **VE** | 1995 | 38.05 | 45.25 | 49.34 | 52.30 | 53.42 | 53.73 | 53.76 | **49.41** | HydraViT† (NeurIPS 2024) on the ViT, from the authors' code: first k heads, shared classifier, one subnet per step, label only; seed 1995 |
+| **VA** | 1995 | 32.58 | 33.35 | 34.47 | 35.48 | 37.01 | 37.80 | 38.65 | **35.62** | US-Net† on the ViT: sandwich rule and inplace distillation, fractional slicing; seed 1995, notebook 84. Far below HydraViT† (VE), which shares its slicing, even at width 1.0: suspect, not yet trusted |
+| **VB** | 1995 | 10.20 | 9.41 | 10.34 | 12.21 | 19.26 | 22.39 | 24.72 | **15.50** | SlimOT + WBH on the ViT, as DO; seed 1995, notebook 84. Collapsed: the narrow widths fell from epoch 6, when transport starts; pilot rule (VB above VA) failed |

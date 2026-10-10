@@ -56,6 +56,54 @@
         2.2875
       ],
       "seed": 1995
+    },
+    {
+      "name": "va_a_vit",
+      "letter": "VA",
+      "what": "US-Net† on the ViT: sandwich rule and inplace distillation, fractional slicing; seed 1995, notebook 84. Far below HydraViT† (VE), which shares its slicing, even at width 1.0: suspect, not yet trusted",
+      "top1": [
+        32.58,
+        33.35,
+        34.47,
+        35.48,
+        37.01,
+        37.8,
+        38.65
+      ],
+      "nll": [
+        3.0857,
+        3.0438,
+        2.9885,
+        2.9432,
+        2.8985,
+        2.8675,
+        2.8195
+      ],
+      "seed": 1995
+    },
+    {
+      "name": "vb_k_heads4_vit",
+      "letter": "VB",
+      "what": "SlimOT + WBH on the ViT, as DO; seed 1995, notebook 84. Collapsed: the narrow widths fell from epoch 6, when transport starts; pilot rule (VB above VA) failed",
+      "top1": [
+        10.2,
+        9.41,
+        10.34,
+        12.21,
+        19.26,
+        22.39,
+        24.72
+      ],
+      "nll": [
+        4.1097,
+        4.2023,
+        4.1352,
+        4.0553,
+        3.6167,
+        3.5083,
+        3.375
+      ],
+      "seed": 1995
     }
   ]
 }
