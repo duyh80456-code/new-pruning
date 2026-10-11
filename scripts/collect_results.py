@@ -200,6 +200,10 @@ LEGEND = [
     ('width_sampling=stable', 'Scala: one free width from each half of '
      'the range, on a grid'),
     ('stable_granularity', 'the grid step for stable sampling'),
+    ('width_sampling=grid', 'the free widths drawn evenly from a grid '
+     'strictly between the two ends, the discrete setting SOLAR and '
+     'DYNAS were published in'),
+    ('width_grid_step', 'the grid step for grid sampling'),
     ('width_sampling=stratified', 'the free widths drawn a block of '
      'steps at a time, one per equal slice of the range, so the block '
      'covers it evenly'),

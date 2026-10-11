@@ -1,0 +1,93 @@
+# =========================== Branch HC ===========================
+# SOLAR (WACV 2026) in its own discrete setting rather than CH's
+# continuous adaptation (SOLAR-dagger). The paper trains a fixed set of
+# sub-nets (4, 8 or 16 of them) with one classifier each. Here that set is
+# the 16 test widths, 0.25 to 1.00 in steps of 0.05, and each one has its
+# own head: head_groups 16 cuts the range into 16 bands and every grid
+# width falls in a band of its own. The free widths of the sandwich are
+# drawn from the 14 grid points between the ends, so no width outside the
+# table is ever trained.
+#
+# Kept from CH so the compute matches every other row: four widths a step
+# (SOLAR's Algorithm 1 runs all its sub-nets every step, 16 here, about 4x
+# the cost), inplace distillation from the widest, and BN recalibrated per
+# width after training in place of switchable BN. The 0.25 and 1.00 heads
+# train every step, each middle head on about 14 per cent of steps.
+# 15 extra heads, 2048 by 100, add 3.1M parameters to 23.7M.
+#
+# Seed 1995. Read against CH (SOLAR-dagger, 77.21) and DO (the method,
+# 77.84). If HC lands within about 0.3 of DO, it gets seeds 2026 and 2006.
+
+num_gpus_per_job: 1
+num_cpus_per_job: 4
+memory_per_job: 30
+gpu_type: "nvidia-tesla-t4"
+
+# data
+dataset: data.cifar100
+data_transforms: data.cifar100
+data_loader: data.cifar100
+dataset_dir: data
+data_loader_workers: 2
+
+# info
+num_classes: 100
+image_size: 32
+topk: [1, 5]
+
+# optimizer
+optimizer: sgd
+momentum: 0.9
+weight_decay: 0.0005
+nesterov: True
+
+# Four losses are summed into one step and the KD terms are not bounded
+# the way cross entropy is, so one bad batch early can be unrecoverable.
+grad_clip: 5.0
+
+# lr
+lr: 0.2
+lr_scheduler: cosine_decaying
+lr_warmup: True
+lr_warmup_epochs: 1
+num_epochs: 2
+
+# model profiling
+profiling: [gpu]
+
+# pretrain, resume, test_only
+pretrained: ''
+resume: ''
+test_only: False
+
+random_seed: 1995
+batch_size: 64
+max_iters_per_epoch: 3
+reset_parameters: True
+
+# =========================== Override Settings ===========================
+log_dir: logs/smoke_hc_solar_grid_r50
+slimmable_training: True
+universally_slimmable_training: True
+num_sample_training: 4
+bn_cal_batch_num: 2
+calibrate_bn: true
+cumulative_bn_stats: true
+
+model: models.us_resnet
+depth: 50
+width_mult: 1.0
+width_mult_list: [0.25, 1.0]
+width_mult_range: [0.25, 1.0]
+# widths that get a calibrated BN and an entry in the final table
+width_mult_list_test: [0.25, 0.5, 0.75, 1.0]
+
+# =========================== Distillation ===========================
+inplace_distill: True
+kd_loss: soft_ce
+horizontal_kd: False
+
+# =========================== Discrete widths ===========================
+width_sampling: grid
+width_grid_step: 0.05
+head_groups: 16

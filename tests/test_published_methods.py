@@ -52,6 +52,24 @@ def stable_sampling():
     FLAGS.width_sampling = 'uniform'
 
 
+def grid_sampling():
+    from utils.loss_ops import training_widths
+    FLAGS.width_sampling = 'grid'
+    FLAGS.width_grid_step = 0.05
+    FLAGS.num_sample_training = 4
+    random.seed(0)
+    seen = set()
+    for _ in range(4000):
+        widths = training_widths(50, 0.25, 1.0)
+        if len(widths) != 4 or widths[:2] != [1.0, 0.25]:
+            raise AssertionError('grid sampling returned {}'.format(widths))
+        seen.update(widths[2:])
+    want = {round(0.05 * i, 10) for i in range(6, 20)}
+    check(seen == want,
+          'grid sampling: free widths are exactly 0.30 to 0.95 on the grid')
+    FLAGS.width_sampling = 'uniform'
+
+
 def isolated_activation():
     import importlib
     FLAGS.reset_parameters = True
@@ -175,6 +193,7 @@ def nasvit_merge():
 
 if __name__ == '__main__':
     stable_sampling()
+    grid_sampling()
     isolated_activation()
     ema_update()
     nasvit_merge()

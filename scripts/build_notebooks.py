@@ -1756,7 +1756,29 @@ Attach a Tiny ImageNet dataset (the one notebook 57 used) and CIFAR-100.
 GV about 6 hours, GM 8 to 12; a second session if GM runs over.
 """ + RESUME + "\n"
 
-MULTI_SESSION = {87, 27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83}
+DISCRETE = """SOLAR and DYNAS in the discrete setting they were published in, one
+per card, seed 1995. Both were published on a fixed set of sub-networks;
+the main table runs them on continuous widths (SOLAR with our four width
+bands, hence SOLAR-dagger). Here the sub-networks are the 16 test widths,
+0.25 to 1.00 in steps of 0.05: the free widths of the sandwich are drawn
+from the grid points between the ends, so nothing between them is ever
+trained. Four widths a step, as in every other row.
+
+| | |
+|---|---|
+| HC | SOLAR: CH on the grid with one head per width (head_groups 16) |
+| HD | DYNAS: DB on the grid |
+
+**How to read it.** HC against CH (SOLAR-dagger, 77.21) and DO (the
+method, 77.84); HD against DB (DYNAS continuous, 73.92). If HC lands
+within about 0.3 of DO it gets seeds 2026 and 2006.
+
+## Timing
+
+CH took about 11 hours and DB about 10.5 at 1995; a second session if a
+card is slow. """ + RESUME + "\n"
+
+MULTI_SESSION = {88, 87, 27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83}
 
 RERUN_SEED = """The method (SlimOT + WBH) twice more, one per card: once again at seed
 2006, where FC came out under both of its own ablations, and once at a
@@ -1923,6 +1945,9 @@ QUEUE = [
     # FC again and a fourth seed of the method
     (87, 'ha_k_heads4_r50_seed3_rerun', 'hb_k_heads4_r50_seed4',
      'The method again at seed 2006, and at a fourth seed', RERUN_SEED),
+    # SOLAR and DYNAS on discrete widths, as published
+    (88, 'hc_solar_grid_r50', 'hd_dynas_grid_r50',
+     'SOLAR and DYNAS on the discrete width grid', DISCRETE),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after

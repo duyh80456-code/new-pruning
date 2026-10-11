@@ -912,6 +912,15 @@ def sample_width(low, high):
         return math.exp(random.uniform(math.log(low), math.log(high)))
     if mode == 'macs':
         return math.sqrt(random.uniform(low * low, high * high))
+    if mode == 'grid':
+        # the discrete setting SOLAR and DYNAS were published in: the free
+        # widths are drawn evenly from the grid points strictly between
+        # the two ends, so every width trained is one the table reads and
+        # nothing between them is ever seen
+        step = getattr(FLAGS, 'width_grid_step', 0.05)
+        point = random.randint(int(round(low / step)) + 1,
+                               int(round(high / step)) - 1)
+        return round(point * step, 10)
     raise ValueError('unknown width_sampling {}'.format(mode))
 
 
