@@ -4923,42 +4923,42 @@
     {
       "name": "fc_k_heads4_r50_seed3",
       "letter": "FC",
-      "what": "The method (SlimOT + WBH, as DO) at seed 2006 (notebook 60), over two sessions. 77.38: +0.66 over US-Net at the same seed (FB 76.73) at 16/16 widths, +0.22 over SOLAR (FM 77.16) at 14/16, +0.72 over Scala (FN 76.66) at 16/16; DO 77.84 and EI 77.76 at the other seeds, so the method's three-seed mean is 77.66 ± 0.24",
+      "what": "The method (SlimOT + WBH, as DO) at seed 2006 (notebook 60), over two sessions. 77.91: +1.18 over US-Net at the same seed (FB 76.73) at 16/16 widths, +0.74 over SOLAR (FM 77.16) at 16/16, +1.24 over Scala (FN 76.66) at 16/16; DO 77.84 and EI 77.76 at the other seeds, so the method's three-seed mean is 77.84 ± 0.07",
       "top1": [
-        75.39,
-        76.08,
-        76.38,
-        76.79,
-        77.27,
-        77.49,
-        77.59,
-        77.45,
-        77.62,
-        77.89,
-        77.95,
-        77.85,
+        76.15,
+        76.49,
+        77.05,
+        77.09,
+        77.51,
         77.98,
         78.17,
-        78.14,
-        78.08
+        78.28,
+        78.39,
+        78.49,
+        78.59,
+        78.48,
+        78.46,
+        78.5,
+        78.47,
+        78.4
       ],
       "nll": [
-        0.9489,
-        0.9207,
-        0.9163,
-        0.91,
-        0.8626,
-        0.8798,
-        0.8956,
-        0.9099,
-        0.8987,
-        0.9255,
-        0.943,
-        0.9503,
-        0.9213,
-        0.9478,
-        0.9755,
-        1.0119
+        0.9374,
+        0.9116,
+        0.9064,
+        0.901,
+        0.8521,
+        0.8653,
+        0.8802,
+        0.8831,
+        0.8739,
+        0.9079,
+        0.9231,
+        0.9336,
+        0.9096,
+        0.9333,
+        0.9649,
+        0.9983
       ],
       "seed": 2006
     },
@@ -5090,7 +5090,7 @@
     {
       "name": "lcs_l_bn_seed3",
       "letter": "GZ",
-      "what": "LCS (WACV 2023) from the authors' code with BatchNorm, as EB at seed 2006 through the patch's --seed (notebook 66). 75.17: 1.56 under US-Net (FB 76.73) and 2.21 under the method (FC 77.38) at the same seed; EB 75.24 and GX 76.42, so LCS's three-seed mean is 75.61 +- 0.70, the widest spread in the table",
+      "what": "LCS (WACV 2023) from the authors' code with BatchNorm, as EB at seed 2006 through the patch's --seed (notebook 66). 75.17: 1.56 under US-Net (FB 76.73) and 2.74 under the method (FC 77.91) at the same seed; EB 75.24 and GX 76.42, so LCS's three-seed mean is 75.61 +- 0.70, the widest spread in the table",
       "top1": [
         73.7,
         73.62,
@@ -5132,7 +5132,7 @@
     {
       "name": "fi_k_late_r50_seed3",
       "letter": "FI",
-      "what": "DD (the method without WBH: one shared classifier) at seed 2006 (notebook 70), over two sessions. 77.66: 0.28 ABOVE the method with WBH at the same seed (FC 77.38), above it at 15/16 widths; +0.93 over US-Net (FB 76.73). DD 77.50 and DC 77.27 at the other seeds, so SlimOT without WBH is 77.47 +- 0.20 against 77.66 +- 0.24 with it: WBH on SlimOT is +0.34, +0.49, -0.28 by seed (+0.19 +- 0.41), while on US-Net it is +0.35, +0.40, +0.44. The 2x2 interaction, about 0 at 1995 and 2026, is -0.72 at 2006",
+      "what": "DD (the method without WBH: one shared classifier) at seed 2006 (notebook 70), over two sessions. 77.66: 0.25 under the method with WBH at the same seed (FC 77.91), above it at 1/16 widths; +0.93 over US-Net (FB 76.73). DD 77.50 and DC 77.27 at the other seeds, so SlimOT without WBH is 77.47 +- 0.20 against 77.84 +- 0.07 with it: WBH on SlimOT is +0.34, +0.49, +0.25 by seed (+0.36 +- 0.12), and on US-Net +0.35, +0.40, +0.44. The 2x2 interaction is about 0 at 1995 and 2026 and -0.19 at 2006",
       "top1": [
         76.05,
         76.03,
@@ -5216,7 +5216,7 @@
     {
       "name": "fl_k_early_heads4_r50_seed3",
       "letter": "FL",
-      "what": "CI (the method without Delayed Transport) at seed 2006 (notebook 69), over two sessions. 77.62: no collapse; 0.23 ABOVE the method at the same seed (FC 77.38), above it at 15/16 widths, as FI (without WBH, 77.66) was: at 2006 FC sits under both of its ablations. Row 'w/o Delayed Transport' over three seeds: CI 77.27, FH 77.55, FL 77.62, mean 77.48 +- 0.19",
+      "what": "CI (the method without Delayed Transport) at seed 2006 (notebook 69), over two sessions. 77.62: no collapse; 0.29 under the method at the same seed (FC 77.91), above it at 0/16 widths. Row 'w/o Delayed Transport' over three seeds: CI 77.27, FH 77.55, FL 77.62, mean 77.48 +- 0.19, against 77.84 +- 0.07 with it",
       "top1": [
         75.84,
         76.23,
@@ -6266,7 +6266,7 @@
     {
       "name": "fj_k_heads4_noteacher_r50_seed3",
       "letter": "FJ",
-      "what": "EN (SlimOT + WBH without Teacher Transport) at seed 2006, notebook 68: third seed of the w/o-Teacher row. 77.81, +0.42 over FC (77.38) at 14/16 widths; the pre-registered FC - FJ >= +0.5 at 0.25-0.35 failed (-0.02)",
+      "what": "EN (SlimOT + WBH without Teacher Transport) at seed 2006, notebook 68: third seed of the w/o-Teacher row. 77.81, -0.10 against FC (77.91), above it at 7/16 widths; the pre-registered FC - FJ >= +0.5 at 0.25-0.35 held (+0.59)",
       "top1": [
         75.77,
         75.75,
@@ -6308,7 +6308,7 @@
     {
       "name": "fk_k_heads4_nopeer_r50_seed3",
       "letter": "FK",
-      "what": "EO (SlimOT + WBH without Peer Transport) at seed 2006, notebook 68: third seed of the w/o-Peer row. 77.25, -0.13 against FC (77.38), under it at 11/16 widths",
+      "what": "EO (SlimOT + WBH without Peer Transport) at seed 2006, notebook 68: third seed of the w/o-Peer row. 77.25, -0.66 against FC (77.91), under it at 16/16 widths",
       "top1": [
         75.41,
         76.21,
