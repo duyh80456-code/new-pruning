@@ -1982,6 +1982,25 @@ QUEUE = [
               'collapse means Delayed Transport is needed on a ViT too.',
          timing='VF runs four full-width-attention passes a step, about 6 '
                 'to 7 hours on a T4; VC about VB\'s 6 to 7. One session.')),
+    # the pilot again on a fixed base: the label on every width
+    (89, 'vg_a_label_vit', 'vh_k_heads4_label_vit',
+     'US-Net and the method on the ViT, label on every width',
+     VIT_TABLE.format(
+         what='VA and VB again with one change to the base: every student '
+              'also takes CE on the hard label at weight 1.0, as Scala '
+              'does. VA (35.62) sat far under HydraViT† (49.41) on '
+              'the same slicing; local 8-epoch runs traced it to students '
+              'trained on KD alone, and the label on every width lifted '
+              'width 1.0 from 8.3 to 17.9 at epoch 8.',
+         rows='| VG | VA (US-Net†) with the label on every width |\n'
+              '| VH | VB (the method) with the label on every width |',
+         read='Two rules, set before the run, on the k/8 grid mean. VG '
+              'near VD (Scala†, 55.23) and VE (HydraViT†, 49.41) '
+              'says the base is fixed; VG still near 35 says it is not, '
+              'and VH then reads nothing. VH above VG says the ViT is worth '
+              'extending; otherwise it stays future work.',
+         timing='As VA and VB: about 4 to 5 hours for VG and 6 to 7 for VH '
+                'on a T4. One session.')),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after
@@ -2208,7 +2227,7 @@ BOTH_CARDS = {51}
 # notebooks whose code lives on a branch other than nhan: the ViT pilot
 # is developed on vit so that the notebooks still queued on nhan clone
 # exactly what they were written against
-ON_BRANCH = {84: 'vit', 85: 'vit', 86: 'vit'}
+ON_BRANCH = {84: 'vit', 85: 'vit', 86: 'vit', 89: 'vit'}
 PIN_WAS = "        env['CUDA_VISIBLE_DEVICES'] = str(index % max(n_gpu, 1))"
 PIN_NOW = chr(10).join([
     "        env['CUDA_VISIBLE_DEVICES'] = (",
