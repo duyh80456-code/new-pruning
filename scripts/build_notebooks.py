@@ -1756,7 +1756,7 @@ Attach a Tiny ImageNet dataset (the one notebook 57 used) and CIFAR-100.
 GV about 6 hours, GM 8 to 12; a second session if GM runs over.
 """ + RESUME + "\n"
 
-MULTI_SESSION = {27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83}
+MULTI_SESSION = {90, 27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 44, 46, 49, 50, 51, 52, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83}
 
 VIT_PILOT = """The ViT pilot: does the method's gain on CNNs carry over to a vision
 transformer? US-Net and the method (SlimOT + WBH) on the same ViT, one per
@@ -2001,6 +2001,37 @@ QUEUE = [
               'extending; otherwise it stays future work.',
          timing='As VA and VB: about 4 to 5 hours for VG and 6 to 7 for VH '
                 'on a T4. One session.')),
+    # the same pair on Tiny ImageNet, patch 8
+    (90, 'vk_a_label_vit_tiny', 'vl_k_heads4_label_vit_tiny',
+     'US-Net and the method on the ViT on Tiny ImageNet, label on every '
+     'width',
+     VIT_TABLE.format(
+         what='VG and VH (notebook 89) moved to Tiny ImageNet: 200 classes, '
+              '64 pixels, patch 8, so the same 64 tokens and the same cost '
+              'per image as the CIFAR ViT, with twice the images. '
+              'Slimmable ViT papers report ImageNet-1K only, so there is no '
+              'published number to read against; this is the step between '
+              'the CIFAR pilot and ImageNet.',
+         rows='| VK | VG (US-Net†, label on every width) on Tiny '
+              'ImageNet |\n'
+              '| VL | VH (the method, label on every width) on Tiny '
+              'ImageNet |',
+         read='VL against VK on the k/8 grid mean, set before the run: VL '
+              'above VK says the method carries to a harder dataset on the '
+              'ViT. Read beside notebook 89; if VG there is still far under '
+              'Scala† and HydraViT†, the base is not fixed and '
+              'this pair reads nothing either.',
+         timing='Measured locally at batch 256: the same time per step as '
+                'the CIFAR ViT and 5.9 GB peak, so a T4 holds it, but twice '
+                'the steps per epoch: about 8 to 10 hours for VK and 12 to '
+                '14 for VL. VL needs a second session: when the first ends, '
+                'Save Version, attach that version\'s output (pick the '
+                'version number, not Latest) and run again; the notebook '
+                'finds the checkpoints.\n\n## Data\n\nAttach a Tiny ImageNet '
+                'dataset (the one notebook 57 used) and CIFAR-100; the '
+                'notebook\'s data cell expects CIFAR-100. The first epoch '
+                'decodes the JPEGs once into arrays under '
+                'data/tinyimagenet_cache, a few minutes.')),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after
@@ -2227,7 +2258,7 @@ BOTH_CARDS = {51}
 # notebooks whose code lives on a branch other than nhan: the ViT pilot
 # is developed on vit so that the notebooks still queued on nhan clone
 # exactly what they were written against
-ON_BRANCH = {84: 'vit', 85: 'vit', 86: 'vit', 89: 'vit'}
+ON_BRANCH = {84: 'vit', 85: 'vit', 86: 'vit', 89: 'vit', 90: 'vit'}
 PIN_WAS = "        env['CUDA_VISIBLE_DEVICES'] = str(index % max(n_gpu, 1))"
 PIN_NOW = chr(10).join([
     "        env['CUDA_VISIBLE_DEVICES'] = (",
