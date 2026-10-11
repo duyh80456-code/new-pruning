@@ -84,7 +84,7 @@
     {
       "name": "vb_k_heads4_vit",
       "letter": "VB",
-      "what": "SlimOT + WBH on the ViT, as DO; seed 1995, notebook 84. Collapsed: the narrow widths fell from epoch 6, when transport starts; pilot rule (VB above VA) failed",
+      "what": "SlimOT on the ViT, as DO; seed 1995, notebook 84. Collapsed: the narrow widths fell from epoch 6, when transport starts; pilot rule (VB above VA) failed",
       "top1": [
         10.2,
         9.41,
