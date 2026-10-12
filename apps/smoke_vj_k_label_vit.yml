@@ -1,0 +1,91 @@
+# =========================== Branch VJ ===========================
+# VH (the method with the label on every width, notebook 89, 48.79 on the
+# k/8 grid) without Width-Band Heads: head_groups removed, so every width
+# reads one shared classifier. Teacher, Peer and Delayed Transport are
+# VH's. The row "w/o WBH" of a ViT ablation, beside VM and VN.
+#
+# Why: VH adds two things to VG, the transport and the heads. VJ keeps
+# only the transport. VJ near VG (59.93) says the heads were what hurt;
+# VJ near VH says the transport is.
+
+num_gpus_per_job: 1
+num_cpus_per_job: 4
+memory_per_job: 30
+gpu_type: "nvidia-tesla-t4"
+
+# data
+dataset: data.cifar100
+data_transforms: data.cifar100_vit
+data_loader: data.cifar100
+dataset_dir: data
+data_loader_workers: 2
+num_classes: 100
+image_size: 32
+topk: [1, 5]
+randaug_ops: 2
+randaug_magnitude: 9
+random_erasing: 0.25
+mixup: 0.8
+cutmix: 1.0
+mix_switch_prob: 0.5
+label_smoothing: 0.1
+
+# optimizer
+optimizer: utils.adamw_optimizer
+weight_decay: 0.05
+grad_clip: 5.0
+lr: 0.001
+lr_scheduler: cosine_decaying
+lr_warmup: True
+lr_warmup_epochs: 1
+num_epochs: 3
+
+# info
+profiling: [gpu]
+pretrained: ''
+resume: ''
+test_only: False
+random_seed: 1995
+batch_size: 64
+reset_parameters: True
+log_dir: logs/smoke_vj_k_label_vit
+max_iters_per_epoch: 3
+
+# slimmable
+slimmable_training: True
+universally_slimmable_training: True
+num_sample_training: 4
+# LayerNorm only: the cal phase recomputes nothing and is kept so the
+# reported numbers come from the same post-training pass as every row
+bn_cal_batch_num: 2
+calibrate_bn: true
+cumulative_bn_stats: true
+model: models.us_vit
+vit_dim: 384
+vit_depth: 7
+vit_heads: 8
+vit_patch: 4
+vit_mlp_ratio: 2
+drop_path: 0.1
+width_mult: 1.0
+vit_slicing: fractional
+width_mult_list: [0.25, 1.0]
+width_mult_range: [0.25, 1.0]
+width_mult_list_test: [0.25, 0.375, 0.5, 1.0]
+inplace_distill: True
+kd_loss: soft_ce
+sinkhorn_eps: 0.2
+sinkhorn_iters: 100
+sinkhorn_debiased: True
+cost_normalize: True
+horizontal_kd: True
+horizontal_weight: 1.0
+feature_kd: True
+feature_align: prefix
+feature_weight: 1.0
+horizontal_where: feature
+split_pair_backward: True
+feature_start_epoch: 2
+
+# =========================== Label on every width ===========================
+student_ce_weight: 1.0

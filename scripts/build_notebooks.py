@@ -2032,6 +2032,44 @@ QUEUE = [
                 'notebook\'s data cell expects CIFAR-100. The first epoch '
                 'decodes the JPEGs once into arrays under '
                 'data/tinyimagenet_cache, a few minutes.')),
+    # why VH lost to VG: heads or transport
+    (91, 'vi_a_heads4_label_vit', 'vj_k_label_vit',
+     'Heads or transport: what costs the method on the ViT',
+     VIT_TABLE.format(
+         what='Notebook 89 fixed the base (VG, 59.93 on the k/8 grid) but '
+              'left the method 11.1 under it (VH, 48.79), at every width '
+              'and worst at the narrow end. VH adds two things to VG: the '
+              'transport terms and the four Width-Band Heads. This pair '
+              'adds them one at a time, everything else as in notebook 89.',
+         rows='| VI | VG with the four heads, no transport (SOLAR† on '
+              'the ViT) |\n'
+              '| VJ | VH without the heads: transport only, one shared '
+              'classifier |',
+         read='On the k/8 grid mean, against VG 59.93 and VH 48.79. VI '
+              'near VG and VJ near VH: the transport is what hurts. VI near '
+              'VH and VJ near VG: the heads are. Both in between: both '
+              'cost something.',
+         timing='As notebook 89: VG took 284 minutes and VH 447 on a T4, '
+                'so about 5 hours for VI and 7 to 8 for VJ. One session.')),
+    # which transport term
+    (92, 'vm_k_heads4_nopeer_label_vit',
+     'vn_k_heads4_noteacher_label_vit',
+     'Teacher or Peer: which transport term costs the method on the ViT',
+     VIT_TABLE.format(
+         what='The leave-one-out ablation of the method on the ViT, as EO '
+              'and EN are on ResNet-50: VH (notebook 89, 48.79) with one '
+              'transport term removed. Read with notebook 91, which says '
+              'whether the transport or the heads is what costs VH 11.1 '
+              'against VG.',
+         rows='| VM | VH without Peer Transport (Teacher only) |\n'
+              '| VN | VH without Teacher Transport (Peer only) |',
+         read='On the k/8 grid mean, against VH 48.79 and VG 59.93. The '
+              'row that climbs toward VG names the term that hurts; both '
+              'climbing says each costs on its own; neither says only the '
+              'two together hurt, or that the heads do (see VI).',
+         timing='Each runs one transport term where VH ran two, so each '
+                'should land between VG\'s 284 minutes and VH\'s 447 on a '
+                'T4: about 6 to 7 hours. One session.')),
 ]
 
 # Notebooks whose branches start from DD's final weights get a cell, after
@@ -2258,7 +2296,8 @@ BOTH_CARDS = {51}
 # notebooks whose code lives on a branch other than nhan: the ViT pilot
 # is developed on vit so that the notebooks still queued on nhan clone
 # exactly what they were written against
-ON_BRANCH = {84: 'vit', 85: 'vit', 86: 'vit', 89: 'vit', 90: 'vit'}
+ON_BRANCH = {84: 'vit', 85: 'vit', 86: 'vit', 89: 'vit', 90: 'vit', 91: 'vit',
+             92: 'vit'}
 PIN_WAS = "        env['CUDA_VISIBLE_DEVICES'] = str(index % max(n_gpu, 1))"
 PIN_NOW = chr(10).join([
     "        env['CUDA_VISIBLE_DEVICES'] = (",
