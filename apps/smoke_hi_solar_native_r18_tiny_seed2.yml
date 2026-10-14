@@ -1,0 +1,59 @@
+# smoke for Branch HI
+
+num_gpus_per_job: 1
+num_cpus_per_job: 4
+memory_per_job: 30
+gpu_type: "nvidia-tesla-t4"
+
+# data
+dataset: data.tinyimagenet
+data_transforms: data.tinyimagenet
+data_loader: data.tinyimagenet
+dataset_dir: data
+data_loader_workers: 2
+
+# info
+num_classes: 200
+image_size: 64
+topk: [1, 5]
+
+# optimizer
+optimizer: sgd
+momentum: 0.9
+weight_decay: 0.0005
+weight_decay_all: True
+nesterov: False
+
+# lr
+lr: 0.1
+lr_scheduler: cosine_decaying
+lr_warmup: False
+lr_warmup_epochs: 0
+num_epochs: 2
+
+# model profiling
+profiling: [gpu]
+
+# pretrain, resume, test_only
+pretrained: ''
+resume: ''
+test_only: False
+
+random_seed: 2026
+batch_size: 64
+max_iters_per_epoch: 3
+reset_parameters: False
+
+# =========================== Override Settings ===========================
+log_dir: logs/smoke_hi_solar_native_r18_tiny_seed2
+slimmable_training: True
+universally_slimmable_training: False
+calibrate_bn: False
+inplace_distill: False
+
+model: models.s_resnet_solar
+depth: 18
+# as every Tiny row: the stages see 32, 16, 8 and 4 pixels
+stem_stride: 2
+width_mult: 1.0
+width_mult_list: [0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]

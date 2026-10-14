@@ -273,7 +273,11 @@ def get_optimizer(model):
             if not params.requires_grad:
                 continue
             ps = list(params.size())
-            if len(ps) == 4 and ps[1] != 1:
+            # SOLAR's code hands model.parameters() to SGD whole, so BN
+            # and biases are decayed too
+            if getattr(FLAGS, 'weight_decay_all', False):
+                weight_decay = FLAGS.weight_decay
+            elif len(ps) == 4 and ps[1] != 1:
                 weight_decay = FLAGS.weight_decay
             elif len(ps) == 2:
                 weight_decay = FLAGS.weight_decay
@@ -851,6 +855,9 @@ def run_one_epoch(
             sam_rho = getattr(FLAGS, 'sam_rho', 0.0) if train else 0.0
             sam_widths = None
             sam_moved = None
+            # set by the us-net branch only; the s-net branch trains its
+            # whole width list and has nothing to equalize by
+            widths_train = None
             for sam_pass in range(2 if sam_rho else 1):
                 if sam_pass:
                     sam_moved = sam_ascend(model, sam_rho)

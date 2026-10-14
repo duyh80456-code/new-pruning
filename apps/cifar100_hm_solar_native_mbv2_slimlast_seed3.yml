@@ -1,0 +1,77 @@
+# =========================== Branch HM ===========================
+# SOLAR (WACV 2026) exactly as its authors' code trains it
+# (github.com/sakt90/SOLAR, train_SNN_SOL.py), on MobileNetV2 with the last layer slimmed, on CIFAR-100, seed 2006.
+# The SOLAR-dagger rows kept US-Net's recipe and changed only the heads;
+# this changes the recipe too, so the SOLAR row can be the method as
+# published:
+#   - Slimmable Networks base: a fixed width list, a private BatchNorm per
+#     width, no BN calibration
+#   - one head per width, input that width's own feature size
+#   - every width of the list on every batch, widest first, gradients
+#     summed, one step; cross entropy with the labels only, no sandwich,
+#     no inplace distillation
+#   - SGD lr 0.1, momentum 0.9, no nesterov, weight decay 5e-4 on every
+#     parameter, cosine per epoch, no warm-up, no grad clip, batch
+#     128, PyTorch default init
+# Kept from our protocol: the 16 test widths as the width list (their
+# k/16 option, shifted to our 0.25 to 1.00 grid), 100 epochs (their runs
+# use 120 on CIFAR and 140 on Tiny ImageNet), our backbone and our
+# augmentation.
+#
+# Sixteen widths a step: about four times a US-Net run of this setting.
+# Read against GT, GU, GV (SOLAR-dagger on this MobileNetV2) and the method on it.
+
+num_gpus_per_job: 1
+num_cpus_per_job: 4
+memory_per_job: 30
+gpu_type: "nvidia-tesla-t4"
+
+# data
+dataset: data.cifar100
+data_transforms: data.cifar100
+data_loader: data.cifar100
+dataset_dir: data
+data_loader_workers: 2
+
+# info
+num_classes: 100
+image_size: 32
+topk: [1, 5]
+
+# optimizer
+optimizer: sgd
+momentum: 0.9
+weight_decay: 0.0005
+weight_decay_all: True
+nesterov: False
+
+# lr
+lr: 0.1
+lr_scheduler: cosine_decaying
+lr_warmup: False
+lr_warmup_epochs: 0
+num_epochs: 100
+
+# model profiling
+profiling: [gpu]
+
+# pretrain, resume, test_only
+pretrained: ''
+resume: ''
+test_only: False
+
+random_seed: 2006
+batch_size: 128
+reset_parameters: False
+
+# =========================== Override Settings ===========================
+log_dir: logs/cifar100_hm_solar_native_mbv2_slimlast_seed3
+slimmable_training: True
+universally_slimmable_training: False
+calibrate_bn: False
+inplace_distill: False
+
+model: models.s_mobilenet_v2_solar
+slim_last: True
+width_mult: 1.0
+width_mult_list: [0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
