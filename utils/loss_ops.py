@@ -218,7 +218,21 @@ def _feature_scale(left, right):
     The spread within each cloud is the scale instead. Detached, so it
     cannot be gamed, and symmetric in the two arguments, which the
     horizontal use needs.
+
+    feature_scale_grad lets the gradient through the spread. The argument
+    above is about the cross cost's own mean, not this: the spread inside
+    each cloud does not flatten when the clouds are far apart. Detached,
+    a cost of distances over a fixed yardstick is homogeneous of degree
+    one, so the gradient of the pair term always carries a component that
+    shrinks both clouds about their common mean, by exactly the loss
+    value; with the gradient through the spread the loss is scale free
+    and that component is zero. Whether the shrinking is what broke CR is
+    what the branches that set this measure.
     """
+    if getattr(FLAGS, 'feature_scale_grad', False):
+        spread = 0.5 * (torch.cdist(left, left).mean()
+                        + torch.cdist(right, right).mean())
+        return spread.clamp_min(1e-12)
     with torch.no_grad():
         spread = 0.5 * (torch.cdist(left, left).mean()
                         + torch.cdist(right, right).mean())

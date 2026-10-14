@@ -765,6 +765,57 @@ def test_bures_survives_more_channels_than_samples():
               got, exact, got - exact))
 
 
+def test_the_spread_gradient_removes_the_shrinking_and_nothing_else():
+    """feature_scale_grad, the switch HN and HO read
+
+    The pair term is a sum of distances over the spread. With the spread
+    detached it is homogeneous of degree one in the two clouds taken about
+    their common mean, so Euler's identity puts a component of exactly the
+    loss value on the radial direction: every step shrinks both clouds.
+    With the gradient through the spread the loss is scale free and that
+    component is zero. Either way the value is the same number and the
+    gradients still sum to zero, since a shift of both clouds moves no
+    distance.
+    """
+    generator = torch.Generator().manual_seed(2026)
+    base_left = torch.randn(64, 16, generator=generator, dtype=torch.float64)
+    base_right = (torch.randn(64, 16, generator=generator,
+                              dtype=torch.float64) * 1.3 + 0.5)
+    loss_fn = FeatureWassersteinLoss(eps=0.2, n_iters=200, debiased=True)
+    had = getattr(FLAGS, 'feature_scale_grad', None)
+    read = {}
+    try:
+        for flag in (False, True):
+            setattr(FLAGS, 'feature_scale_grad', flag)
+            left = base_left.clone().requires_grad_(True)
+            right = base_right.clone().requires_grad_(True)
+            value = loss_fn(left, right)
+            grad_left, grad_right = torch.autograd.grad(value, (left, right))
+            centre = torch.cat([base_left, base_right]).mean(dim=0)
+            radial = ((grad_left * (base_left - centre)).sum()
+                      + (grad_right * (base_right - centre)).sum()).item()
+            total = (grad_left.sum(dim=0) + grad_right.sum(dim=0)).norm()
+            read[flag] = (value.item(), radial, total.item())
+    finally:
+        if had is None:
+            delattr(FLAGS, 'feature_scale_grad')
+        else:
+            setattr(FLAGS, 'feature_scale_grad', had)
+    (value_off, radial_off, total_off), (value_on, radial_on, total_on) = (
+        read[False], read[True])
+    check('the switch leaves the value alone', value_off == value_on,
+          '{:.10f} against {:.10f}'.format(value_off, value_on))
+    check('detached, the radial part of the gradient is the loss itself',
+          abs(radial_off - value_off) < 1e-8 * max(1.0, value_off),
+          '{:.10f} against {:.10f}'.format(radial_off, value_off))
+    check('through the spread, the radial part is zero',
+          abs(radial_on) < 1e-8 * max(1.0, value_on),
+          '{:.3e}'.format(radial_on))
+    check('and either way a common shift costs nothing',
+          total_off < 1e-8 and total_on < 1e-8,
+          '{:.1e}, {:.1e}'.format(total_off, total_on))
+
+
 def test_the_three_new_axes_leave_k_exactly_where_it_was():
     """K has to be bit identical, not merely close
 
@@ -1039,6 +1090,7 @@ def main():
     test_cosine_ground_behaves_like_a_cost()
     test_gromov_is_invariant_to_what_it_claims()
     test_bures_survives_more_channels_than_samples()
+    test_the_spread_gradient_removes_the_shrinking_and_nothing_else()
     test_the_three_new_axes_leave_k_exactly_where_it_was()
     test_the_chain_does_not_move_which_widths_get_coupled()
     test_a_weighted_ground_cost_keeps_what_it_is_supposed_to()

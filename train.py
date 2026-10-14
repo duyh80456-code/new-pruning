@@ -1569,6 +1569,14 @@ def train_val_test():
         if getattr(FLAGS, 'skip_training', False):
             print('Skip training at epoch: {}'.format(epoch))
             break
+        # A short run on the full run's schedule: the learning rate at each
+        # epoch is what num_epochs makes it, the run just ends early and is
+        # calibrated and tested there. For controls whose question is
+        # settled in the first epochs, such as whether a collapse repeats.
+        if epoch >= getattr(FLAGS, 'stop_after_epoch', FLAGS.num_epochs):
+            print('Stop after epoch {} of {}.'.format(
+                epoch, FLAGS.num_epochs))
+            break
         lr_scheduler.step()
         # Permute the channels so the prefix holds the ones the criterion
         # likes, the way Once-for-All does when it makes width elastic.
