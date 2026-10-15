@@ -563,16 +563,21 @@ print(codes)
 SPEC_103 = {
     'number': 103,
     'name': 'kaggle_kd_103_inn',
-    'title': 'Integral Neural Networks from the authors\' code',
+    'title': 'Integral Neural Networks from the authors\' code, and S-Net '
+             'HY beside it',
     'upstreams': ['inn'],
     'workers': "{'INN_WORKERS': '2'}",
-    'labels': ['inn_base', 'inn_r50'],
-    'one_gpu': True,
-    'intro': '''Integral Neural Networks (Solodskikh et al., CVPR 2023) run from the
-authors' repository (TorchIntegral). INN turns a trained ordinary network
-into a continuous one and fine-tunes it while sampling sizes; any width is
-then read by resampling. Two phases, one after the other on one card, seed
-1995:
+    'labels': ['inn_base', 'inn_r50', 'hy_snet_mbv2_slimlast_seed3'],
+    'run': 'tagged',
+    'intro': '''Two methods, one per card. GPU 0: Integral Neural Networks (Solodskikh
+et al., CVPR 2023) run from the authors' repository (TorchIntegral). GPU 1:
+S-Net HY, the third seed of S-Net on MobileNetV2 slim_last, from our
+train.py (its other seeds are in notebook 106); it is here so that no
+card stays idle.
+
+INN turns a trained ordinary network into a continuous one and fine-tunes
+it while sampling sizes; any width is then read by resampling. Two
+phases, one after the other on GPU 0, seed 1995:
 
 | | GPU | phase | code |
 |---|---|---|---|
@@ -586,20 +591,26 @@ yet fine-tuned, every width under 1.00 is near chance, so the fine-tuning
 has to teach the narrow widths from scratch.
 `third_party/patches/inn_README.md` lists every change and deviation.
 
-GPU 1 stays idle (T4 x2 is fine, one card is enough).
+| | GPU | method | code |
+|---|---|---|---|
+| hy_snet_mbv2_slimlast_seed3 | 1 | Slimmable Networks (ICLR 2019) on our CIFAR MobileNetV2 with slim_last, seed 2006: four switches 0.25/0.5/0.75/1.00 on every batch, a private BN per switch, cross entropy only, one shared classifier; our recipe; read at its four switches from the last epoch, no calibration | our train.py, `apps/cifar100_hy_snet_mbv2_slimlast_seed3.yml`; a two-epoch smoke runs first |
 
 ## More than one session
 
-Estimated about 5 h for the base and 3.5 h for the fine-tuning on a T4
-(not measured there), plus 5-10 minutes for the permutation search: close
-to one session. Both phases write `ckpt/<label>/last.pt` after every epoch.
-When the session ends, Save Version, then in a new run attach that
-version's output (pick the version by number, not Latest) and run again:
-the notebook finds the checkpoints, a finished base is not trained again,
-and the fine-tuning continues. Attach the CIFAR-100 dataset as well.
+INN: estimated about 5 h for the base and 3.5 h for the fine-tuning on a
+T4 (not measured there), plus 5-10 minutes for the permutation search.
+HY: about a US-Net run of its setting. Close to one session. INN writes
+`ckpt/<label>/last.pt` and HY `new-pruning/logs/cifar100_<branch>/latest_checkpoint.pt`
+after every epoch. When the session ends, Save Version, then in a new run
+attach that version's output (pick the version by number, not Latest) and
+run again: the notebook finds the checkpoints, a finished base is not
+trained again, and both runs continue. Attach the CIFAR-100 dataset as
+well.
 ''',
     'reading': '''inn_base at 1.00 is the individual ResNet-50; inn_r50 is read at the
-sixteen widths like every row, with the footing caveats above.''',
+sixteen widths like every row, with the footing caveats above. HY's four
+switches are read against the MobileNetV2 US-Net and SlimOT rows at the
+same widths, not against the A and K columns (ResNet-50).''',
 }
 
 RESUME_103 = '''CK = os.path.join(WORK, 'ckpt')
@@ -620,24 +631,66 @@ for label, (name, folder) in wanted.items():
           else 'starts at epoch 1')
 '''
 
-TRAIN_103 = '''COMMON = ['--data_dir', DATA, '--seed', '1995']
-# phase 1, then phase 2 from its checkpoint; separate labels, since the
-# line parser ignores the tag and would file both 1.00 lines together
+TRAIN_103 = '''import shlex
+# HY runs our train.py, which reads data/cifar-100-python in our repo and
+# resumes from logs/cifar100_<branch>/latest_checkpoint.pt
+SNET = 'hy_snet_mbv2_slimlast_seed3'
+link = os.path.join(OURS, 'data', 'cifar-100-python')
+if not os.path.exists(link) and os.path.isdir(
+        os.path.join(DATA, 'cifar-100-python')):
+    os.makedirs(os.path.dirname(link), exist_ok=True)
+    os.symlink(os.path.join(DATA, 'cifar-100-python'), link)
+logs = os.path.join(OURS, 'logs', 'cifar100_' + SNET)
+if not os.path.exists(os.path.join(logs, 'latest_checkpoint.pt')):
+    for root, _, files in os.walk('/kaggle/input', followlinks=True):
+        if ('latest_checkpoint.pt' in files
+                and os.path.basename(root) == 'cifar100_' + SNET):
+            shutil.copytree(root, logs, dirs_exist_ok=True)
+            print('restored', SNET, 'from', root)
+            break
+print(SNET, 'resumes from its checkpoint' if os.path.exists(
+    os.path.join(logs, 'latest_checkpoint.pt')) else 'starts at epoch 1')
+codes = run_pinned([(SNET + '_smoke', '1', OURS, [
+    sys.executable, '-u', 'train.py', 'app:apps/smoke_{}.yml'.format(SNET)])])
+if codes[SNET + '_smoke'] != 0:
+    raise SystemExit('the HY smoke failed')
+
+# GPU 0: INN phase 1, then phase 2 from its checkpoint, chained; the
+# parser files each protocol line under the tag it carries
+COMMON = ['--arch', 'r50', '--data_dir', DATA, '--seed', '1995']
+base = ([sys.executable, '-u', 'train_base.py'] + COMMON
+        + ['--ckpt_dir', os.path.join(CK, 'inn_base'),
+           '--log_prefix', 'inn_base'])
+inn = ([sys.executable, '-u', 'train_inn.py'] + COMMON
+       + ['--base_ckpt', os.path.join(CK, 'inn_base', 'last.pt'),
+          '--ckpt_dir', os.path.join(CK, 'inn_r50'),
+          '--log_prefix', 'inn_r50'])
 codes = run_pinned([
-    ('inn_base', '0', CODE['inn'],
-     [sys.executable, '-u', 'train_base.py'] + COMMON
-     + ['--ckpt_dir', os.path.join(CK, 'inn_base'),
-        '--log_prefix', 'inn_base'])])
+    ('inn_r50', '0', CODE['inn'],
+     ['bash', '-c', shlex.join(base) + ' && ' + shlex.join(inn)]),
+    (SNET, '1', OURS,
+     [sys.executable, '-u', 'train.py',
+      'app:apps/cifar100_{}.yml'.format(SNET)])])
 print(codes)
-if codes['inn_base'] == 0:
-    codes = run_pinned([
-        ('inn_r50', '0', CODE['inn'],
-         [sys.executable, '-u', 'train_inn.py'] + COMMON
-         + ['--base_ckpt', os.path.join(CK, 'inn_base', 'last.pt'),
-            '--ckpt_dir', os.path.join(CK, 'inn_r50'),
-            '--log_prefix', 'inn_r50'])])
-    print(codes)
 '''
+
+# run_pinned that files each protocol line under the tag the line carries
+# ([inn_base] ...), so chained phases keep apart, and also reads our
+# train.py's last epoch (N-1/N: it counts epochs from 0, no calibration)
+RUN_TAGGED = RUN.replace(
+    r"r'val\s+([0-9.]+)\s+-1/\d+:\s+loss:",
+    r"r'val\s+([0-9.]+)\s+(-1|\d+)/(\d+):\s+loss:").replace(
+    "results = {}\n",
+    "TAG = re.compile(r'^\\[([^\\]\\s]+)\\]')\nresults = {}\n").replace(
+    """            width, loss, top1 = found.groups()
+            results.setdefault(label, {})[round(float(width), 2)] = (
+                float(loss), float(top1))""",
+    """            width, epoch, total, loss, top1 = found.groups()
+            if epoch == '-1' or int(epoch) == int(total) - 1:
+                tag = TAG.match(line)
+                results.setdefault(tag.group(1) if tag else label, {})[
+                    round(float(width), 2)] = (float(loss), float(top1))""")
+assert RUN_TAGGED.count('TAG') == 2 and '(-1|' in RUN_TAGGED
 
 
 # the DS-Net rows of every setting: dsnet_ib as released, three seeds each
@@ -891,7 +944,7 @@ WORKER_ENV = {workers}
         results += '\n\n' + spec['reading'].strip('\n')
     labels = spec.get('labels', ['joslim_r50', 'lcs_l_bn'])
     cells = [markdown(head), code(config), code(setup), code(DATA),
-             code(RUN)]
+             code(RUN_TAGGED if spec.get('run') == 'tagged' else RUN)]
     cells += [code(step) for step in steps]
     cells += [markdown(results),
               code(TABLE.format(a_ref=repr(A_REF), k_ref=repr(K_REF),
