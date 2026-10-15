@@ -1,0 +1,83 @@
+# =========================== Branch HT ===========================
+# Slimmable Networks (S-Net, Yu et al., ICLR 2019), the method itself on
+# our ResNet-18 on Tiny ImageNet (64x64, 200 classes), seed 1995. This repository is a snapshot of the
+# authors' code (github.com/JiahuiYu/slimmable_networks, see THIRD_PARTY.md),
+# so the s-net branch of train.py is their training loop:
+#   - four switches 0.25, 0.5, 0.75, 1.00, every one on every batch,
+#     widest first, gradients summed into one step
+#   - a private BatchNorm per switch (SwitchableBatchNorm2d), no BN
+#     calibration
+#   - cross entropy with the labels for every switch, no inplace
+#     distillation (that came with US-Net)
+#   - one classifier shared by the switches, its input sliced to the
+#     switch's feature size (shared_head, as models/s_resnet.py)
+# The backbone is models/s_resnet_solar.py at depth 18: basic blocks, the
+# 3x3 stem at stride 2 for 64x64 inputs as our Tiny US-Net rows (ES),
+# channels int(c * width).
+#
+# Recipe: ours, as BX, so the row differs from US-Net (ES) in the method only:
+# 100 epochs, batch 256, SGD nesterov lr 0.2, 5 warm-up epochs then cosine,
+# wd 5e-4, grad clip 5. Their ImageNet recipe (250 epochs, lr 0.1 x batch
+# 1024 / 256, no warm-up) is not used.
+#
+# Read at its own four widths, against the method and US-Net read at the
+# same four widths from their sixteen-width tables.
+
+num_gpus_per_job: 1
+num_cpus_per_job: 4
+memory_per_job: 30
+gpu_type: "nvidia-tesla-t4"
+
+# data
+dataset: data.tinyimagenet
+data_transforms: data.tinyimagenet
+data_loader: data.tinyimagenet
+dataset_dir: data
+data_loader_workers: 2
+
+# info
+num_classes: 200
+image_size: 64
+topk: [1, 5]
+
+# optimizer
+optimizer: sgd
+momentum: 0.9
+weight_decay: 0.0005
+nesterov: True
+grad_clip: 5.0
+
+# lr
+lr: 0.2
+lr_scheduler: cosine_decaying
+lr_warmup: True
+lr_warmup_epochs: 5
+num_epochs: 2
+
+# model profiling
+profiling: [gpu]
+
+# pretrain, resume, test_only
+pretrained: ''
+resume: ''
+test_only: False
+
+#
+random_seed: 1995
+batch_size: 64
+max_iters_per_epoch: 3
+reset_parameters: True
+
+# =========================== Override Settings ===========================
+log_dir: logs/smoke_ht_snet_r18_tiny
+slimmable_training: True
+universally_slimmable_training: False
+calibrate_bn: False
+inplace_distill: False
+
+model: models.s_resnet_solar
+depth: 18
+stem_stride: 2
+shared_head: True
+width_mult: 1.0
+width_mult_list: [0.25, 0.5, 0.75, 1.0]

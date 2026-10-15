@@ -1,0 +1,81 @@
+# =========================== Branch HX ===========================
+# Slimmable Networks (S-Net, Yu et al., ICLR 2019), the method itself on
+# our CIFAR MobileNetV2 with slim_last, seed 2026. This repository is a snapshot of the
+# authors' code (github.com/JiahuiYu/slimmable_networks, see THIRD_PARTY.md),
+# so the s-net branch of train.py is their training loop:
+#   - four switches 0.25, 0.5, 0.75, 1.00, every one on every batch,
+#     widest first, gradients summed into one step
+#   - a private BatchNorm per switch (SwitchableBatchNorm2d), no BN
+#     calibration
+#   - cross entropy with the labels for every switch, no inplace
+#     distillation (that came with US-Net)
+#   - one classifier shared by the switches, its input sliced to the
+#     switch's feature size (shared_head, as models/s_resnet.py)
+# The backbone is models/s_mobilenet_v2_solar.py: the MobileNetV2 of our
+# slim_last US-Net rows (EV), the last 1x1 convolution to 1280 slimmed
+# with the width, upstream's s-net inverted residual, make_divisible.
+#
+# Recipe: ours, as BX, so the row differs from US-Net (EV) in the method only:
+# 100 epochs, batch 256, SGD nesterov lr 0.2, 5 warm-up epochs then cosine,
+# wd 5e-4, grad clip 5. Their ImageNet recipe (250 epochs, lr 0.1 x batch
+# 1024 / 256, no warm-up) is not used.
+#
+# Read at its own four widths, against the method and US-Net read at the
+# same four widths from their sixteen-width tables.
+
+num_gpus_per_job: 1
+num_cpus_per_job: 4
+memory_per_job: 30
+gpu_type: "nvidia-tesla-t4"
+
+# data
+dataset: data.cifar100
+data_transforms: data.cifar100
+data_loader: data.cifar100
+dataset_dir: data
+data_loader_workers: 2
+
+# info
+num_classes: 100
+image_size: 32
+topk: [1, 5]
+
+# optimizer
+optimizer: sgd
+momentum: 0.9
+weight_decay: 0.0005
+nesterov: True
+grad_clip: 5.0
+
+# lr
+lr: 0.2
+lr_scheduler: cosine_decaying
+lr_warmup: True
+lr_warmup_epochs: 5
+num_epochs: 100
+
+# model profiling
+profiling: [gpu]
+
+# pretrain, resume, test_only
+pretrained: ''
+resume: ''
+test_only: False
+
+#
+random_seed: 2026
+batch_size: 256
+reset_parameters: True
+
+# =========================== Override Settings ===========================
+log_dir: logs/cifar100_hx_snet_mbv2_slimlast_seed2
+slimmable_training: True
+universally_slimmable_training: False
+calibrate_bn: False
+inplace_distill: False
+
+model: models.s_mobilenet_v2_solar
+slim_last: True
+shared_head: True
+width_mult: 1.0
+width_mult_list: [0.25, 0.5, 0.75, 1.0]

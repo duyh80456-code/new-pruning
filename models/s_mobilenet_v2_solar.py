@@ -8,13 +8,15 @@ rows used: 3x3 stride 1 stem, the second stage at stride 1, and the last
 1280 x w channels and its head reads exactly those. The inverted residual
 is upstream's s-net block (models/s_mobilenet_v2.py), channel counts
 make_divisible as there.
+shared_head turns it into Slimmable Networks on the same backbone.
 """
 import math
 
 import torch.nn as nn
 
 from .s_mobilenet_v2 import InvertedResidual
-from .slimmable_ops import SwitchableBatchNorm2d, SlimmableConv2d
+from .slimmable_ops import (SwitchableBatchNorm2d, SlimmableConv2d,
+                             SlimmableLinear)
 from .slimmable_ops import make_divisible
 from utils.config import FLAGS
 
@@ -58,8 +60,15 @@ class Model(nn.Module):
         features.append(nn.AdaptiveAvgPool2d(1))
         self.features = nn.Sequential(*features)
 
-        self.heads = nn.ModuleList(
-            [nn.Linear(c, num_classes) for c in self.outp])
+        # one head per width, as SOLAR; shared_head is Slimmable Networks
+        # itself: one classifier, its input sliced to the width's features
+        self.shared_head = getattr(FLAGS, 'shared_head', False)
+        if self.shared_head:
+            self.classifier = SlimmableLinear(
+                self.outp, [num_classes for _ in self.outp])
+        else:
+            self.heads = nn.ModuleList(
+                [nn.Linear(c, num_classes) for c in self.outp])
         self.width_mult = max(widths)
         if FLAGS.reset_parameters:
             self.reset_parameters()
@@ -67,6 +76,8 @@ class Model(nn.Module):
     def forward(self, x):
         x = self.features(x)
         x = x.view(x.size(0), -1)
+        if self.shared_head:
+            return self.classifier(x)
         return self.heads[FLAGS.width_mult_list.index(self.width_mult)](x)
 
     def reset_parameters(self):

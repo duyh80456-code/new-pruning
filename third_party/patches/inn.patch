@@ -13,24 +13,184 @@ index 338f917..b471d16 100755
 +torch_integral/tsp_solver/solver.cpp
 +*.so
 +*.pyd
+diff --git a/cifar_mobilenetv2.py b/cifar_mobilenetv2.py
+new file mode 100644
+index 0000000..aac1d08
+--- /dev/null
++++ b/cifar_mobilenetv2.py
+@@ -0,0 +1,144 @@
++#
++# A plain CIFAR MobileNetV2 with the last 1x1 slimmed (ordinary torch.nn
++# modules) for running Integral Neural Networks under an external protocol.
++# Not part of the original release.
++#
++# Same network as the protocol's slimmable MobileNetV2 with slim_last, at
++# width w: 3x3 stride-1 stem to 32, inverted residuals (t, c, n, s) =
++# (1, 16, 1, 1), (6, 24, 2, 1), (6, 32, 3, 2), (6, 64, 4, 2), (6, 96, 3, 1),
++# (6, 160, 3, 2), (6, 320, 1, 1) (ImageNet's second stride of 2 becomes 1, so
++# the last stage sees 4 pixels), each [1x1 expansion + BN + ReLU6, absent
++# where t = 1] -> 3x3 depthwise (stride) + BN + ReLU6 -> 1x1 projection + BN,
++# the identity added where the stride is 1 and the full-width input and
++# output agree (no projection shortcut); then a 1x1 conv to 1280 + BN +
++# ReLU6, global average pool, linear classifier with bias. slim_last: that
++# last 1x1 slims with the width as well (1280 x w channels, and with it the
++# classifier input).
++#
++# Channel counts at width w (the protocol's rounding): stem, block outputs
++# and the last 1x1 make_divisible(C * w); the expansion 1x1 and the depthwise
++# 3x3 t * make_divisible(C_in * w), t times the block's input channels at
++# that width (US-Net's ratio rounding, make_divisible(C_in * t * w / t) * t).
++# Every conv records that ratio as channel_ratio = (out, in), read by
++# train_inn.py to size the integral groups.
++#
++# The depthwise conv is an nn.Conv2d with groups = channels. A forward
++# pre-hook sets groups to the channel count of its input at every call (as
++# the protocol's slimmable conv sets groups = in_channels at each width), so
++# the network stays depthwise when the INN resamples it to fewer channels.
++#
++import math
++
++import torch
++import torch.nn as nn
++
++from cifar_resnet import make_divisible
++
++
++def _depthwise_groups(conv, args):
++    """one filter per input channel at any channel count"""
++    conv.groups = args[0].shape[1]
++
++
++class InvertedResidual(nn.Module):
++    def __init__(self, inp, mid, outp, stride, t, residual):
++        super().__init__()
++        self.residual = residual
++        if t != 1:
++            self.conv1 = nn.Conv2d(inp, mid, 1, 1, 0, bias=False)
++            self.conv1.channel_ratio = (t, 1)
++            self.bn1 = nn.BatchNorm2d(mid)
++        else:
++            assert mid == inp
++            self.conv1 = None
++        self.conv2 = nn.Conv2d(mid, mid, 3, stride, 1, groups=mid, bias=False)
++        self.conv2.channel_ratio = (t, t)
++        self.conv2.register_forward_pre_hook(_depthwise_groups)
++        self.bn2 = nn.BatchNorm2d(mid)
++        self.conv3 = nn.Conv2d(mid, outp, 1, 1, 0, bias=False)
++        self.conv3.channel_ratio = (1, t)
++        self.bn3 = nn.BatchNorm2d(outp)
++        self.relu = nn.ReLU6(inplace=True)
++
++    def forward(self, x):
++        out = x
++        if self.conv1 is not None:
++            out = self.relu(self.bn1(self.conv1(out)))
++        out = self.relu(self.bn2(self.conv2(out)))
++        out = self.bn3(self.conv3(out))
++        if self.residual:
++            out = out + x
++
++        return out
++
++
++class CifarMobileNetV2(nn.Module):
++    # t, c, n, s; ImageNet's second stride of 2 becomes 1
++    block_setting = [
++        [1, 16, 1, 1],
++        [6, 24, 2, 1],
++        [6, 32, 3, 2],
++        [6, 64, 4, 2],
++        [6, 96, 3, 1],
++        [6, 160, 3, 2],
++        [6, 320, 1, 1],
++    ]
++
++    def __init__(self, num_classes=100, width=1.0, last_channels=1280):
++        super().__init__()
++
++        def md(c):
++            return make_divisible(c * width)
++
++        full = 32
++        self.conv1 = nn.Conv2d(3, md(full), 3, 1, 1, bias=False)
++        self.bn1 = nn.BatchNorm2d(md(full))
++        self.relu = nn.ReLU6(inplace=True)
++
++        blocks = []
++        for t, c, n, s in self.block_setting:
++            for i in range(n):
++                stride = s if i == 0 else 1
++                blocks.append(InvertedResidual(
++                    md(full), t * md(full), md(c), stride, t,
++                    residual=stride == 1 and full == c))
++                full = c
++        self.layers = nn.Sequential(*blocks)
++
++        # slim_last: the last 1x1 slims with the width
++        self.conv_last = nn.Conv2d(md(full), md(last_channels), 1, 1, 0,
++                                   bias=False)
++        self.bn_last = nn.BatchNorm2d(md(last_channels))
++        self.avgpool = nn.AdaptiveAvgPool2d(1)
++        self.fc = nn.Linear(md(last_channels), num_classes)
++        self.reset_parameters()
++
++    def forward(self, x):
++        x = self.relu(self.bn1(self.conv1(x)))
++        x = self.layers(x)
++        x = self.relu(self.bn_last(self.conv_last(x)))
++        x = self.avgpool(x)
++        x = torch.flatten(x, 1)
++
++        return self.fc(x)
++
++    def reset_parameters(self):
++        """The protocol's initialisation: convs N(0, 2 / (k*k*C_out))
++        (depthwise included), BN gamma 1 / beta 0, classifier N(0, 0.01) with
++        zero bias."""
++        for m in self.modules():
++            if isinstance(m, nn.Conv2d):
++                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
++                m.weight.data.normal_(0, math.sqrt(2.0 / n))
++                if m.bias is not None:
++                    m.bias.data.zero_()
++            elif isinstance(m, nn.BatchNorm2d):
++                m.weight.data.fill_(1)
++                m.bias.data.zero_()
++            elif isinstance(m, nn.Linear):
++                m.weight.data.normal_(0, 0.01)
++                m.bias.data.zero_()
++
++
++def mobilenetv2_cifar_slimlast(num_classes=100, width=1.0):
++    return CifarMobileNetV2(num_classes, width)
 diff --git a/cifar_resnet.py b/cifar_resnet.py
 new file mode 100644
-index 0000000..ff0b7c7
+index 0000000..308ed14
 --- /dev/null
 +++ b/cifar_resnet.py
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,164 @@
 +#
-+# A plain CIFAR ResNet-50 (ordinary torch.nn modules) for running Integral
-+# Neural Networks under an external CIFAR-100 protocol. Not part of the
-+# original release.
++# Plain ResNets (ordinary torch.nn modules) for running Integral Neural
++# Networks under an external protocol. Not part of the original release.
 +#
-+# Same network as the protocol's slimmable ResNet-50 at width 1.0: 3x3
-+# stride-1 stem, no max-pool (the stages see 32, 16, 8 and 4 pixels),
-+# bottlenecks [3, 4, 6, 3] with the stride on the 3x3, a 1x1 conv + BN
-+# projection shortcut where the stride or the width changes, ReLU after the
-+# sum, global average pool, linear classifier with bias. Module names follow
-+# torchvision (conv1/bn1, layerN.i.conv1..3/bn1..3/downsample, fc), so the
-+# INN wrapper sees the same structure as in its ImageNet example.
++# Same networks as the protocol's slimmable ResNets:
++# - cifar_resnet50 (CIFAR-100): 3x3 stride-1 stem, no max-pool (the stages
++#   see 32, 16, 8 and 4 pixels), bottlenecks [3, 4, 6, 3] with the stride on
++#   the 3x3;
++# - resnet18_tiny (Tiny ImageNet, 64x64): the same stem at stride 2, no
++#   max-pool (the stages again see 32, 16, 8 and 4 pixels), basic blocks
++#   [2, 2, 2, 2] (3x3 with the stride, 3x3).
++# Both: a 1x1 conv + BN projection shortcut where the stride or the
++# (full-width) channel count changes, ReLU after the sum, global average
++# pool, linear classifier with bias. Module names follow torchvision
++# (conv1/bn1, layerN.i.conv1../bn1../downsample, fc), so the INN wrapper sees
++# the same structure as in its ImageNet example.
++#
++# `width` builds the network the slimmable model runs at that width: every
++# channel count C becomes make_divisible(C * width), except the RGB input
++# and the classes (width 1.0 is the full network, the same modules created
++# in the same order). train_inn.py builds it at the protocol's widths only to
++# read the channel counts the resampled INN must have.
 +#
 +import math
 +
@@ -50,7 +210,7 @@ index 0000000..ff0b7c7
 +
 +
 +class Bottleneck(nn.Module):
-+    def __init__(self, inp, mid, outp, stride):
++    def __init__(self, inp, mid, outp, stride, projection):
 +        super().__init__()
 +        self.conv1 = nn.Conv2d(inp, mid, 1, 1, 0, bias=False)
 +        self.bn1 = nn.BatchNorm2d(mid)
@@ -60,7 +220,7 @@ index 0000000..ff0b7c7
 +        self.bn3 = nn.BatchNorm2d(outp)
 +        self.relu = nn.ReLU(inplace=True)
 +
-+        if stride != 1 or inp != outp:
++        if projection:
 +            self.downsample = nn.Sequential(
 +                nn.Conv2d(inp, outp, 1, stride, 0, bias=False),
 +                nn.BatchNorm2d(outp),
@@ -77,29 +237,65 @@ index 0000000..ff0b7c7
 +        return self.relu(out + shortcut)
 +
 +
-+class CifarResNet50(nn.Module):
-+    def __init__(self, num_classes=100):
++class BasicBlock(nn.Module):
++    def __init__(self, inp, outp, stride, projection):
 +        super().__init__()
-+        channels = 64
-+        self.conv1 = nn.Conv2d(3, channels, 3, 1, 1, bias=False)
-+        self.bn1 = nn.BatchNorm2d(channels)
++        self.conv1 = nn.Conv2d(inp, outp, 3, stride, 1, bias=False)
++        self.bn1 = nn.BatchNorm2d(outp)
++        self.conv2 = nn.Conv2d(outp, outp, 3, 1, 1, bias=False)
++        self.bn2 = nn.BatchNorm2d(outp)
++        self.relu = nn.ReLU(inplace=True)
++
++        if projection:
++            self.downsample = nn.Sequential(
++                nn.Conv2d(inp, outp, 1, stride, 0, bias=False),
++                nn.BatchNorm2d(outp),
++            )
++        else:
++            self.downsample = None
++
++    def forward(self, x):
++        out = self.relu(self.bn1(self.conv1(x)))
++        out = self.bn2(self.conv2(out))
++        shortcut = x if self.downsample is None else self.downsample(x)
++
++        return self.relu(out + shortcut)
++
++
++class CifarResNet(nn.Module):
++    def __init__(self, depth=50, num_classes=100, stem_stride=1, width=1.0):
++        super().__init__()
++        counts = {18: [2, 2, 2, 2], 50: [3, 4, 6, 3]}[depth]
++        expansion = 4 if depth == 50 else 1
++
++        def md(c):
++            return make_divisible(c * width)
++
++        channels = 64  # full-width channel count of the running stream
++        self.conv1 = nn.Conv2d(3, md(channels), 3, stem_stride, 1, bias=False)
++        self.bn1 = nn.BatchNorm2d(md(channels))
 +        self.relu = nn.ReLU(inplace=True)
 +
 +        for index, (c, n, s) in enumerate(
-+            [(64, 3, 1), (128, 4, 2), (256, 6, 2), (512, 3, 2)]
++            zip([64, 128, 256, 512], counts, [1, 2, 2, 2])
 +        ):
 +            blocks = []
 +
 +            for i in range(n):
-+                blocks.append(
-+                    Bottleneck(channels, c, 4 * c, s if i == 0 else 1)
-+                )
-+                channels = 4 * c
++                stride = s if i == 0 else 1
++                projection = stride != 1 or channels != expansion * c
++                if depth == 50:
++                    blocks.append(Bottleneck(
++                        md(channels), md(c), md(4 * c), stride, projection))
++                else:
++                    blocks.append(BasicBlock(
++                        md(channels), md(c), stride, projection))
++                channels = expansion * c
 +
 +            setattr(self, "layer{}".format(index + 1), nn.Sequential(*blocks))
 +
 +        self.avgpool = nn.AdaptiveAvgPool2d(1)
-+        self.fc = nn.Linear(channels, num_classes)
++        self.fc = nn.Linear(md(channels), num_classes)
 +        self.reset_parameters()
 +
 +    def forward(self, x):
@@ -130,29 +326,40 @@ index 0000000..ff0b7c7
 +                m.bias.data.zero_()
 +
 +
-+def cifar_resnet50(num_classes=100):
-+    return CifarResNet50(num_classes)
++def cifar_resnet50(num_classes=100, width=1.0):
++    return CifarResNet(50, num_classes, stem_stride=1, width=width)
++
++
++def resnet18_tiny(num_classes=200, width=1.0):
++    """ResNet-18 for 64x64 inputs: the stem at stride 2, no max-pool."""
++    return CifarResNet(18, num_classes, stem_stride=2, width=width)
 diff --git a/protocol.py b/protocol.py
 new file mode 100644
-index 0000000..db9f251
+index 0000000..6931586
 --- /dev/null
 +++ b/protocol.py
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,440 @@
 +#
-+# Additions for running Integral Neural Networks under an external CIFAR-100
-+# protocol: the CIFAR-100 loaders, a per-epoch resume checkpoint, a steady
-+# step timer, BatchNorm recalibration, and a fixed-format per-width
-+# evaluation line. Not part of the original release.
++# Additions for running Integral Neural Networks under an external protocol:
++# the CIFAR-100 and Tiny ImageNet loaders, the networks (--arch), a
++# per-epoch resume checkpoint, a steady step timer, BatchNorm recalibration,
++# and a fixed-format per-width evaluation line. Not part of the original
++# release.
 +#
++import hashlib
 +import os
 +import random
 +import statistics
 +import time
++import zipfile
 +
 +import numpy as np
 +import torch
 +import torch.nn as nn
 +import torch.nn.functional as F
++
++from cifar_mobilenetv2 import mobilenetv2_cifar_slimlast
++from cifar_resnet import cifar_resnet50, resnet18_tiny
 +
 +CKPT_NAME = "last.pt"
 +_T0 = time.time()
@@ -196,6 +403,10 @@ index 0000000..db9f251
 +        root=data_dir, train=True, download=True, transform=train_tf)
 +    testset = torchvision.datasets.CIFAR100(
 +        root=data_dir, train=False, download=True, transform=test_tf)
++    return _loaders(trainset, testset, batch_size, n_workers)
++
++
++def _loaders(trainset, testset, batch_size, n_workers):
 +    common = dict(num_workers=n_workers, pin_memory=True,
 +                  persistent_workers=n_workers > 0)
 +    train = torch.utils.data.DataLoader(
@@ -206,6 +417,224 @@ index 0000000..db9f251
 +    test = torch.utils.data.DataLoader(
 +        testset, batch_size=256, shuffle=False, **common)
 +    return train, recal, test
++
++
++# ---- Tiny ImageNet (200 classes, 100,000 train / 10,000 val images, 64x64) ----
++# As the protocol's own pipeline: the official val split, labelled by
++# val_annotations.txt, is the test set; the JPEGs are decoded once into uint8
++# arrays cached under data_dir/tinyimagenet_cache (same files, so a cache
++# written by the protocol's code is read as is). The data is found at
++# data_dir/tiny-imagenet-200, else any copy with the official layout under
++# /kaggle/input (also a zip of it), else the Stanford zip is downloaded into
++# data_dir. (Copied from DS-Net's protocol.py; only the loaders differ: the
++# training loader keeps the last partial batch, as here for CIFAR-100.)
++TINY_URL = "http://cs231n.stanford.edu/tiny-imagenet-200.zip"
++TINY_FOLDER = "tiny-imagenet-200"
++KAGGLE_INPUTS = "/kaggle/input"
++TINY_MEAN = (0.4802, 0.4481, 0.3975)  # per channel over the 100,000 train images
++TINY_STD = (0.2770, 0.2691, 0.2821)
++# md5 of the official 200 class ids, sorted, and of the 10,000 val labels as
++# sorted "file<TAB>class" lines (order and line endings do not enter)
++TINY_WNIDS_MD5 = "62ec2c49c5abdc833b8ea5082c79667d"
++TINY_VAL_MD5 = "10ec1929ae7b5715fce6b8e1d04e1b39"
++
++
++def _is_tiny(folder):
++    """the official layout, whatever the folder is called"""
++    return (os.path.isfile(os.path.join(folder, "wnids.txt")) and
++            os.path.isfile(os.path.join(folder, "val", "val_annotations.txt"))
++            and os.path.isdir(os.path.join(folder, "train")))
++
++
++def _check_official_tiny(folder):
++    """raise unless folder holds the official classes and val labels"""
++    with open(os.path.join(folder, "wnids.txt")) as handle:
++        wnids = sorted(line.strip() for line in handle if line.strip())
++    with open(os.path.join(folder, "val", "val_annotations.txt")) as handle:
++        val = sorted("\t".join(line.split("\t")[:2])
++                     for line in handle if line.strip())
++    found = (hashlib.md5("\n".join(wnids).encode()).hexdigest(),
++             hashlib.md5("\n".join(val).encode()).hexdigest())
++    if found != (TINY_WNIDS_MD5, TINY_VAL_MD5):
++        raise ValueError(
++            "{} is not the official Tiny ImageNet: class ids {}, val labels "
++            "{} (expected {}, {})".format(
++                folder, found[0], found[1], TINY_WNIDS_MD5, TINY_VAL_MD5))
++    print("Tiny ImageNet at {}: official classes and val labels".format(folder),
++          flush=True)
++
++
++def _locate_tiny(root):
++    """the tiny-imagenet-200 folder, downloading it if nothing has it"""
++    here = os.path.join(root, TINY_FOLDER)
++    if _is_tiny(here):
++        return here
++    archives = []
++    for top, dirs, files in os.walk(KAGGLE_INPUTS):
++        if "wnids.txt" in files and _is_tiny(top):
++            return top
++        archives += [os.path.join(top, f) for f in files
++                     if f.lower().endswith(".zip")]
++        # do not descend into the 200 class folders of a train split
++        dirs[:] = [d for d in dirs if not d.startswith("n0")
++                   and not d.startswith("n1") and d != "images"]
++    os.makedirs(root, exist_ok=True)
++    archive = os.path.join(root, TINY_FOLDER + ".zip")
++    for candidate in archives:
++        with zipfile.ZipFile(candidate) as handle:
++            if TINY_FOLDER + "/wnids.txt" in handle.namelist():
++                print("unpacking Tiny ImageNet from", candidate, flush=True)
++                handle.extractall(root)
++                return here
++    if not os.path.isfile(archive):
++        print("no Tiny ImageNet with the official layout under {}; "
++              "downloading {}".format(KAGGLE_INPUTS, TINY_URL), flush=True)
++        torch.hub.download_url_to_file(TINY_URL, archive)
++    with zipfile.ZipFile(archive) as handle:
++        handle.extractall(root)
++    return here
++
++
++def _decode_tiny(paths):
++    from PIL import Image
++    images = np.empty((len(paths), 64, 64, 3), dtype=np.uint8)
++    for i, path in enumerate(paths):
++        images[i] = np.asarray(Image.open(path).convert("RGB"))  # a few are greyscale
++    return images
++
++
++def _save_atomic(f, a):
++    """write then rename (per-pid part file), so a reader never sees half a file"""
++    part = "{}.{}.part.npy".format(f, os.getpid())
++    np.save(part, a)
++    try:
++        os.replace(part, f)
++    except OSError:
++        if not os.path.isfile(f):
++            raise
++        os.remove(part)
++
++
++def _tiny_cache(folder, cache):
++    """paths of the cached (train_x, train_y, val_x, val_y) .npy files,
++    decoding the JPEGs once if they are not there. Labels: index of the
++    class id in the sorted wnids.txt; train images in sorted file order per
++    class, val images in val_annotations.txt order."""
++    names = ["train_x", "train_y", "val_x", "val_y"]
++    files = [os.path.join(cache, name + ".npy") for name in names]
++    if all(os.path.isfile(f) for f in files):
++        return files
++    with open(os.path.join(folder, "wnids.txt")) as handle:
++        wnids = sorted(line.strip() for line in handle if line.strip())
++    label = {wnid: i for i, wnid in enumerate(wnids)}
++    train_paths, train_y = [], []
++    for wnid in wnids:
++        images = os.path.join(folder, "train", wnid, "images")
++        for name in sorted(os.listdir(images)):
++            train_paths.append(os.path.join(images, name))
++            train_y.append(label[wnid])
++    val_paths, val_y = [], []
++    with open(os.path.join(folder, "val", "val_annotations.txt")) as handle:
++        for line in handle:
++            parts = line.split("\t")
++            if len(parts) < 2:
++                continue
++            val_paths.append(os.path.join(folder, "val", "images", parts[0]))
++            val_y.append(label[parts[1]])
++    assert len(train_paths) == 100000 and len(val_paths) == 10000, (
++        len(train_paths), len(val_paths))
++    out = [_decode_tiny(train_paths), np.asarray(train_y, dtype=np.int64),
++           _decode_tiny(val_paths), np.asarray(val_y, dtype=np.int64)]
++    os.makedirs(cache, exist_ok=True)
++    for f, a in zip(files, out):
++        _save_atomic(f, a)
++    return files
++
++
++class TinyImageNet(torch.utils.data.Dataset):
++    """The cached uint8 images, opened as a read-only memory map in each
++    process: a spawned loader worker (Windows) receives the file path, not a
++    1.2 GB copy. Same images, labels and order as the in-memory arrays."""
++
++    def __init__(self, images_file, labels, transform):
++        self.images_file = images_file
++        self.labels = labels
++        self.transform = transform
++        self._images = None
++
++    def __getstate__(self):
++        state = self.__dict__.copy()
++        state["_images"] = None
++        return state
++
++    def __len__(self):
++        return len(self.labels)
++
++    def __getitem__(self, index):
++        from PIL import Image
++        if self._images is None:
++            self._images = np.load(self.images_file, mmap_mode="r")
++        image = Image.fromarray(np.array(self._images[index]))
++        return self.transform(image), int(self.labels[index])
++
++
++def tinyimagenet_loaders(data_dir, batch_size, n_workers):
++    """train (RandomCrop 64 pad 8 + HFlip, the CIFAR recipe at twice the
++    size; shuffled, last partial batch kept), recalibration (same images and
++    transform, its own shuffle), test (the 10k official val split, no
++    augmentation). data_dir contains tiny-imagenet-200/ (or see above)."""
++    import torchvision.transforms as transforms
++
++    train_tf = transforms.Compose([
++        transforms.RandomCrop(64, padding=8),
++        transforms.RandomHorizontalFlip(),
++        transforms.ToTensor(),
++        transforms.Normalize(TINY_MEAN, TINY_STD),
++    ])
++    test_tf = transforms.Compose([
++        transforms.ToTensor(),
++        transforms.Normalize(TINY_MEAN, TINY_STD),
++    ])
++    folder = _locate_tiny(data_dir)
++    _check_official_tiny(folder)
++    # written where it can be: an attached Kaggle input is read-only
++    train_x, train_y, val_x, val_y = _tiny_cache(
++        folder, os.path.join(data_dir, "tinyimagenet_cache"))
++    trainset = TinyImageNet(train_x, np.load(train_y), train_tf)
++    testset = TinyImageNet(val_x, np.load(val_y), test_tf)
++    assert len(trainset) == 100000 and len(testset) == 10000
++    return _loaders(trainset, testset, batch_size, n_workers)
++
++
++# --dataset: loaders(data_dir, batch_size, workers), input size, classes
++DATASETS = {
++    "cifar100": dict(loaders=cifar100_loaders, image_size=32, num_classes=100),
++    "tinyimagenet": dict(loaders=tinyimagenet_loaders, image_size=64,
++                         num_classes=200),
++}
++
++# --arch: the protocol's networks as plain torch.nn models, functions of
++# (num_classes, width), and the dataset each is run on by default
++ARCHS = {
++    "r50": dict(build=cifar_resnet50, name="CIFAR ResNet-50",
++                dataset="cifar100"),
++    "r18_tiny": dict(build=resnet18_tiny, name="ResNet-18 for 64x64",
++                     dataset="tinyimagenet"),
++    "mbv2_slimlast": dict(build=mobilenetv2_cifar_slimlast,
++                          name="CIFAR MobileNetV2 (slim_last)",
++                          dataset="cifar100"),
++}
++
++
++def build_model(arch, num_classes, width=1.0):
++    return ARCHS[arch]["build"](num_classes, width=width)
++
++
++def setting(args):
++    """the --dataset entry; --dataset defaults to the one of --arch"""
++    if args.dataset is None:
++        args.dataset = ARCHS[args.arch]["dataset"]
++    return DATASETS[args.dataset]
 +
 +
 +def save_checkpoint(ckpt_dir, next_epoch, **states):
@@ -445,17 +874,18 @@ index a148b22..2c00264 100644
  
 diff --git a/train_base.py b/train_base.py
 new file mode 100644
-index 0000000..e3cf67e
+index 0000000..71b573d
 --- /dev/null
 +++ b/train_base.py
-@@ -0,0 +1,160 @@
+@@ -0,0 +1,169 @@
 +#
-+# Phase 1 of Integral Neural Networks under an external CIFAR-100 protocol:
-+# train the ordinary (discrete) CIFAR ResNet-50 that train_inn.py converts.
-+# Not part of the original release (the paper starts from pre-trained
-+# pytorchcv / torchvision networks; here the network is trained with the
-+# protocol's recipe). The result is also the protocol's individual network
-+# at width 1.0, printed as one protocol line.
++# Phase 1 of Integral Neural Networks under an external protocol: train the
++# ordinary (discrete) network that train_inn.py converts (--arch: CIFAR
++# ResNet-50, ResNet-18 for 64x64 Tiny ImageNet, CIFAR MobileNetV2 with the
++# last 1x1 slimmed). Not part of the original release (the paper starts from
++# pre-trained pytorchcv / torchvision networks; here the network is trained
++# with the protocol's recipe). The result is also the protocol's individual
++# network at width 1.0, printed as one protocol line.
 +#
 +import argparse
 +import math
@@ -465,13 +895,18 @@ index 0000000..e3cf67e
 +import torch.nn as nn
 +
 +import protocol
-+from cifar_resnet import cifar_resnet50
 +
 +
 +def get_args():
-+    p = argparse.ArgumentParser(description="CIFAR-100 ResNet-50 (INN base)")
++    p = argparse.ArgumentParser(description="INN base network")
++    p.add_argument("--arch", choices=sorted(protocol.ARCHS), default="r50")
++    p.add_argument("--dataset", choices=sorted(protocol.DATASETS),
++                   default=None, help="default: the one of --arch (r50, "
++                   "mbv2_slimlast: cifar100; r18_tiny: tinyimagenet)")
 +    p.add_argument("--data_dir", required=True,
-+                   help="folder that contains cifar-100-python/")
++                   help="folder that contains cifar-100-python/ "
++                        "(tinyimagenet: tiny-imagenet-200/, and the decoded "
++                        "cache tinyimagenet_cache/ is read or written there)")
 +    p.add_argument("--ckpt_dir", required=True)
 +    p.add_argument("--log_prefix", default="inn_base")
 +    p.add_argument("--epochs", type=int, default=100)
@@ -506,10 +941,10 @@ index 0000000..e3cf67e
 +                           nesterov=True)
 +
 +
-+def set_lr(optimizer, args, epoch, batch_idx, data_size=50000):
++def set_lr(optimizer, args, epoch, batch_idx, data_size):
 +    """Per step: linear warm-up from 0 to lr over warmup_epochs, then cosine
 +    to 0 over the remaining epochs (the protocol's schedule; steps per epoch
-+    counted as data_size / batch_size)."""
++    counted as data_size / batch_size, data_size = the training images)."""
 +    per_epoch = data_size / args.batch_size
 +    current = epoch * per_epoch + batch_idx + 1
 +    if epoch < args.warmup_epochs:
@@ -535,7 +970,8 @@ index 0000000..e3cf67e
 +            break
 +        data = data.to(device, non_blocking=True)
 +        target = target.to(device, non_blocking=True)
-+        lr = set_lr(optimizer, args, epoch, batch_idx)
++        lr = set_lr(optimizer, args, epoch, batch_idx,
++                    len(loader.dataset))
 +        out = model(data)
 +        loss = criterion(out, target)
 +        optimizer.zero_grad(set_to_none=True)
@@ -561,12 +997,14 @@ index 0000000..e3cf67e
 +    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 +    torch.backends.cudnn.benchmark = True  # fixed shapes in this phase
 +
-+    model = cifar_resnet50(100).to(device)
-+    print("CIFAR ResNet-50: {:,} parameters".format(
++    data = protocol.setting(args)
++    model = protocol.build_model(args.arch, data["num_classes"]).to(device)
++    print("{} on {}: {:,} parameters".format(
++        protocol.ARCHS[args.arch]["name"], args.dataset,
 +        sum(p.numel() for p in model.parameters())), flush=True)
 +    optimizer = make_optimizer(model, args)
 +    criterion = nn.CrossEntropyLoss()
-+    train_loader, recal_loader, test_loader = protocol.cifar100_loaders(
++    train_loader, recal_loader, test_loader = data["loaders"](
 +        args.data_dir, args.batch_size, protocol.workers())
 +
 +    start_epoch = 0
@@ -592,7 +1030,7 @@ index 0000000..e3cf67e
 +            protocol.save_checkpoint(
 +                args.ckpt_dir, epoch + 1, model=model.state_dict(),
 +                optimizer=optimizer.state_dict(), kind="base",
-+                epochs=args.epochs)
++                epochs=args.epochs, arch=args.arch, dataset=args.dataset)
 +            if (args.stop_at_epoch is not None
 +                    and epoch + 1 >= args.stop_at_epoch
 +                    and epoch + 1 < args.epochs):
@@ -611,19 +1049,20 @@ index 0000000..e3cf67e
 +    main()
 diff --git a/train_inn.py b/train_inn.py
 new file mode 100644
-index 0000000..0f81b26
+index 0000000..a13dc3c
 --- /dev/null
 +++ b/train_inn.py
-@@ -0,0 +1,305 @@
+@@ -0,0 +1,421 @@
 +#
-+# Phase 2 of Integral Neural Networks under an external CIFAR-100 protocol:
-+# convert the trained CIFAR ResNet-50 of train_base.py into an integral
-+# network with IntegralWrapper as the released examples do (BatchNorm fused
-+# into the convolutions, 2-opt TSP channel permutation, bicubic grid-sample
++# Phase 2 of Integral Neural Networks under an external protocol: convert
++# the trained network of train_base.py into an integral network with
++# IntegralWrapper as the released examples do (BatchNorm fused into the
++# convolutions, 2-opt TSP channel permutation, bicubic grid-sample
 +# parametrization, trapezoidal quadrature), fine-tune it with the authors'
 +# recipe while sampling one width per step, and evaluate it resampled to the
 +# sixteen protocol widths. Not part of the original release; replaces the
-+# catalyst runner of examples/classification with a plain loop.
++# catalyst runner of examples/classification with a plain loop, and adds
++# depthwise convolutions to the tracer (MobileNetV2; see ProtocolTracer).
 +#
 +import argparse
 +import os
@@ -636,7 +1075,7 @@ index 0000000..0f81b26
 +import torch.nn as nn
 +
 +import protocol
-+from cifar_resnet import cifar_resnet50, make_divisible
++from cifar_resnet import make_divisible
 +
 +ROOT = os.path.dirname(os.path.abspath(__file__))
 +
@@ -657,13 +1096,20 @@ index 0000000..0f81b26
 +
 +
 +def get_args():
-+    p = argparse.ArgumentParser(description="CIFAR-100 ResNet-50 INN")
++    p = argparse.ArgumentParser(description="INN, converted and fine-tuned")
++    p.add_argument("--arch", choices=sorted(protocol.ARCHS), default="r50")
++    p.add_argument("--dataset", choices=sorted(protocol.DATASETS),
++                   default=None, help="default: the one of --arch (r50, "
++                   "mbv2_slimlast: cifar100; r18_tiny: tinyimagenet)")
 +    p.add_argument("--data_dir", required=True,
-+                   help="folder that contains cifar-100-python/")
++                   help="folder that contains cifar-100-python/ "
++                        "(tinyimagenet: tiny-imagenet-200/, and the decoded "
++                        "cache tinyimagenet_cache/ is read or written there)")
 +    p.add_argument("--base_ckpt", required=True,
 +                   help="train_base.py checkpoint (its last.pt)")
 +    p.add_argument("--ckpt_dir", required=True)
-+    p.add_argument("--log_prefix", default="inn_r50")
++    p.add_argument("--log_prefix", default=None,
++                   help="default: inn_<arch>")
 +    # the authors' fine-tuning recipe (paper Appendix D, examples/)
 +    p.add_argument("--epochs", type=int, default=50)
 +    p.add_argument("--batch_size", type=int, default=128)
@@ -694,7 +1140,10 @@ index 0000000..0f81b26
 +    p.add_argument("--eval_only", action="store_true")
 +    p.add_argument("--max_iters_per_epoch", type=int, default=None,
 +                   help="smoke tests only")
-+    return p.parse_args()
++    args = p.parse_args()
++    if args.log_prefix is None:
++        args.log_prefix = "inn_" + args.arch
++    return args
 +
 +
 +def layer_shapes(model):
@@ -707,24 +1156,94 @@ index 0000000..0f81b26
 +    return shapes
 +
 +
-+def expected_shape(name, full, w):
-+    """Channel counts of the protocol's slimmable ResNet-50 at width w:
-+    make_divisible(C * w) everywhere except the RGB input of the stem and
-+    the 100 classes of the classifier."""
-+    out, inp = full
-+    if name != "fc":
-+        out = make_divisible(out * w)
-+    if name != "conv1":
-+        inp = make_divisible(inp * w)
-+    return out, inp
++def protocol_shapes(args, num_classes, w):
++    """layer_shapes of the protocol's network at width w: the same plain
++    model built at that width (on the meta device, no memory), i.e.
++    make_divisible(C * w) channels, t * make_divisible(C_in * w) on
++    MobileNetV2's expanded ones, RGB input and classes unchanged."""
++    with torch.device("meta"):
++        net = protocol.build_model(args.arch, num_classes, width=w)
++    return layer_shapes(net)
 +
 +
-+def convert(ti, model, args, init_from_discrete):
++def channels(size, w, ratio):
++    """The protocol's channel count at width w of a dimension of `size`
++    channels, with US-Net's ratio rounding make_divisible(size * w / ratio)
++    * ratio (ratio = the expansion t on MobileNetV2's expanded channels,
++    else 1, i.e. make_divisible(size * w))."""
++    return make_divisible(size * w / ratio) * ratio
++
++
++def group_ratio(model, group):
++    """The ratio of an integral group: what its layers declare as
++    channel_ratio = (out, in) (cifar_mobilenetv2; 1 if absent), which must
++    be the same for every tensor of the group."""
++    ratios = set()
++    for p in group.params:
++        layer, attr = p["name"].rsplit(".", 1)
++        declared = getattr(model.get_submodule(layer), "channel_ratio", (1, 1))
++        ratios.add(declared[0] if attr == "bias" else declared[p["dim"]])
++    if len(ratios) != 1:
++        raise RuntimeError("group of {} channels mixes ratios {}".format(
++            group.size, sorted(ratios)))
++    return ratios.pop()
++
++
++def make_tracer(ti):
++    """IntegralTracer that also handles depthwise convolutions.
++
++    The released conv hook ties the weight's dim 1 to the input channels
++    and its dim 0 to the output channels. For a depthwise conv (groups =
++    in = out channels) dim 1 has size 1, so the released tracer puts that
++    size-1 dimension into the input's group and makes the output channels a
++    group of their own: two independent grids for what is one channel axis,
++    and the resampled network breaks (checked: weight [16, 16, 3, 3] at
++    groups 16). Here a depthwise conv maps channel c to channel c, so its
++    input channels, its weight's dim 0 (and bias) and its output channels
++    are merged into ONE group; the weight's dim 1 is left discrete (it is
++    not in continuous_dims, see convert), so its parametrization is 1-D
++    along the channels and has no quadrature (nothing is summed over
++    channels). Every other module goes through the released hooks."""
++    from torch_integral.graph.group import RelatedGroup
++    from torch_integral.graph.operations import merge_groups
++
++    def depthwise_hook(module, inputs, output):
++        weight, bias = module.weight, module.bias
++        if bias is not None:
++            merge_groups(bias, 0, weight, 0)
++        merge_groups(weight, 0, inputs[0], 1)
++        merge_groups(output, 1, weight, 0)
++        RelatedGroup.append_to_groups(output, "conv_linear")
++
++    class ProtocolTracer(ti.IntegralTracer):
++        def call_module(self, target, args, kwargs):
++            submod = self.fetch_attr(target)
++            if is_grouped(submod):
++                if not (submod.groups == submod.in_channels
++                        == submod.out_channels):
++                    raise NotImplementedError(
++                        "{}: only depthwise grouped convs".format(target))
++                submod.register_forward_hook(depthwise_hook)
++                return submod(*args, **kwargs)
++            return super().call_module(target, args, kwargs)
++
++    return ProtocolTracer
++
++
++def is_grouped(m):
++    return isinstance(m, nn.Conv2d) and m.groups > 1
++
++
++def convert(ti, model, args, image_size, init_from_discrete):
 +    """Their examples' conversion: every Conv2d/Linear weight continuous along
 +    out and in channels (standard_continuous_dims), except the RGB input of
 +    the stem and the class dimension of the classifier (discrete_dims, as
-+    imagenet.py keeps fc discrete). fuse_bn=True (their default)."""
++    imagenet.py keeps fc discrete), and a depthwise weight along its
++    channels only (its dim 1 has size 1). fuse_bn=True (their default)."""
 +    continuous_dims = ti.standard_continuous_dims(model)
++    for name, m in model.named_modules():
++        if is_grouped(m):
++            continuous_dims[name + ".weight"] = [0]
 +    discrete_dims = {"conv1.weight": [1], "fc.weight": [0], "fc.bias": [0]}
 +    wrapper = ti.IntegralWrapper(
 +        init_from_discrete=init_from_discrete,
@@ -732,7 +1251,12 @@ index 0000000..0f81b26
 +        permutation_config={"iters": args.tsp_iters},
 +        verbose=init_from_discrete,
 +    )
-+    return wrapper(model, [1, 3, 32, 32], continuous_dims, discrete_dims)
++    inn = wrapper(model, [1, 3, image_size, image_size], continuous_dims,
++                  discrete_dims, integral_tracer_class=make_tracer(ti))
++    for g in inn.groups:
++        assert g.subgroups is None, "concatenated groups are not expected"
++        g.protocol_ratio = group_ratio(inn.model, g)
++    return inn
 +
 +
 +def describe_groups(inn):
@@ -740,31 +1264,52 @@ index 0000000..0f81b26
 +    print("{} integral groups (full size -> size at w = 0.25 / 0.50 / 1.00):"
 +          .format(len(inn.groups)))
 +    for i, g in enumerate(inn.groups):
-+        assert g.subgroups is None, "concatenated groups are not expected"
 +        names = sorted({"{}[{}]".format(p["name"], p["dim"]) for p in g.params
 +                        if not p["name"].endswith("bias")})
 +        kind = "residual stream" if "operator" in g.operations else "inner"
++        if g.protocol_ratio != 1:
++            kind += ", t={}".format(g.protocol_ratio)
 +        print("  group {:2d}: {:4d} -> {:4d} / {:4d} / {:4d}  {:15s} {}".format(
-+            i, g.size, make_divisible(g.size * 0.25),
-+            make_divisible(g.size * 0.5), g.size, kind,
++            i, g.size, channels(g.size, 0.25, g.protocol_ratio),
++            channels(g.size, 0.5, g.protocol_ratio), g.size, kind,
 +            ", ".join(names)), flush=True)
 +
 +
++def check_group_sizes(inn, args, num_classes):
++    """Before any training: at each of the 16 widths, the size every group
++    is given (channels(size, w, ratio)) is the channel count the protocol's
++    network has there in every tensor of the group."""
++    for w in protocol.WIDTHS:
++        shapes = protocol_shapes(args, num_classes, w)
++        for g in inn.groups:
++            n = channels(g.size, w, g.protocol_ratio)
++            for p in g.params:
++                layer, attr = p["name"].rsplit(".", 1)
++                want = shapes[layer][0 if attr == "bias" else p["dim"]]
++                if n != want:
++                    raise RuntimeError(
++                        "width {}: group of {} gets {} points, but {}[{}] has "
++                        "{} channels".format(w, g.size, n, p["name"], p["dim"],
++                                             want))
++    print("Group sizes = the protocol's channel counts at all {} widths"
++          .format(len(protocol.WIDTHS)), flush=True)
++
++
 +def set_train_width(ti, inn, w):
-+    """One width for the whole network: every group draws exactly
-+    make_divisible(C * w) points in this step (their RandomLinspace with a
-+    one-point UniformDistribution)."""
++    """One width for the whole network: every group draws exactly its
++    channel count at w (channels(), the protocol's rounding) in this step
++    (their RandomLinspace with a one-point UniformDistribution)."""
 +    for g in inn.groups:
-+        n = make_divisible(g.size * w)
++        n = channels(g.size, w, g.protocol_ratio)
 +        g.reset_distribution(ti.UniformDistribution(n, n))
 +
 +
 +def set_eval_width(inn, w):
 +    for g in inn.groups:
-+        g.resize(make_divisible(g.size * w))
++        g.resize(channels(g.size, w, g.protocol_ratio))
 +
 +
-+def discrete_at(inn, w, full_shapes):
++def discrete_at(inn, w, args, num_classes):
 +    """Resample the INN at width w and return the ordinary network; checks
 +    that its channel counts are the protocol's at that width."""
 +    inn.eval()
@@ -772,13 +1317,14 @@ index 0000000..0f81b26
 +    net = inn.get_unparametrized_model()
 +    net.eval()
 +    shapes = layer_shapes(net)
-+    bad = [(n, s, expected_shape(n, full_shapes[n], w))
-+           for n, s in shapes.items()
-+           if s != expected_shape(n, full_shapes[n], w)]
++    expected = protocol_shapes(args, num_classes, w)
++    bad = [(n, shapes.get(n), expected.get(n))
++           for n in sorted(set(shapes) | set(expected))
++           if shapes.get(n) != expected.get(n)]
 +    if bad:
-+        raise RuntimeError("width {}: channel counts differ from "
-+                           "make_divisible(C*w): {}".format(w, bad[:5]))
-+    print("width {:.2f}: {:,} parameters, channel counts = make_divisible(C*w) "
++        raise RuntimeError("width {}: channel counts differ from the "
++                           "protocol's network: {}".format(w, bad[:5]))
++    print("width {:.2f}: {:,} parameters, channel counts = the protocol's "
 +          "in all {} conv/linear layers".format(
 +              w, sum(p.numel() for p in net.parameters()), len(shapes)),
 +          flush=True)
@@ -831,15 +1377,19 @@ index 0000000..0f81b26
 +    # a new width almost every step: cuDNN autotuning would retune each time
 +    torch.backends.cudnn.benchmark = False
 +
++    data = protocol.setting(args)
 +    base_state = torch.load(args.base_ckpt, map_location="cpu",
 +                            weights_only=False)
-+    model = cifar_resnet50(100)
++    # (checkpoints written before --arch existed are ResNet-50 ones)
++    if base_state.get("arch", "r50") != args.arch:
++        raise ValueError("{} is a {} base, not {}".format(
++            args.base_ckpt, base_state.get("arch"), args.arch))
++    model = protocol.build_model(args.arch, data["num_classes"])
 +    model.load_state_dict(base_state["model"])
 +    model.to(device)
-+    print("Base network from {} (trained {} of {} epochs)".format(
-+        args.base_ckpt, base_state.get("epoch"), base_state.get("epochs")),
-+        flush=True)
-+    full_shapes = layer_shapes(model)
++    print("Base network {} on {} from {} (trained {} of {} epochs)".format(
++        protocol.ARCHS[args.arch]["name"], args.dataset, args.base_ckpt,
++        base_state.get("epoch"), base_state.get("epochs")), flush=True)
 +
 +    state = protocol.read_checkpoint(args.ckpt_dir)
 +    if state is None and args.eval_only:
@@ -850,13 +1400,15 @@ index 0000000..0f81b26
 +    # With a checkpoint the permutation is not searched again: the structure
 +    # is rebuilt and the trained (permuted) parametrization loaded into it,
 +    # as imagenet.py does with --checkpoint.
-+    inn = convert(ti, model, args, init_from_discrete=state is None)
++    inn = convert(ti, model, args, data["image_size"],
++                  init_from_discrete=state is None)
 +    print("Conversion took {:.1f}s{}".format(
 +        time.time() - start, "" if state is None else " (no permutation: "
 +        "weights come from the checkpoint)"), flush=True)
 +    describe_groups(inn)
 +    print("BatchNorm layers left after conversion: {}".format(
 +        len(protocol.tracked_bns(inn))), flush=True)
++    check_group_sizes(inn, args, data["num_classes"])
 +
 +    optimizer = torch.optim.Adam(inn.parameters(), lr=args.lr,
 +                                 weight_decay=args.weight_decay)
@@ -864,7 +1416,7 @@ index 0000000..0f81b26
 +        optimizer, mode="min", factor=args.gamma, patience=args.patience) \
 +        if args.lr_schedule == "plateau" else None
 +    criterion = nn.CrossEntropyLoss()
-+    train_loader, recal_loader, test_loader = protocol.cifar100_loaders(
++    train_loader, recal_loader, test_loader = data["loaders"](
 +        args.data_dir, args.batch_size, protocol.workers())
 +
 +    def save(next_epoch):
@@ -872,7 +1424,8 @@ index 0000000..0f81b26
 +            args.ckpt_dir, next_epoch, model=inn.state_dict(),
 +            optimizer=optimizer.state_dict(),
 +            plateau=plateau.state_dict() if plateau is not None else None,
-+            kind="inn", epochs=args.epochs)
++            kind="inn", epochs=args.epochs, arch=args.arch,
++            dataset=args.dataset)
 +
 +    if state is None:
 +        start_epoch = 0
@@ -890,7 +1443,8 @@ index 0000000..0f81b26
 +
 +    def test(tag, epochs):
 +        protocol.eval_widths(
-+            protocol.WIDTHS, lambda w: discrete_at(inn, w, full_shapes),
++            protocol.WIDTHS,
++            lambda w: discrete_at(inn, w, args, data["num_classes"]),
 +            recal_loader, test_loader, device, epochs, args.recal_batches,
 +            tag)
 +

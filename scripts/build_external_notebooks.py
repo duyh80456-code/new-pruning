@@ -640,6 +640,229 @@ if codes['inn_base'] == 0:
 '''
 
 
+# the DS-Net rows of every setting: dsnet_ib as released, three seeds each
+DSNET_SETTINGS = {
+    'r50': ('configs/cifar100_ds_resnet50_uniform.yml', 'DATA',
+            'CIFAR ResNet-50', 'about 13 to 20 hours on a T4'),
+    'r18_tiny': ('configs/tiny_ds_resnet18_uniform.yml',
+                 "os.path.join(WORK, 'data')",
+                 'ResNet-18 on Tiny ImageNet (64x64, 200 classes)',
+                 'about 8 to 10 hours on a T4'),
+    'mbv2_slimlast': ('configs/cifar100_ds_mobilenetv2_slimlast_uniform.yml',
+                      'DATA', 'CIFAR MobileNetV2 with slim_last',
+                      'about 6 to 8 hours on a T4'),
+}
+
+
+def dsnet_spec(number, jobs):
+    """a notebook of DS-Net runs, one per card: (setting, seed) each"""
+    labels = ['dsnet_ib_{}_s{}'.format(s, seed) for s, seed in jobs]
+    rows = '\n'.join(
+        '| {} | {} | {} | {} |'.format(label, gpu, DSNET_SETTINGS[s][2], seed)
+        for gpu, (label, (s, seed)) in enumerate(zip(labels, jobs)))
+    times = []
+    for s, _ in jobs:
+        line = '{}: {}.'.format(DSNET_SETTINGS[s][2], DSNET_SETTINGS[s][3])
+        if line not in times:
+            times.append(line)
+    spec = {
+        'number': number,
+        'name': 'kaggle_kd_{}_dsnet'.format(number),
+        'title': "DS-Net from the authors' code, more settings and seeds",
+        'upstreams': ['dsnet'],
+        'workers': "{'DSNET_WORKERS': '2'}",
+        'labels': labels,
+        'one_gpu': len(jobs) == 1,
+        'intro': '''DS-Net (Li et al., CVPR 2021 oral) Stage I as released, from the
+authors' repository with `third_party/patches/dsnet.patch`, exactly as
+`dsnet_ib` of notebook 102: the sandwich ['largest', 'uniform',
+'uniform', 'smallest'], soft targets from an EMA of the supernet at its
+largest width (decay 0.997), ensemble IB off, read at the sixteen widths
+after BN recalibration on 20 batches. Our recipe in every setting: 100
+epochs, batch 256, SGD nesterov lr 0.2, 5 warm-up epochs then cosine, wd
+5e-4, clip 5. The models are built from their slimmable ops with the
+channel counts of our US-Net rows at all sixteen widths (checked layer by
+layer, `dsnet_README.md`).
+
+| | GPU | setting | seed |
+|---|---|---|---|
+{rows}
+
+Notebooks 102 and 108 to 111 together give three seeds in each of the
+three settings (R50 seed 1995 is `dsnet_ib` of notebook 102).
+
+## More than one session
+
+{times}
+Each run writes `ckpt/<label>/last.pt` after every epoch.
+When the session ends, Save Version, then in a new run attach that
+version's output (pick the version by number, not Latest) and run again:
+the notebook finds the checkpoints and the runs continue. Attach the
+CIFAR-100 dataset as well; Tiny ImageNet is found under /kaggle/input if
+attached, or downloaded.
+'''.format(rows=rows, times='\n'.join(times)),
+        'reading': '''The A and K columns are the ResNet-50 CIFAR-100 references: they mean
+something only for the R50 rows. Read the other rows against the US-Net
+and SlimOT rows of their own setting.''',
+    }
+    wanted = ',\n          '.join(
+        "'{0}': ('last.pt', '{0}')".format(label) for label in labels)
+    resume = RESUME_102.replace(
+        "# DS-Net keeps ckpt/<label>/last.pt\nwanted = {'dsnet_ib': "
+        "('last.pt', 'dsnet_ib'),\n          'dsnet_hib': "
+        "('last.pt', 'dsnet_hib')}",
+        '# DS-Net keeps ckpt/<label>/last.pt\nwanted = {' + wanted + '}')
+    assert resume != RESUME_102
+    calls = ',\n    '.join(
+        "('{label}', '{gpu}', CODE['dsnet'],\n     [sys.executable, '-u', "
+        "'train.py', '-c', '{config}',\n      '--data_dir', {data}, "
+        "'--seed', '{seed}', '--skip_upstream_test',\n      '--output', "
+        "os.path.join(WORK, 'dsnet_out', '{label}'),\n      '--ckpt_dir', "
+        "os.path.join(CK, '{label}'), '--log_prefix', '{label}'])".format(
+            label=label, gpu=gpu, config=DSNET_SETTINGS[s][0],
+            data=DSNET_SETTINGS[s][1], seed=seed)
+        for gpu, (label, (s, seed)) in enumerate(zip(labels, jobs)))
+    train = '''# each run ends with the sixteen protocol lines
+codes = run_pinned([
+    {calls}])
+print(codes)
+'''.format(calls=calls)
+    return spec, [resume, train]
+
+
+DSNET_NOTEBOOKS = [
+    (108, [('r50', 2026), ('r50', 2006)]),
+    (109, [('r18_tiny', 1995), ('r18_tiny', 2026)]),
+    (110, [('r18_tiny', 2006), ('mbv2_slimlast', 1995)]),
+    (111, [('mbv2_slimlast', 2026), ('mbv2_slimlast', 2006)]),
+]
+
+
+# the INN rows of every setting: base network, then conversion and
+# fine-tuning, three seeds each
+INN_SETTINGS = {
+    'r50': ('cifar100', 'DATA', 'CIFAR ResNet-50',
+            'about 5 h for the base and 3.5 h for the fine-tuning'),
+    'r18_tiny': ('tinyimagenet', "os.path.join(WORK, 'data')",
+                 'ResNet-18 on Tiny ImageNet (64x64, 200 classes)',
+                 'about 3 h for the base and 2 h for the fine-tuning'),
+    'mbv2_slimlast': ('cifar100', 'DATA', 'CIFAR MobileNetV2 with slim_last',
+                      'about 2 h for the base and 1 h for the fine-tuning'),
+}
+
+
+def inn_spec(number, jobs):
+    """a notebook of INN runs, one per card: (setting, seed) each"""
+    tags = ['{}_s{}'.format(s, seed) for s, seed in jobs]
+    bases = ['inn_base_' + tag for tag in tags]
+    inns = ['inn_' + tag for tag in tags]
+    rows = '\n'.join(
+        '| {} | {} | {} | {} |'.format(inn, gpu, INN_SETTINGS[s][2], seed)
+        for gpu, (inn, (s, seed)) in enumerate(zip(inns, jobs)))
+    times = []
+    for s, _ in jobs:
+        line = '{}: {} on a T4 (estimated, not measured there).'.format(
+            INN_SETTINGS[s][2], INN_SETTINGS[s][3])
+        if line not in times:
+            times.append(line)
+    spec = {
+        'number': number,
+        'name': 'kaggle_kd_{}_inn'.format(number),
+        'title': "Integral Neural Networks from the authors' code, more "
+                 "settings and seeds",
+        'upstreams': ['inn'],
+        'workers': "{'INN_WORKERS': '2'}",
+        'labels': bases + inns,
+        'one_gpu': len(jobs) == 1,
+        'intro': '''Integral Neural Networks (Solodskikh et al., CVPR 2023) from the
+authors' repository (TorchIntegral) with `third_party/patches/inn.patch`,
+as notebook 103: a plain network trained on our recipe (100 epochs, batch
+256, SGD nesterov lr 0.2, 5 warm-up epochs then cosine, wd 5e-4, clip 5),
+then their conversion (TSP channel permutation, continuous weights, BN
+fused) and their fine-tuning (Adam 1e-4, batch 128, 50 epochs, x0.33 at
+10/20/30/40) with one width w ~ U(0.25, 1) per step, read at the sixteen
+widths by resampling. One run per card; both bases first, then both
+fine-tunings.
+
+| | GPU | setting | seed |
+|---|---|---|---|
+{rows}
+
+`inn_base_<setting>_s<seed>` prints the plain network at width 1.00, the
+individual network of that setting. On MobileNetV2 the depthwise
+convolutions are tied into one channel group by our tracer (upstream's
+tracer splits them and the resampled network breaks);
+`third_party/patches/inn_README.md` says how, and lists every deviation.
+Not on the footing of the 100-epoch rows: 150 epochs in all and no
+BatchNorm at any width.
+
+Notebooks 103 and 112 to 115 together give three seeds in each of the
+three settings (R50 seed 1995 is notebook 103).
+
+## More than one session
+
+{times}
+Every phase writes `ckpt/<label>/last.pt` after every epoch. When the
+session ends, Save Version, then in a new run attach that version's
+output (pick the version by number, not Latest) and run again: the
+notebook finds the checkpoints, a finished base is not trained again, and
+the fine-tuning continues. Attach the CIFAR-100 dataset as well; Tiny
+ImageNet is found under /kaggle/input if attached, or downloaded.
+'''.format(rows=rows, times='\n'.join(times)),
+        'reading': '''The A and K columns are the ResNet-50 CIFAR-100 references: they mean
+something only for the R50 rows. Read the other rows against the US-Net
+and SlimOT rows of their own setting.''',
+    }
+    wanted = ',\n          '.join(
+        "'{0}': ('last.pt', '{0}')".format(label) for label in bases + inns)
+    resume = RESUME_103.replace(
+        "# INN keeps ckpt/inn_base/last.pt and ckpt/inn_r50/last.pt\n"
+        "wanted = {'inn_base': ('last.pt', 'inn_base'),\n"
+        "          'inn_r50': ('last.pt', 'inn_r50')}",
+        '# INN keeps ckpt/<label>/last.pt\nwanted = {' + wanted + '}')
+    assert resume != RESUME_103
+
+    def call(script, label, gpu, s, seed, extra=''):
+        return ("('{label}', '{gpu}', CODE['inn'],\n     [sys.executable, "
+                "'-u', '{script}', '--arch', '{s}',\n      '--dataset', "
+                "'{dataset}', '--data_dir', {data}, '--seed', '{seed}',{extra}"
+                "\n      '--ckpt_dir', os.path.join(CK, '{label}'), "
+                "'--log_prefix', '{label}'])").format(
+                    label=label, gpu=gpu, script=script, s=s, seed=seed,
+                    dataset=INN_SETTINGS[s][0], data=INN_SETTINGS[s][1],
+                    extra=extra)
+    phase1 = ',\n    '.join(
+        call('train_base.py', base, gpu, s, seed)
+        for gpu, (base, (s, seed)) in enumerate(zip(bases, jobs)))
+    phase2 = ',\n        '.join(
+        call('train_inn.py', inn, gpu, s, seed,
+             "\n      '--base_ckpt', os.path.join(CK, '{}', 'last.pt'),"
+             .format(base)).replace('\n', '\n    ')
+        for gpu, (base, inn, (s, seed)) in enumerate(zip(bases, inns, jobs)))
+    pairs = ', '.join("('{}', '{}')".format(b, i) for b, i in zip(bases, inns))
+    train = '''# phase 1 on every card, then phase 2 from each finished base;
+# separate labels, since the line parser ignores the tag
+codes = run_pinned([
+    {phase1}])
+print(codes)
+PAIRS = [{pairs}]
+SECOND = [
+        {phase2}]
+second = [job for job, (base, _) in zip(SECOND, PAIRS) if codes[base] == 0]
+if second:
+    print(run_pinned(second))
+'''.format(phase1=phase1, phase2=phase2, pairs=pairs)
+    return spec, [resume, train]
+
+
+INN_NOTEBOOKS = [
+    (112, [('r50', 2026), ('r50', 2006)]),
+    (113, [('r18_tiny', 1995), ('r18_tiny', 2026)]),
+    (114, [('r18_tiny', 2006), ('mbv2_slimlast', 1995)]),
+    (115, [('mbv2_slimlast', 2026), ('mbv2_slimlast', 2006)]),
+]
+
+
 def build(spec, steps):
     head = '# {}. {}\n\n{}'.format(spec['number'], spec['title'],
                                    spec['intro'])
@@ -738,3 +961,7 @@ if __name__ == '__main__':
         build(*seeds_spec(number, run, seed, nth))
     build(SPEC_102, [RESUME_102, TRAIN_102])
     build(SPEC_103, [RESUME_103, TRAIN_103])
+    for number, jobs in DSNET_NOTEBOOKS:
+        build(*dsnet_spec(number, jobs))
+    for number, jobs in INN_NOTEBOOKS:
+        build(*inn_spec(number, jobs))
