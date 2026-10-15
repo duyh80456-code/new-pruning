@@ -1,0 +1,922 @@
+diff --git a/.gitignore b/.gitignore
+index 338f917..b471d16 100755
+--- a/.gitignore
++++ b/.gitignore
+@@ -16,4 +16,8 @@ __pycache__
+ .env.json
+ dist/
+ *.egg-info/
+-scss/vendor/*
+\ No newline at end of file
++scss/vendor/*
++# build_ext --inplace outputs of the TSP solver
++torch_integral/tsp_solver/solver.cpp
++*.so
++*.pyd
+diff --git a/cifar_resnet.py b/cifar_resnet.py
+new file mode 100644
+index 0000000..ff0b7c7
+--- /dev/null
++++ b/cifar_resnet.py
+@@ -0,0 +1,113 @@
++#
++# A plain CIFAR ResNet-50 (ordinary torch.nn modules) for running Integral
++# Neural Networks under an external CIFAR-100 protocol. Not part of the
++# original release.
++#
++# Same network as the protocol's slimmable ResNet-50 at width 1.0: 3x3
++# stride-1 stem, no max-pool (the stages see 32, 16, 8 and 4 pixels),
++# bottlenecks [3, 4, 6, 3] with the stride on the 3x3, a 1x1 conv + BN
++# projection shortcut where the stride or the width changes, ReLU after the
++# sum, global average pool, linear classifier with bias. Module names follow
++# torchvision (conv1/bn1, layerN.i.conv1..3/bn1..3/downsample, fc), so the
++# INN wrapper sees the same structure as in its ImageNet example.
++#
++import math
++
++import torch
++import torch.nn as nn
++
++
++def make_divisible(v, divisor=8, min_value=1):
++    """The protocol's channel rounding at width w: make_divisible(C * w)."""
++    if min_value is None:
++        min_value = divisor
++    new_v = max(min_value, int(v + divisor / 2) // divisor * divisor)
++    # Make sure that round down does not go down by more than 10%.
++    if new_v < 0.9 * v:
++        new_v += divisor
++    return new_v
++
++
++class Bottleneck(nn.Module):
++    def __init__(self, inp, mid, outp, stride):
++        super().__init__()
++        self.conv1 = nn.Conv2d(inp, mid, 1, 1, 0, bias=False)
++        self.bn1 = nn.BatchNorm2d(mid)
++        self.conv2 = nn.Conv2d(mid, mid, 3, stride, 1, bias=False)
++        self.bn2 = nn.BatchNorm2d(mid)
++        self.conv3 = nn.Conv2d(mid, outp, 1, 1, 0, bias=False)
++        self.bn3 = nn.BatchNorm2d(outp)
++        self.relu = nn.ReLU(inplace=True)
++
++        if stride != 1 or inp != outp:
++            self.downsample = nn.Sequential(
++                nn.Conv2d(inp, outp, 1, stride, 0, bias=False),
++                nn.BatchNorm2d(outp),
++            )
++        else:
++            self.downsample = None
++
++    def forward(self, x):
++        out = self.relu(self.bn1(self.conv1(x)))
++        out = self.relu(self.bn2(self.conv2(out)))
++        out = self.bn3(self.conv3(out))
++        shortcut = x if self.downsample is None else self.downsample(x)
++
++        return self.relu(out + shortcut)
++
++
++class CifarResNet50(nn.Module):
++    def __init__(self, num_classes=100):
++        super().__init__()
++        channels = 64
++        self.conv1 = nn.Conv2d(3, channels, 3, 1, 1, bias=False)
++        self.bn1 = nn.BatchNorm2d(channels)
++        self.relu = nn.ReLU(inplace=True)
++
++        for index, (c, n, s) in enumerate(
++            [(64, 3, 1), (128, 4, 2), (256, 6, 2), (512, 3, 2)]
++        ):
++            blocks = []
++
++            for i in range(n):
++                blocks.append(
++                    Bottleneck(channels, c, 4 * c, s if i == 0 else 1)
++                )
++                channels = 4 * c
++
++            setattr(self, "layer{}".format(index + 1), nn.Sequential(*blocks))
++
++        self.avgpool = nn.AdaptiveAvgPool2d(1)
++        self.fc = nn.Linear(channels, num_classes)
++        self.reset_parameters()
++
++    def forward(self, x):
++        x = self.relu(self.bn1(self.conv1(x)))
++        x = self.layer1(x)
++        x = self.layer2(x)
++        x = self.layer3(x)
++        x = self.layer4(x)
++        x = self.avgpool(x)
++        x = torch.flatten(x, 1)
++
++        return self.fc(x)
++
++    def reset_parameters(self):
++        """The protocol's initialisation: convs N(0, 2 / (k*k*C_out)), BN
++        gamma 1 / beta 0, classifier N(0, 0.01) with zero bias."""
++        for m in self.modules():
++            if isinstance(m, nn.Conv2d):
++                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
++                m.weight.data.normal_(0, math.sqrt(2.0 / n))
++                if m.bias is not None:
++                    m.bias.data.zero_()
++            elif isinstance(m, nn.BatchNorm2d):
++                m.weight.data.fill_(1)
++                m.bias.data.zero_()
++            elif isinstance(m, nn.Linear):
++                m.weight.data.normal_(0, 0.01)
++                m.bias.data.zero_()
++
++
++def cifar_resnet50(num_classes=100):
++    return CifarResNet50(num_classes)
+diff --git a/protocol.py b/protocol.py
+new file mode 100644
+index 0000000..db9f251
+--- /dev/null
++++ b/protocol.py
+@@ -0,0 +1,212 @@
++#
++# Additions for running Integral Neural Networks under an external CIFAR-100
++# protocol: the CIFAR-100 loaders, a per-epoch resume checkpoint, a steady
++# step timer, BatchNorm recalibration, and a fixed-format per-width
++# evaluation line. Not part of the original release.
++#
++import os
++import random
++import statistics
++import time
++
++import numpy as np
++import torch
++import torch.nn as nn
++import torch.nn.functional as F
++
++CKPT_NAME = "last.pt"
++_T0 = time.time()
++
++# the sixteen evaluated widths
++WIDTHS = [round(0.25 + 0.05 * i, 2) for i in range(16)]
++
++CIFAR100_MEAN = (0.5071, 0.4865, 0.4409)
++CIFAR100_STD = (0.2673, 0.2564, 0.2762)
++
++
++def workers():
++    return int(os.environ.get("INN_WORKERS", "2"))
++
++
++def seed_everything(seed):
++    random.seed(seed)
++    np.random.seed(seed % 2**32)
++    torch.manual_seed(seed)
++    torch.cuda.manual_seed_all(seed)
++
++
++def cifar100_loaders(data_dir, batch_size, n_workers):
++    """train (RandomCrop 32 pad 4 + HFlip, shuffled, last partial batch
++    kept), recalibration (same images and transform, its own shuffle), test
++    (10k, no augmentation). data_dir contains cifar-100-python/."""
++    import torchvision
++    import torchvision.transforms as transforms
++
++    train_tf = transforms.Compose([
++        transforms.RandomCrop(32, padding=4),
++        transforms.RandomHorizontalFlip(),
++        transforms.ToTensor(),
++        transforms.Normalize(CIFAR100_MEAN, CIFAR100_STD),
++    ])
++    test_tf = transforms.Compose([
++        transforms.ToTensor(),
++        transforms.Normalize(CIFAR100_MEAN, CIFAR100_STD),
++    ])
++    trainset = torchvision.datasets.CIFAR100(
++        root=data_dir, train=True, download=True, transform=train_tf)
++    testset = torchvision.datasets.CIFAR100(
++        root=data_dir, train=False, download=True, transform=test_tf)
++    common = dict(num_workers=n_workers, pin_memory=True,
++                  persistent_workers=n_workers > 0)
++    train = torch.utils.data.DataLoader(
++        trainset, batch_size=batch_size, shuffle=True, **common)
++    # recalibration batches are always 256 images, as in the protocol
++    recal = torch.utils.data.DataLoader(
++        trainset, batch_size=256, shuffle=True, drop_last=True, **common)
++    test = torch.utils.data.DataLoader(
++        testset, batch_size=256, shuffle=False, **common)
++    return train, recal, test
++
++
++def save_checkpoint(ckpt_dir, next_epoch, **states):
++    """Written atomically (.tmp + os.replace): the given state dicts, the
++    next epoch, and the Python/NumPy/torch/CUDA RNG states."""
++    path = os.path.join(ckpt_dir, CKPT_NAME)
++    os.makedirs(ckpt_dir, exist_ok=True)
++    state = dict(states)
++    state["epoch"] = next_epoch
++    state["rng"] = {
++        "python": random.getstate(),
++        "numpy": np.random.get_state(),
++        "torch": torch.get_rng_state(),
++        "cuda": torch.cuda.get_rng_state_all()
++        if torch.cuda.is_available() else None,
++    }
++    tmp = path + ".tmp"
++    torch.save(state, tmp)
++    os.replace(tmp, path)
++    print("Saved checkpoint {} (next epoch {})".format(path, next_epoch),
++          flush=True)
++
++
++def read_checkpoint(ckpt_dir):
++    """The checkpoint dict, or None if there is none."""
++    path = os.path.join(ckpt_dir, CKPT_NAME)
++    if not os.path.isfile(path):
++        return None
++    return torch.load(path, map_location="cpu", weights_only=False)
++
++
++def restore_rng(state):
++    rng = state["rng"]
++    random.setstate(rng["python"])
++    np.random.set_state(rng["numpy"])
++    torch.set_rng_state(rng["torch"])
++    if rng["cuda"] is not None and torch.cuda.is_available():
++        torch.cuda.set_rng_state_all(rng["cuda"])
++
++
++_STEP = {"t": None, "dts": []}
++
++
++def step_tick(batch_idx, skip=3):
++    """Steady-state step timer: starts after the first @skip steps of an
++    epoch (loader start-up), synchronising CUDA at each mark."""
++    if torch.cuda.is_available():
++        torch.cuda.synchronize()
++    now = time.time()
++    if batch_idx == skip - 1:
++        _STEP["dts"] = []
++    elif batch_idx >= skip and _STEP["t"] is not None:
++        _STEP["dts"].append(now - _STEP["t"])
++    _STEP["t"] = now
++
++
++def steady_rate():
++    dts = _STEP["dts"]
++    if not dts:
++        return "steady n/a"
++    return "steady {:.3f} s/step mean, {:.3f} median over {} steps".format(
++        sum(dts) / len(dts), statistics.median(dts), len(dts))
++
++
++def peak_memory():
++    if not torch.cuda.is_available():
++        return "peak mem n/a"
++    return "peak mem {:.2f} GiB".format(
++        torch.cuda.max_memory_allocated() / 2**30)
++
++
++def tracked_bns(net):
++    return [m for m in net.modules()
++            if isinstance(m, nn.modules.batchnorm._NormBase)
++            and m.track_running_stats and m.running_mean is not None]
++
++
++@torch.no_grad()
++def recalibrate_bn(net, loader, n_batches, device):
++    """Reset running stats, then forward n_batches training batches in train
++    mode with a cumulative average (momentum 1/(i+1), what momentum=None
++    does in nn.BatchNorm2d). Returns the number of BN layers (0: no-op)."""
++    bns = tracked_bns(net)
++    if not bns or not n_batches:
++        return 0
++    saved = [m.momentum for m in bns]
++    for m in bns:
++        m.reset_running_stats()
++    net.train()
++    it = iter(loader)
++    for i in range(n_batches):
++        try:
++            data, _ = next(it)
++        except StopIteration:
++            it = iter(loader)
++            data, _ = next(it)
++        for m in bns:
++            m.momentum = 1.0 / (i + 1)
++        net(data.to(device, non_blocking=True))
++    for m, mom in zip(bns, saved):
++        m.momentum = mom
++    net.eval()
++    return len(bns)
++
++
++@torch.no_grad()
++def evaluate(net, loader, device):
++    net.eval()
++    loss_sum, c1, c5, n = 0.0, 0, 0, 0
++    for data, target in loader:
++        data = data.to(device, non_blocking=True)
++        target = target.to(device, non_blocking=True)
++        out = net(data)
++        loss_sum += F.cross_entropy(out, target, reduction="sum").item()
++        hit = out.topk(5, dim=1).indices.eq(target[:, None])
++        c1 += hit[:, 0].sum().item()
++        c5 += hit.any(dim=1).sum().item()
++        n += target.numel()
++    return loss_sum / n, 1.0 - c1 / n, 1.0 - c5 / n
++
++
++def eval_widths(widths, get_net, recal_loader, test_loader, device, epochs,
++                n_recal, log_prefix=""):
++    """One tab-separated line per width:
++    <elapsed>s  val  <width>  -1/<epochs>: loss: .., top1_error: .., top5_error: ..
++    get_net(w) returns the network to test at width w."""
++    prefix = "[{}] ".format(log_prefix) if log_prefix else ""
++    for w in widths:
++        net = get_net(w)
++        n_bn = recalibrate_bn(net, recal_loader, n_recal, device)
++        loss, e1, e5 = evaluate(net, test_loader, device)
++        if w == widths[0]:
++            if n_bn:
++                print("(BN recalibrated per width: {} layers, {} batches of "
++                      "256, cumulative)".format(n_bn, n_recal))
++            elif tracked_bns(net):
++                print("(no recalibration: evaluated with the trained "
++                      "running stats)")
++            else:
++                print("(no BatchNorm layers: evaluated without "
++                      "recalibration)")
++        print("{}{:.1f}s\tval\t{:.2f}\t-1/{}: loss: {:.4f}, top1_error: {:.4f}, "
++              "top5_error: {:.4f}".format(prefix, time.time() - _T0, w, epochs,
++                                          loss, e1, e5), flush=True)
+diff --git a/torch_integral/tsp_solver/solver.pyx b/torch_integral/tsp_solver/solver.pyx
+index a148b22..2c00264 100644
+--- a/torch_integral/tsp_solver/solver.pyx
++++ b/torch_integral/tsp_solver/solver.pyx
+@@ -18,11 +18,15 @@ cdef class SymmMatrix:
+     """
+     cdef size_t _size
+     cdef cnp.ndarray _matrix
++    # typed view of _matrix: element access in C instead of through
++    # ndarray.__getitem__ (same values and routes, 2-opt ~15x faster)
++    cdef cnp.float32_t[::1] _view
+ #----------------------------------------------------------------------------------------
+     def __init__(self, size_t n):
+ 
+         self._size = n
+         self._matrix = np.zeros( ((n + 1)*n//2, ), dtype=np.float32 )
++        self._view = self._matrix
+ 
+ 
+     cpdef size_t size(self):
+@@ -36,7 +40,7 @@ cdef class SymmMatrix:
+         if col > raw:
+             return self.get_item(col, raw)
+ 
+-        return self._matrix[(raw + 1)*raw//2 + col]
++        return self._view[(raw + 1)*raw//2 + col]
+ 
+ 
+     cpdef cnp.float32_t set_item(self, size_t raw, size_t col, cnp.float32_t value):
+@@ -44,7 +48,13 @@ cdef class SymmMatrix:
+         if col > raw:
+             return self.set_item(col, raw, value)
+ 
+-        self._matrix[(raw + 1)*raw//2 + col] = value
++        self._view[(raw + 1)*raw//2 + col] = value
++
++
++    cpdef add_lower(self, cnp.ndarray values):
++        """Adds a packed lower triangle (row-major, diagonal included:
++        the order of np.tril_indices) to the matrix."""
++        self._matrix += values.astype(np.float32)
+ 
+ 
+ #----------------------------------------------------------------------------------------
+@@ -113,7 +123,7 @@ cpdef TSPResult two_opt(
+ 
+ 
+ cdef cnp.float32_t _calculate_path_dist(
+-    SymmMatrix distance_matrix, cnp.ndarray path
++    SymmMatrix distance_matrix, cnp.ndarray[cnp.uint32_t, ndim=1] path
+ ):
+ 
+     cdef size_t i
+@@ -148,28 +158,23 @@ cpdef SymmMatrix get_distance_matrix(list tensors, size_t size):
+     tensors: list.
+     size: size_t.
+     """
+-    cdef size_t i
+-    cdef size_t j
+     cdef size_t k
+-    cdef cnp.float32_t new_distance
+-    cdef cnp.ndarray[cnp.float32_t, ndim=2] tensor_np
+     cdef SymmMatrix dist_mat = SymmMatrix(size)
++    # Same matrix as the release's double loop of
++    # np.mean(np.abs(tensor_np[i] - tensor_np[j])) over rows i >= j, computed
++    # at once with torch.cdist (p=1) / row length on the tensor's device
++    # (float rounding may differ in the last bits).
++    rows, cols = np.tril_indices(size)
+ 
+     for k in range( len(tensors) ):
+         tensor = tensors[k]
+         tensor = tensor['value'].transpose(0, tensor['dim'])
+-        tensor_np = tensor.cpu().reshape(
+-            tensor.shape[0], -1
+-        ).detach().numpy()
+-
+-        for i in range(size):
+-            for j in range(i + 1):
+-                new_distance = np.mean( 
+-                    np.abs(tensor_np[i] - tensor_np[j])
+-                )
+-                dist_mat.set_item(
+-                    i, j, dist_mat.get_item(i, j) + new_distance
+-                )
++        with torch.no_grad():
++            flat = tensor.detach().reshape(tensor.shape[0], -1)[:size]
++            flat = flat.float().contiguous()
++            dist = torch.cdist(flat[None], flat[None], p=1)[0] / flat.shape[1]
++        dist = dist.cpu().numpy()
++        dist_mat.add_lower(dist[rows, cols])
+ 
+     return dist_mat
+ 
+diff --git a/train_base.py b/train_base.py
+new file mode 100644
+index 0000000..e3cf67e
+--- /dev/null
++++ b/train_base.py
+@@ -0,0 +1,160 @@
++#
++# Phase 1 of Integral Neural Networks under an external CIFAR-100 protocol:
++# train the ordinary (discrete) CIFAR ResNet-50 that train_inn.py converts.
++# Not part of the original release (the paper starts from pre-trained
++# pytorchcv / torchvision networks; here the network is trained with the
++# protocol's recipe). The result is also the protocol's individual network
++# at width 1.0, printed as one protocol line.
++#
++import argparse
++import math
++import time
++
++import torch
++import torch.nn as nn
++
++import protocol
++from cifar_resnet import cifar_resnet50
++
++
++def get_args():
++    p = argparse.ArgumentParser(description="CIFAR-100 ResNet-50 (INN base)")
++    p.add_argument("--data_dir", required=True,
++                   help="folder that contains cifar-100-python/")
++    p.add_argument("--ckpt_dir", required=True)
++    p.add_argument("--log_prefix", default="inn_base")
++    p.add_argument("--epochs", type=int, default=100)
++    p.add_argument("--batch_size", type=int, default=256)
++    p.add_argument("--lr", type=float, default=0.2)
++    p.add_argument("--momentum", type=float, default=0.9)
++    p.add_argument("--weight_decay", type=float, default=5e-4)
++    p.add_argument("--warmup_epochs", type=int, default=5)
++    p.add_argument("--grad_clip", type=float, default=5.0)
++    p.add_argument("--seed", type=int, default=1995)
++    p.add_argument("--recal_batches", type=int, default=20,
++                   help="BN recalibration batches before the test (0: the "
++                        "trained running stats)")
++    p.add_argument("--stop_at_epoch", type=int, default=None,
++                   help="exit cleanly once this many epochs are done")
++    p.add_argument("--eval_only", action="store_true")
++    p.add_argument("--max_iters_per_epoch", type=int, default=None,
++                   help="smoke tests only")
++    return p.parse_args()
++
++
++def make_optimizer(model, args):
++    """Nesterov SGD; weight decay on conv (non-depthwise) and linear weights
++    only, none on BN parameters and biases (the protocol's rule)."""
++    groups = []
++    for param in model.parameters():
++        shape = list(param.size())
++        decay = (len(shape) == 4 and shape[1] != 1) or len(shape) == 2
++        groups.append({"params": [param],
++                       "weight_decay": args.weight_decay if decay else 0.0})
++    return torch.optim.SGD(groups, lr=args.lr, momentum=args.momentum,
++                           nesterov=True)
++
++
++def set_lr(optimizer, args, epoch, batch_idx, data_size=50000):
++    """Per step: linear warm-up from 0 to lr over warmup_epochs, then cosine
++    to 0 over the remaining epochs (the protocol's schedule; steps per epoch
++    counted as data_size / batch_size)."""
++    per_epoch = data_size / args.batch_size
++    current = epoch * per_epoch + batch_idx + 1
++    if epoch < args.warmup_epochs:
++        lr = current * args.lr / args.warmup_epochs / per_epoch
++    else:
++        rest = args.epochs - args.warmup_epochs
++        lr = args.lr * (1.0 + math.cos(
++            math.pi * (current - args.warmup_epochs * per_epoch)
++            / rest / per_epoch)) / 2.0
++    for group in optimizer.param_groups:
++        group["lr"] = lr
++    return lr
++
++
++def train_epoch(model, loader, optimizer, criterion, args, epoch, device):
++    model.train()
++    if torch.cuda.is_available():
++        torch.cuda.reset_peak_memory_stats()
++    start = time.time()
++    loss_sum, correct, seen, steps, lr = 0.0, 0, 0, 0, 0.0
++    for batch_idx, (data, target) in enumerate(loader):
++        if args.max_iters_per_epoch and batch_idx >= args.max_iters_per_epoch:
++            break
++        data = data.to(device, non_blocking=True)
++        target = target.to(device, non_blocking=True)
++        lr = set_lr(optimizer, args, epoch, batch_idx)
++        out = model(data)
++        loss = criterion(out, target)
++        optimizer.zero_grad(set_to_none=True)
++        loss.backward()
++        if args.grad_clip:
++            nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
++        optimizer.step()
++        loss_sum += loss.item() * target.numel()
++        correct += out.argmax(1).eq(target).sum().item()
++        seen += target.numel()
++        steps += 1
++        protocol.step_tick(batch_idx)
++    print("Epoch {} train time {:.1f}s, {} steps, loss {:.4f}, top1_error "
++          "{:.4f}, lr now {:.5f}, {}, {}".format(
++              epoch, time.time() - start, steps,
++              loss_sum / max(seen, 1), 1.0 - correct / max(seen, 1), lr,
++              protocol.steady_rate(), protocol.peak_memory()), flush=True)
++
++
++def main():
++    args = get_args()
++    protocol.seed_everything(args.seed)
++    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
++    torch.backends.cudnn.benchmark = True  # fixed shapes in this phase
++
++    model = cifar_resnet50(100).to(device)
++    print("CIFAR ResNet-50: {:,} parameters".format(
++        sum(p.numel() for p in model.parameters())), flush=True)
++    optimizer = make_optimizer(model, args)
++    criterion = nn.CrossEntropyLoss()
++    train_loader, recal_loader, test_loader = protocol.cifar100_loaders(
++        args.data_dir, args.batch_size, protocol.workers())
++
++    start_epoch = 0
++    state = protocol.read_checkpoint(args.ckpt_dir)
++    if state is not None:
++        model.load_state_dict(state["model"])
++        optimizer.load_state_dict(state["optimizer"])
++        protocol.restore_rng(state)
++        start_epoch = state["epoch"]
++        print("Resumed from {} at epoch {}".format(args.ckpt_dir, start_epoch),
++              flush=True)
++    elif args.eval_only:
++        raise FileNotFoundError(
++            "--eval_only but no checkpoint in {}".format(args.ckpt_dir))
++    else:
++        print("No checkpoint in {}; starting from epoch 0".format(
++            args.ckpt_dir), flush=True)
++
++    if not args.eval_only:
++        for epoch in range(start_epoch, args.epochs):
++            train_epoch(model, train_loader, optimizer, criterion, args,
++                        epoch, device)
++            protocol.save_checkpoint(
++                args.ckpt_dir, epoch + 1, model=model.state_dict(),
++                optimizer=optimizer.state_dict(), kind="base",
++                epochs=args.epochs)
++            if (args.stop_at_epoch is not None
++                    and epoch + 1 >= args.stop_at_epoch
++                    and epoch + 1 < args.epochs):
++                print("Stopping after epoch {} (--stop_at_epoch {}); rerun "
++                      "to resume.".format(epoch, args.stop_at_epoch),
++                      flush=True)
++                return
++
++    # the individual network at width 1.0
++    protocol.eval_widths([1.0], lambda w: model, recal_loader, test_loader,
++                         device, args.epochs, args.recal_batches,
++                         args.log_prefix)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/train_inn.py b/train_inn.py
+new file mode 100644
+index 0000000..0f81b26
+--- /dev/null
++++ b/train_inn.py
+@@ -0,0 +1,305 @@
++#
++# Phase 2 of Integral Neural Networks under an external CIFAR-100 protocol:
++# convert the trained CIFAR ResNet-50 of train_base.py into an integral
++# network with IntegralWrapper as the released examples do (BatchNorm fused
++# into the convolutions, 2-opt TSP channel permutation, bicubic grid-sample
++# parametrization, trapezoidal quadrature), fine-tune it with the authors'
++# recipe while sampling one width per step, and evaluate it resampled to the
++# sixteen protocol widths. Not part of the original release; replaces the
++# catalyst runner of examples/classification with a plain loop.
++#
++import argparse
++import os
++import random
++import subprocess
++import sys
++import time
++
++import torch
++import torch.nn as nn
++
++import protocol
++from cifar_resnet import cifar_resnet50, make_divisible
++
++ROOT = os.path.dirname(os.path.abspath(__file__))
++
++
++def import_torch_integral():
++    """torch_integral needs the compiled Cython TSP solver; build it in place
++    (setup.py build_ext --inplace, Linux/macOS) if it is missing."""
++    try:
++        import torch_integral.tsp_solver.solver  # noqa: F401
++    except ImportError:
++        print("TSP solver not built: running setup.py build_ext --inplace",
++              flush=True)
++        subprocess.run([sys.executable, "setup.py", "build_ext", "--inplace"],
++                       cwd=ROOT, check=True)
++    import torch_integral
++
++    return torch_integral
++
++
++def get_args():
++    p = argparse.ArgumentParser(description="CIFAR-100 ResNet-50 INN")
++    p.add_argument("--data_dir", required=True,
++                   help="folder that contains cifar-100-python/")
++    p.add_argument("--base_ckpt", required=True,
++                   help="train_base.py checkpoint (its last.pt)")
++    p.add_argument("--ckpt_dir", required=True)
++    p.add_argument("--log_prefix", default="inn_r50")
++    # the authors' fine-tuning recipe (paper Appendix D, examples/)
++    p.add_argument("--epochs", type=int, default=50)
++    p.add_argument("--batch_size", type=int, default=128)
++    p.add_argument("--lr", type=float, default=1e-4)
++    p.add_argument("--weight_decay", type=float, default=1e-8)
++    p.add_argument("--lr_schedule", choices=["multistep", "plateau"],
++                   default="multistep")
++    p.add_argument("--milestones", default="10,20,30,40",
++                   help="multistep: epochs where lr is multiplied by gamma")
++    p.add_argument("--gamma", type=float, default=0.33)
++    p.add_argument("--patience", type=int, default=10,
++                   help="plateau: epochs without a lower training loss")
++    p.add_argument("--grad_clip", type=float, default=0.0)
++    # conversion
++    p.add_argument("--tsp_iters", type=int, default=100,
++                   help="2-opt random restarts per group (NOptPermutation)")
++    # width sampling and evaluation
++    p.add_argument("--min_width", type=float, default=0.25)
++    p.add_argument("--max_width", type=float, default=1.0)
++    p.add_argument("--recal_batches", type=int, default=20,
++                   help="used only if BatchNorm layers survive conversion")
++    p.add_argument("--eval_converted", action="store_true",
++                   help="also test the 16 widths right after conversion "
++                        "(no fine-tuning), tagged <log_prefix>_conv")
++    p.add_argument("--seed", type=int, default=1995)
++    p.add_argument("--stop_at_epoch", type=int, default=None,
++                   help="exit cleanly once this many epochs are done")
++    p.add_argument("--eval_only", action="store_true")
++    p.add_argument("--max_iters_per_epoch", type=int, default=None,
++                   help="smoke tests only")
++    return p.parse_args()
++
++
++def layer_shapes(model):
++    """{module name: (out, in)} of every Conv2d / Linear, read from the
++    weight (resampling changes the weight, not out_channels/in_channels)."""
++    shapes = {}
++    for name, m in model.named_modules():
++        if isinstance(m, (nn.Conv2d, nn.Linear)):
++            shapes[name] = tuple(m.weight.shape[:2])
++    return shapes
++
++
++def expected_shape(name, full, w):
++    """Channel counts of the protocol's slimmable ResNet-50 at width w:
++    make_divisible(C * w) everywhere except the RGB input of the stem and
++    the 100 classes of the classifier."""
++    out, inp = full
++    if name != "fc":
++        out = make_divisible(out * w)
++    if name != "conv1":
++        inp = make_divisible(inp * w)
++    return out, inp
++
++
++def convert(ti, model, args, init_from_discrete):
++    """Their examples' conversion: every Conv2d/Linear weight continuous along
++    out and in channels (standard_continuous_dims), except the RGB input of
++    the stem and the class dimension of the classifier (discrete_dims, as
++    imagenet.py keeps fc discrete). fuse_bn=True (their default)."""
++    continuous_dims = ti.standard_continuous_dims(model)
++    discrete_dims = {"conv1.weight": [1], "fc.weight": [0], "fc.bias": [0]}
++    wrapper = ti.IntegralWrapper(
++        init_from_discrete=init_from_discrete,
++        fuse_bn=True,
++        permutation_config={"iters": args.tsp_iters},
++        verbose=init_from_discrete,
++    )
++    return wrapper(model, [1, 3, 32, 32], continuous_dims, discrete_dims)
++
++
++def describe_groups(inn):
++    """Which layer widths each integral group is."""
++    print("{} integral groups (full size -> size at w = 0.25 / 0.50 / 1.00):"
++          .format(len(inn.groups)))
++    for i, g in enumerate(inn.groups):
++        assert g.subgroups is None, "concatenated groups are not expected"
++        names = sorted({"{}[{}]".format(p["name"], p["dim"]) for p in g.params
++                        if not p["name"].endswith("bias")})
++        kind = "residual stream" if "operator" in g.operations else "inner"
++        print("  group {:2d}: {:4d} -> {:4d} / {:4d} / {:4d}  {:15s} {}".format(
++            i, g.size, make_divisible(g.size * 0.25),
++            make_divisible(g.size * 0.5), g.size, kind,
++            ", ".join(names)), flush=True)
++
++
++def set_train_width(ti, inn, w):
++    """One width for the whole network: every group draws exactly
++    make_divisible(C * w) points in this step (their RandomLinspace with a
++    one-point UniformDistribution)."""
++    for g in inn.groups:
++        n = make_divisible(g.size * w)
++        g.reset_distribution(ti.UniformDistribution(n, n))
++
++
++def set_eval_width(inn, w):
++    for g in inn.groups:
++        g.resize(make_divisible(g.size * w))
++
++
++def discrete_at(inn, w, full_shapes):
++    """Resample the INN at width w and return the ordinary network; checks
++    that its channel counts are the protocol's at that width."""
++    inn.eval()
++    set_eval_width(inn, w)
++    net = inn.get_unparametrized_model()
++    net.eval()
++    shapes = layer_shapes(net)
++    bad = [(n, s, expected_shape(n, full_shapes[n], w))
++           for n, s in shapes.items()
++           if s != expected_shape(n, full_shapes[n], w)]
++    if bad:
++        raise RuntimeError("width {}: channel counts differ from "
++                           "make_divisible(C*w): {}".format(w, bad[:5]))
++    print("width {:.2f}: {:,} parameters, channel counts = make_divisible(C*w) "
++          "in all {} conv/linear layers".format(
++              w, sum(p.numel() for p in net.parameters()), len(shapes)),
++          flush=True)
++    return net
++
++
++def lr_for_epoch(args, epoch):
++    milestones = [int(m) for m in args.milestones.split(",") if m]
++    return args.lr * args.gamma ** sum(epoch >= m for m in milestones)
++
++
++def train_epoch(ti, inn, loader, optimizer, criterion, args, epoch, device):
++    inn.train()
++    if torch.cuda.is_available():
++        torch.cuda.reset_peak_memory_stats()
++    start = time.time()
++    loss_sum, seen, widths, steps = 0.0, 0, 0.0, 0
++    for batch_idx, (data, target) in enumerate(loader):
++        if args.max_iters_per_epoch and batch_idx >= args.max_iters_per_epoch:
++            break
++        data = data.to(device, non_blocking=True)
++        target = target.to(device, non_blocking=True)
++        w = random.uniform(args.min_width, args.max_width)
++        set_train_width(ti, inn, w)
++        out = inn(data)
++        loss = criterion(out, target)
++        optimizer.zero_grad(set_to_none=True)
++        loss.backward()
++        if args.grad_clip:
++            nn.utils.clip_grad_norm_(inn.parameters(), args.grad_clip)
++        optimizer.step()
++        loss_sum += loss.item() * target.numel()
++        seen += target.numel()
++        widths += w
++        steps += 1
++        protocol.step_tick(batch_idx)
++    print("Epoch {} train time {:.1f}s, {} steps, loss {:.4f}, mean width "
++          "{:.3f}, lr {:.3g}, {}, {}".format(
++              epoch, time.time() - start, steps, loss_sum / max(seen, 1),
++              widths / max(steps, 1), optimizer.param_groups[0]["lr"],
++              protocol.steady_rate(), protocol.peak_memory()), flush=True)
++    return loss_sum / max(seen, 1)
++
++
++def main():
++    args = get_args()
++    ti = import_torch_integral()
++    protocol.seed_everything(args.seed)
++    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
++    # a new width almost every step: cuDNN autotuning would retune each time
++    torch.backends.cudnn.benchmark = False
++
++    base_state = torch.load(args.base_ckpt, map_location="cpu",
++                            weights_only=False)
++    model = cifar_resnet50(100)
++    model.load_state_dict(base_state["model"])
++    model.to(device)
++    print("Base network from {} (trained {} of {} epochs)".format(
++        args.base_ckpt, base_state.get("epoch"), base_state.get("epochs")),
++        flush=True)
++    full_shapes = layer_shapes(model)
++
++    state = protocol.read_checkpoint(args.ckpt_dir)
++    if state is None and args.eval_only:
++        raise FileNotFoundError(
++            "--eval_only but no checkpoint in {}".format(args.ckpt_dir))
++
++    start = time.time()
++    # With a checkpoint the permutation is not searched again: the structure
++    # is rebuilt and the trained (permuted) parametrization loaded into it,
++    # as imagenet.py does with --checkpoint.
++    inn = convert(ti, model, args, init_from_discrete=state is None)
++    print("Conversion took {:.1f}s{}".format(
++        time.time() - start, "" if state is None else " (no permutation: "
++        "weights come from the checkpoint)"), flush=True)
++    describe_groups(inn)
++    print("BatchNorm layers left after conversion: {}".format(
++        len(protocol.tracked_bns(inn))), flush=True)
++
++    optimizer = torch.optim.Adam(inn.parameters(), lr=args.lr,
++                                 weight_decay=args.weight_decay)
++    plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(
++        optimizer, mode="min", factor=args.gamma, patience=args.patience) \
++        if args.lr_schedule == "plateau" else None
++    criterion = nn.CrossEntropyLoss()
++    train_loader, recal_loader, test_loader = protocol.cifar100_loaders(
++        args.data_dir, args.batch_size, protocol.workers())
++
++    def save(next_epoch):
++        protocol.save_checkpoint(
++            args.ckpt_dir, next_epoch, model=inn.state_dict(),
++            optimizer=optimizer.state_dict(),
++            plateau=plateau.state_dict() if plateau is not None else None,
++            kind="inn", epochs=args.epochs)
++
++    if state is None:
++        start_epoch = 0
++        # the converted network, so that a resume never repeats the search
++        save(0)
++    else:
++        inn.load_state_dict(state["model"])
++        optimizer.load_state_dict(state["optimizer"])
++        if plateau is not None and state.get("plateau") is not None:
++            plateau.load_state_dict(state["plateau"])
++        protocol.restore_rng(state)
++        start_epoch = state["epoch"]
++        print("Resumed from {} at epoch {}".format(args.ckpt_dir, start_epoch),
++              flush=True)
++
++    def test(tag, epochs):
++        protocol.eval_widths(
++            protocol.WIDTHS, lambda w: discrete_at(inn, w, full_shapes),
++            recal_loader, test_loader, device, epochs, args.recal_batches,
++            tag)
++
++    if args.eval_converted and start_epoch == 0:
++        test(args.log_prefix + "_conv", 0)
++
++    if not args.eval_only:
++        for epoch in range(start_epoch, args.epochs):
++            if plateau is None:
++                for group in optimizer.param_groups:
++                    group["lr"] = lr_for_epoch(args, epoch)
++            loss = train_epoch(ti, inn, train_loader, optimizer, criterion,
++                               args, epoch, device)
++            if plateau is not None:
++                plateau.step(loss)
++            save(epoch + 1)
++            if (args.stop_at_epoch is not None
++                    and epoch + 1 >= args.stop_at_epoch
++                    and epoch + 1 < args.epochs):
++                print("Stopping after epoch {} (--stop_at_epoch {}); rerun "
++                      "to resume.".format(epoch, args.stop_at_epoch),
++                      flush=True)
++                return
++
++    test(args.log_prefix, args.epochs)
++
++
++if __name__ == "__main__":
++    main()

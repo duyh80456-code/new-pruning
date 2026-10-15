@@ -20,7 +20,8 @@ import math
 import torch.nn as nn
 
 from .s_resnet import Block
-from .slimmable_ops import SwitchableBatchNorm2d, SlimmableConv2d
+from .slimmable_ops import (SwitchableBatchNorm2d, SlimmableConv2d,
+                             SlimmableLinear)
 from utils.config import FLAGS
 
 
@@ -81,10 +82,17 @@ class Model(nn.Module):
         self.features = nn.Sequential(*features)
 
         # one head per width, input the width's own feature size, as their
-        # output_heads; a list, so the index matches width_mult_list
+        # output_heads; a list, so the index matches width_mult_list.
+        # shared_head is Slimmable Networks itself (models/s_resnet.py):
+        # one classifier, its input sliced to the width's feature size.
         self.outp = channels
-        self.heads = nn.ModuleList(
-            [nn.Linear(c, num_classes) for c in channels])
+        self.shared_head = getattr(FLAGS, 'shared_head', False)
+        if self.shared_head:
+            self.classifier = SlimmableLinear(
+                channels, [num_classes for _ in channels])
+        else:
+            self.heads = nn.ModuleList(
+                [nn.Linear(c, num_classes) for c in channels])
         self.width_mult = max(widths)
         if FLAGS.reset_parameters:
             self.reset_parameters()
@@ -92,6 +100,8 @@ class Model(nn.Module):
     def forward(self, x):
         x = self.features(x)
         x = x.view(x.size(0), -1)
+        if self.shared_head:
+            return self.classifier(x)
         return self.heads[FLAGS.width_mult_list.index(self.width_mult)](x)
 
     def reset_parameters(self):

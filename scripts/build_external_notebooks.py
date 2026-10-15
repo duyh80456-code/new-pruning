@@ -38,6 +38,15 @@ UPSTREAMS = {
     'lcs': ('https://github.com/apple/learning-compressible-subspaces.git',
             'e6d3924368faccbdfd3d89c4a4735dba947275c9',
             'learning-compressible-subspaces', 'lcs.patch', 'pyyaml'),
+    # timm is preinstalled on Kaggle; under the torch constraint it is a
+    # no-op, and the field must not be empty or pip gets no requirement
+    'dsnet': ('https://github.com/changlin31/DS-Net.git',
+              '15cd3036970ec27d2c306014344fd50d9e9b888b', 'DS-Net',
+              'dsnet.patch', 'timm'),
+    # cython builds INN's TSP solver; train_inn.py runs the build itself
+    'inn': ('https://github.com/TheStageAI/TorchIntegral.git',
+            '84c5e89047f1d47bbf6c62065aa223d997f9b5e7', 'TorchIntegral',
+            'inn.patch', 'cython'),
 }
 
 SPEC = {
@@ -478,19 +487,174 @@ print(codes)
 '''
 
 
+SPEC_102 = {
+    'number': 102,
+    'name': 'kaggle_kd_102_dsnet',
+    'title': 'DS-Net from the authors\' code, and with DS-Net++\'s H-IB',
+    'upstreams': ['dsnet'],
+    'workers': "{'DSNET_WORKERS': '2'}",
+    'labels': ['dsnet_ib', 'dsnet_hib'],
+    'intro': '''DS-Net (Li et al., CVPR 2021 oral) run from the authors' repository,
+on exactly the protocol of every other row: CIFAR-100 at 32x32, CIFAR
+ResNet-50 (3x3 stem, no max-pool), 100 epochs, batch 256, SGD nesterov
+lr 0.2 with 5 warm-up epochs then cosine, wd 5e-4, clip 5, widths
+0.25-1.00, read at the sixteen widths after BN recalibration on 20
+batches. Seed 1995.
+
+| | GPU | method | code |
+|---|---|---|---|
+| dsnet_ib | 0 | DS-Net Stage I as released: the sandwich ['largest', 'uniform', 'uniform', 'smallest'], in-place bootstrapping (soft targets from an EMA of the supernet at its largest width, decay 0.997), ensemble IB off as in their config. The gate (Stage II) is not trained: the supernet is read at fixed uniform widths | changlin31/DS-Net at 15cd303 + `third_party/patches/dsnet.patch` |
+| dsnet_hib | 1 | the same plus DS-Net++'s (TPAMI 2023) H-IB at the last block: a slimmable 2-layer MLP maps each student's pooled feature onto the EMA largest's, squared L2 / C, weights 0.5 / 0.5 with the KD term. H-IB is not in their code; it is written from the paper | same, `--hib` |
+
+The DS-ResNet-50 is built from their own slimmable ops, with the channel
+counts of our US-Net rows at every width; `third_party/patches/dsnet_README.md`
+lists every change and deviation. dsnet_hib is the published feature
+distillation between widths with an L2 loss, the row to set against the
+method's transport.
+
+## More than one session
+
+About 1.2 s a step on an RTX 5060 Ti, so about 13 to 20 hours on a T4:
+one or two resumes. Both write `ckpt/<label>/last.pt` after every epoch.
+When the session ends, Save Version, then in a new run attach that
+version's output (pick the version by number, not Latest) and run again:
+the notebook finds the checkpoints and both continue. Attach the CIFAR-100
+dataset as well.
+''',
+    'reading': '''dsnet_ib against A (US-Net, 76.86) is DS-Net's EMA teacher in place of
+the live widest; dsnet_hib against dsnet_ib is the L2 feature term.''',
+}
+
+RESUME_102 = '''CK = os.path.join(WORK, 'ckpt')
+# DS-Net keeps ckpt/<label>/last.pt
+wanted = {'dsnet_ib': ('last.pt', 'dsnet_ib'),
+          'dsnet_hib': ('last.pt', 'dsnet_hib')}
+for label, (name, folder) in wanted.items():
+    target = os.path.join(CK, folder or '', name)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    if not os.path.exists(target):
+        for root, _, files in os.walk('/kaggle/input', followlinks=True):
+            if name in files and (folder is None
+                                  or os.path.basename(root) == folder):
+                shutil.copy(os.path.join(root, name), target)
+                print('restored', label, 'from', root)
+                break
+    print(label, 'resumes from its checkpoint' if os.path.exists(target)
+          else 'starts at epoch 1')
+'''
+
+TRAIN_102 = '''COMMON = ['-c', 'configs/cifar100_ds_resnet50_uniform.yml',
+          '--data_dir', DATA, '--seed', '1995', '--skip_upstream_test',
+          '--output', os.path.join(WORK, 'dsnet_out')]
+# each run ends with the sixteen protocol lines
+codes = run_pinned([
+    ('dsnet_ib', '0', CODE['dsnet'],
+     [sys.executable, '-u', 'train.py'] + COMMON
+     + ['--ckpt_dir', os.path.join(CK, 'dsnet_ib'),
+        '--log_prefix', 'dsnet_ib']),
+    ('dsnet_hib', '1', CODE['dsnet'],
+     [sys.executable, '-u', 'train.py'] + COMMON
+     + ['--hib', '--ckpt_dir', os.path.join(CK, 'dsnet_hib'),
+        '--log_prefix', 'dsnet_hib'])])
+print(codes)
+'''
+
+
+SPEC_103 = {
+    'number': 103,
+    'name': 'kaggle_kd_103_inn',
+    'title': 'Integral Neural Networks from the authors\' code',
+    'upstreams': ['inn'],
+    'workers': "{'INN_WORKERS': '2'}",
+    'labels': ['inn_base', 'inn_r50'],
+    'one_gpu': True,
+    'intro': '''Integral Neural Networks (Solodskikh et al., CVPR 2023) run from the
+authors' repository (TorchIntegral). INN turns a trained ordinary network
+into a continuous one and fine-tunes it while sampling sizes; any width is
+then read by resampling. Two phases, one after the other on one card, seed
+1995:
+
+| | GPU | phase | code |
+|---|---|---|---|
+| inn_base | 0 | a plain CIFAR ResNet-50 (ordinary torch.nn, the channel counts of our US-Net rows at width 1.0) on our recipe: 100 epochs, batch 256, SGD nesterov lr 0.2, 5 warm-up epochs then cosine, wd 5e-4, clip 5. Prints its width-1.00 line: the individual network at full width | TheStageAI/TorchIntegral at 84c5e89 + `third_party/patches/inn.patch` |
+| inn_r50 | 0 | their `IntegralWrapper` on that checkpoint (TSP channel permutation, continuous weights, BN fused as in their default), then their fine-tuning recipe: Adam 1e-4, batch 128, 50 epochs, x0.33 at 10/20/30/40. One width w ~ U(0.25, 1) per step for every group, then the sixteen widths by resampling | same |
+
+Not on the same footing as the 100-epoch rows: 150 epochs in all (100 SGD +
+50 Adam), and no BatchNorm at any width (fused), so no recalibration. The
+authors never resampled a whole network down to 25 %; converted but not
+yet fine-tuned, every width under 1.00 is near chance, so the fine-tuning
+has to teach the narrow widths from scratch.
+`third_party/patches/inn_README.md` lists every change and deviation.
+
+GPU 1 stays idle (T4 x2 is fine, one card is enough).
+
+## More than one session
+
+Estimated about 5 h for the base and 3.5 h for the fine-tuning on a T4
+(not measured there), plus 5-10 minutes for the permutation search: close
+to one session. Both phases write `ckpt/<label>/last.pt` after every epoch.
+When the session ends, Save Version, then in a new run attach that
+version's output (pick the version by number, not Latest) and run again:
+the notebook finds the checkpoints, a finished base is not trained again,
+and the fine-tuning continues. Attach the CIFAR-100 dataset as well.
+''',
+    'reading': '''inn_base at 1.00 is the individual ResNet-50; inn_r50 is read at the
+sixteen widths like every row, with the footing caveats above.''',
+}
+
+RESUME_103 = '''CK = os.path.join(WORK, 'ckpt')
+# INN keeps ckpt/inn_base/last.pt and ckpt/inn_r50/last.pt
+wanted = {'inn_base': ('last.pt', 'inn_base'),
+          'inn_r50': ('last.pt', 'inn_r50')}
+for label, (name, folder) in wanted.items():
+    target = os.path.join(CK, folder or '', name)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    if not os.path.exists(target):
+        for root, _, files in os.walk('/kaggle/input', followlinks=True):
+            if name in files and (folder is None
+                                  or os.path.basename(root) == folder):
+                shutil.copy(os.path.join(root, name), target)
+                print('restored', label, 'from', root)
+                break
+    print(label, 'resumes from its checkpoint' if os.path.exists(target)
+          else 'starts at epoch 1')
+'''
+
+TRAIN_103 = '''COMMON = ['--data_dir', DATA, '--seed', '1995']
+# phase 1, then phase 2 from its checkpoint; separate labels, since the
+# line parser ignores the tag and would file both 1.00 lines together
+codes = run_pinned([
+    ('inn_base', '0', CODE['inn'],
+     [sys.executable, '-u', 'train_base.py'] + COMMON
+     + ['--ckpt_dir', os.path.join(CK, 'inn_base'),
+        '--log_prefix', 'inn_base'])])
+print(codes)
+if codes['inn_base'] == 0:
+    codes = run_pinned([
+        ('inn_r50', '0', CODE['inn'],
+         [sys.executable, '-u', 'train_inn.py'] + COMMON
+         + ['--base_ckpt', os.path.join(CK, 'inn_base', 'last.pt'),
+            '--ckpt_dir', os.path.join(CK, 'inn_r50'),
+            '--log_prefix', 'inn_r50'])])
+    print(codes)
+'''
+
+
 def build(spec, steps):
     head = '# {}. {}\n\n{}'.format(spec['number'], spec['title'],
                                    spec['intro'])
     upstreams = {key: UPSTREAMS[key]
-                 for key in spec.get('upstreams', list(UPSTREAMS))}
+                 for key in spec.get('upstreams', ['joslim', 'lcs'])}
     config = '''# Fixed for this notebook.
 REPO_URL = {repo!r}
 REPO_BRANCH = {branch!r}
 # key: (repository, pinned commit, folder, patch, extra pip packages)
 UPSTREAMS = {upstreams}
-WORKER_ENV = {{'JOSLIM_WORKERS': '2', 'LCS_WORKERS': '2'}}
+WORKER_ENV = {workers}
 '''.format(repo=REPO_URL, branch=REPO_BRANCH,
-           upstreams=repr(upstreams))
+           upstreams=repr(upstreams),
+           workers=spec.get('workers', "{'JOSLIM_WORKERS': '2', "
+                                       "'LCS_WORKERS': '2'}"))
     setup = SETUP
     if spec.get('one_gpu'):
         setup = setup.replace(
@@ -572,3 +736,5 @@ if __name__ == '__main__':
     build(SPEC_48, [RESUME_48, TRAIN_48])
     for number, run, seed, nth in SEEDS:
         build(*seeds_spec(number, run, seed, nth))
+    build(SPEC_102, [RESUME_102, TRAIN_102])
+    build(SPEC_103, [RESUME_103, TRAIN_103])
