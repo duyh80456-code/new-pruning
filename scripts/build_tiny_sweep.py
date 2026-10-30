@@ -1,4 +1,4 @@
-"""configs and notebooks 117-120: SlimOT on Tiny ImageNet, hyperparameters
+"""configs and notebooks 117-122: SlimOT on Tiny ImageNet, hyperparameters
 chosen on images held out of the train split
 
     python scripts/build_tiny_sweep.py
@@ -7,7 +7,8 @@ Every branch is EQ (SlimOT, ResNet-18, Tiny ImageNet, seed 1995) with
 holdout_per_class 50: 50 train images of each class are held out and are
 what the run reports, so the official val split, which is the test set of
 the paper, plays no part in the choice. JE changes nothing else and is the
-reference; each other branch changes one hyperparameter. One seed each.
+reference; JF-JL each change one hyperparameter (notebooks 117-120), JM-JP
+combine the three that came out above JE (notebooks 121-122). One seed each.
 """
 import io
 import json
@@ -16,24 +17,37 @@ import os
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = 'eq_k_heads4_r18_tiny'
 
-# (letter, branch, key, old, new, what)
+EPS010 = ('sinkhorn_eps', '0.2', '0.1')
+PEER_HALF = ('horizontal_weight', '1.0', '0.5')
+HEADS8 = ('head_groups', '4', '8')
+
+# (letter, branch, [(key, old, new), ...], what)
 SWEEP = [
-    ('JE', 'je_k_heads4_r18_tiny_holdout', None, None, None,
+    ('JE', 'je_k_heads4_r18_tiny_holdout', [],
      'no other change: the reference every other branch is read against'),
-    ('JF', 'jf_k_heads4_r18_tiny_holdout_eps010', 'sinkhorn_eps', '0.2', '0.1',
+    ('JF', 'jf_k_heads4_r18_tiny_holdout_eps010', [EPS010],
      'the Sinkhorn entropic blur at 0.1 instead of 0.2'),
-    ('JG', 'jg_k_heads4_r18_tiny_holdout_eps050', 'sinkhorn_eps', '0.2', '0.5',
+    ('JG', 'jg_k_heads4_r18_tiny_holdout_eps050', [('sinkhorn_eps', '0.2', '0.5')],
      'the Sinkhorn entropic blur at 0.5 instead of 0.2'),
-    ('JH', 'jh_k_heads4_r18_tiny_holdout_peer_half', 'horizontal_weight', '1.0', '0.5',
+    ('JH', 'jh_k_heads4_r18_tiny_holdout_peer_half', [PEER_HALF],
      'Peer Transport at half weight, 0.5 instead of 1.0'),
-    ('JI', 'ji_k_heads4_r18_tiny_holdout_peer_double', 'horizontal_weight', '1.0', '2.0',
+    ('JI', 'ji_k_heads4_r18_tiny_holdout_peer_double', [('horizontal_weight', '1.0', '2.0')],
      'Peer Transport at double weight, 2.0 instead of 1.0'),
-    ('JJ', 'jj_k_heads4_r18_tiny_holdout_teacher_half', 'feature_weight', '1.0', '0.5',
+    ('JJ', 'jj_k_heads4_r18_tiny_holdout_teacher_half', [('feature_weight', '1.0', '0.5')],
      'Teacher Transport at half weight, 0.5 instead of 1.0'),
-    ('JK', 'jk_k_heads2_r18_tiny_holdout', 'head_groups', '4', '2',
+    ('JK', 'jk_k_heads2_r18_tiny_holdout', [('head_groups', '4', '2')],
      'two band heads instead of four'),
-    ('JL', 'jl_k_heads8_r18_tiny_holdout', 'head_groups', '4', '8',
+    ('JL', 'jl_k_heads8_r18_tiny_holdout', [HEADS8],
      'eight band heads instead of four'),
+    # the three single changes above JE (JF +0.62, JH +0.51, JL +0.35), combined
+    ('JM', 'jm_k_heads4_r18_tiny_holdout_eps010_peer_half', [EPS010, PEER_HALF],
+     'blur 0.1 and Peer Transport at 0.5 (JF with JH)'),
+    ('JN', 'jn_k_heads8_r18_tiny_holdout_eps010', [EPS010, HEADS8],
+     'blur 0.1 and eight band heads (JF with JL)'),
+    ('JO', 'jo_k_heads8_r18_tiny_holdout_peer_half', [PEER_HALF, HEADS8],
+     'Peer Transport at 0.5 and eight band heads (JH with JL)'),
+    ('JP', 'jp_k_heads8_r18_tiny_holdout_eps010_peer_half', [EPS010, PEER_HALF, HEADS8],
+     'blur 0.1, Peer Transport at 0.5 and eight band heads (JF, JH and JL)'),
 ]
 
 
@@ -59,11 +73,11 @@ HOLDOUT = ('dataset_dir: data\n', 'dataset_dir: data\n'
            '# the official val split (data/tinyimagenet.py, holdout)\n'
            'holdout_per_class: 50\n')
 
-for letter, branch, key, old, new, what in SWEEP:
+for letter, branch, swaps, what in SWEEP:
     for kind in ('cifar100', 'smoke'):
         src = os.path.join(ROOT, 'apps', '{}_{}.yml'.format(kind, BASE))
         text = io.open(src, encoding='utf-8').read()
-        if key:
+        for key, old, new in swaps:
             text = swap(text, key, old, new)
         if text.count(HOLDOUT[0]) != 1:
             raise SystemExit('dataset_dir not found once in ' + src)
@@ -129,7 +143,7 @@ for branch in BRANCHES:
                         dirs_exist_ok=True)
 print('\\ncheckpoints copied to', out)'''
 
-for number, (left, right) in zip((117, 118, 119, 120), zip(SWEEP[0::2], SWEEP[1::2])):
+for number, (left, right) in zip(range(117, 123), zip(SWEEP[0::2], SWEEP[1::2])):
     nb = json.loads(json.dumps(template))
     md = ''.join(nb['cells'][0]['source'])
     keep = md[md.index('## Before you start'):]
@@ -157,7 +171,7 @@ for number, (left, right) in zip((117, 118, 119, 120), zip(SWEEP[0::2], SWEEP[1:
         'not Latest) and run again: the notebook finds the checkpoints.\n\n'
         '## `{b1}`\n\nSee apps/cifar100_{b1}.yml for every setting and why.\n\n'
         '## `{b2}`\n\nSee apps/cifar100_{b2}.yml for every setting and why.\n\n\n'
-    ).format(n=number, l1=left[0], w1=left[5], l2=right[0], w2=right[5],
+    ).format(n=number, l1=left[0], w1=left[3], l2=right[0], w2=right[3],
              b1=left[1], b2=right[1])
     nb['cells'][0]['source'] = lines(head + keep)
     cfg = ''.join(nb['cells'][1]['source'])
