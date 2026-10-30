@@ -201,6 +201,28 @@ class TinyImageNet(torch.utils.data.Dataset):
         return self.transform(image), int(self.labels[index])
 
 
+def holdout(train_x, train_y, per_class):
+    """(train images, train labels, held-out images, held-out labels)
+
+    For choosing hyperparameters without the official val split, which is
+    the test set: per_class train images of every class are held out and
+    stand in for it, and the run trains on the rest. The images held out
+    depend only on per_class, never on random_seed, so every branch of a
+    sweep is read on the same images.
+    """
+    rng = np.random.RandomState(0)
+    keep, held = [], []
+    for label in np.unique(train_y):
+        index = rng.permutation(np.flatnonzero(train_y == label))
+        held.append(index[:per_class])
+        keep.append(index[per_class:])
+    keep, held = np.sort(np.concatenate(keep)), np.sort(np.concatenate(held))
+    print('Tiny ImageNet: {} train images held out ({} a class) as the '
+          'validation set, {} left to train on'.format(
+              len(held), per_class, len(keep)), flush=True)
+    return train_x[keep], train_y[keep], train_x[held], train_y[held]
+
+
 def dataset(train_transforms, val_transforms, test_transforms):
     root = getattr(FLAGS, 'dataset_dir', 'data')
     folder = locate(root)
@@ -209,6 +231,9 @@ def dataset(train_transforms, val_transforms, test_transforms):
     # read-only, so it lands under dataset_dir rather than beside the JPEGs
     cache = os.path.join(root, 'tinyimagenet_cache')
     train_x, train_y, val_x, val_y = arrays(folder, cache)
+    held = getattr(FLAGS, 'holdout_per_class', 0)
+    if held:
+        train_x, train_y, val_x, val_y = holdout(train_x, train_y, held)
     train_set = (None if FLAGS.test_only
                  else TinyImageNet(train_x, train_y, train_transforms))
     val_set = TinyImageNet(val_x, val_y, val_transforms)
