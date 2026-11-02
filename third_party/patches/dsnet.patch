@@ -93,6 +93,53 @@ index 0000000..db7cef6
 +ensemble_ib: false
 +gate_train: false
 +reset_bn: false         # the protocol recalibrates per width instead
+diff --git a/configs/in100_ds_resnet50_uniform.yml b/configs/in100_ds_resnet50_uniform.yml
+new file mode 100644
+index 0000000..d410eb8
+--- /dev/null
++++ b/configs/in100_ds_resnet50_uniform.yml
+@@ -0,0 +1,41 @@
++# Stage I (supernet) of DS-Net on ImageNet-100 (the seed-1993 subset, full
++# resolution) with a ResNet-50 at 224 (7x7 stride-2 stem, max pool), under
++# the external protocol: the CIFAR-100 recipe with batch 128, lr 0.05 (0.1
++# per 256) and the ImageNet weight decay 1e-4, as its US-Net run.
++dataset: imagenet100
++model: ds_resnet50_imagenet
++num_classes: 100
++num_choice: 16          # widths 0.25, 0.30, ..., 1.00 in every layer
++
++sync_bn: false
++opt: sgd                # timm 'sgd' = SGD with Nesterov momentum
++momentum: 0.9
++sched: cosine
++sched_on_updates: true  # LR set per step (timm per-update mode)
++warmup_prefix: true     # 5 warm-up epochs, then cosine over the other 95
++epochs: 100             # total, warm-up included (see train.py)
++warmup_epochs: 5
++warmup_lr: 0.0
++min_lr: 0.0
++cooldown_epochs: 0
++weight_decay: 0.0001    # timm skips 1-D params (BN) and biases
++clip_grad: 5.0
++drop: 0.0
++model_ema: true
++model_ema_decay: 0.997
++lr: 0.05
++batch_size: 128
++optimizer_step: 1
++smoothing: 0.0
++amp: false
++no_prefetcher: true
++pin_mem: true
++
++train_mode: all
++test_mode: false
++
++slim_train: true
++inplace_bootstrap: true
++ensemble_ib: false
++gate_train: false
++reset_bn: false         # the protocol recalibrates per width instead
 diff --git a/configs/tiny_ds_resnet18_uniform.yml b/configs/tiny_ds_resnet18_uniform.yml
 new file mode 100644
 index 0000000..80ee783
@@ -455,10 +502,10 @@ index 8f102ee..45981cc 100644
  
 diff --git a/dyn_slim/models/dyn_slim_resnet.py b/dyn_slim/models/dyn_slim_resnet.py
 new file mode 100644
-index 0000000..c3fb7b7
+index 0000000..b374b6e
 --- /dev/null
 +++ b/dyn_slim/models/dyn_slim_resnet.py
-@@ -0,0 +1,254 @@
+@@ -0,0 +1,265 @@
 +"""DS-ResNets for the external protocol, built from DS-Net's slimmable ops.
 +
 +Addition for running DS-Net's supernet training (Stage I) under an external
@@ -652,7 +699,7 @@ index 0000000..c3fb7b7
 +class DSResNet(UniformChoiceMixin, nn.Module):
 +    def __init__(self, num_classes=100, in_chans=3, layers=(3, 4, 6, 3), widths=WIDTHS,
 +                 drop_rate=0., norm_layer=DSBatchNorm2d, hib=False, hib_hidden=2048,
-+                 block='bottleneck', stem_stride=1, **kwargs):
++                 block='bottleneck', stem_stride=1, imagenet_stem=False, **kwargs):
 +        super(DSResNet, self).__init__()
 +        assert block in ('basic', 'bottleneck')
 +        self.widths = list(widths)
@@ -660,11 +707,14 @@ index 0000000..c3fb7b7
 +        self.drop_rate = drop_rate
 +        expansion = 4 if block == 'bottleneck' else 1
 +
++        # imagenet_stem: the torchvision stem for 224x224 inputs, 7x7 stride 2
++        # and a 3x3 max pool, as the protocol's models/us_resnet.py
 +        stem = channel_choices(64, self.widths)
-+        self.conv_stem = DSConv2d([in_chans], stem, kernel_size=3, stride=stem_stride,
-+                                  bias=False)
++        self.conv_stem = DSConv2d([in_chans], stem, kernel_size=7 if imagenet_stem else 3,
++                                  stride=2 if imagenet_stem else stem_stride, bias=False)
 +        self.bn1 = norm_layer(stem)
 +        self.act1 = nn.ReLU(inplace=True)
++        self.stem_pool = nn.MaxPool2d(3, 2, 1) if imagenet_stem else nn.Identity()
 +
 +        blocks = []
 +        in_list = stem
@@ -696,7 +746,7 @@ index 0000000..c3fb7b7
 +
 +    def forward_features(self, x):
 +        self._push_choice()
-+        x = self.act1(self.bn1(self.conv_stem(x)))
++        x = self.stem_pool(self.act1(self.bn1(self.conv_stem(x))))
 +        return self.blocks(x)
 +
 +
@@ -704,6 +754,14 @@ index 0000000..c3fb7b7
 +def ds_resnet50_cifar(pretrained=False, **kwargs):
 +    assert not pretrained
 +    return DSResNet(layers=(3, 4, 6, 3), block='bottleneck', stem_stride=1,
++                    **clean_model_kwargs(kwargs))
++
++
++@register_model
++def ds_resnet50_imagenet(pretrained=False, **kwargs):
++    """ResNet-50 for 224x224 (ImageNet-100): 7x7 stride-2 stem and a max pool."""
++    assert not pretrained
++    return DSResNet(layers=(3, 4, 6, 3), block='bottleneck', imagenet_stem=True,
 +                    **clean_model_kwargs(kwargs))
 +
 +
@@ -731,10 +789,10 @@ index c93e167..988ac7b 100644
      import apex
 diff --git a/protocol.py b/protocol.py
 new file mode 100644
-index 0000000..7e3397f
+index 0000000..7dc260e
 --- /dev/null
 +++ b/protocol.py
-@@ -0,0 +1,414 @@
+@@ -0,0 +1,486 @@
 +#
 +# Additions for running DS-Net under an external protocol: the CIFAR-100 and
 +# Tiny ImageNet loaders, a per-epoch resume checkpoint (model, EMA model,
@@ -988,10 +1046,82 @@ index 0000000..7e3397f
 +    return loader_train, loader_recal, loader_eval
 +
 +
++# ---- ImageNet-100 (the seed-1993 class-incremental subset, full resolution) ----
++# An ImageFolder tree with train/ and val/ (128,856 and 5,000 images). The
++# augmentation is the protocol's imagenet1k_basic, the one its US-Net code
++# uses: RandomResizedCrop 224 (scale 0.08-1), colour jitter 0.4, PCA lighting
++# 0.1, HFlip; Resize 256 + CenterCrop 224 at test.
++IMAGENET_MEAN = (0.485, 0.456, 0.406)
++IMAGENET_STD = (0.229, 0.224, 0.225)
++_IMAGENET_PCA_EIGVAL = np.asarray([0.2175, 0.0188, 0.0045])
++_IMAGENET_PCA_EIGVEC = np.asarray([
++    [-0.5675, 0.7192, 0.4009],
++    [-0.5808, -0.0045, -0.8140],
++    [-0.5836, -0.6948, 0.4203],
++])
++
++
++class _Lighting(object):
++    """AlexNet's PCA lighting on a PIL image, as the protocol's utils/transforms.py"""
++
++    def __init__(self, alphastd):
++        self.alphastd = alphastd
++
++    def __call__(self, img):
++        from PIL import Image
++        if self.alphastd == 0.:
++            return img
++        v = (np.random.randn(3) * self.alphastd).astype('float32')
++        v = (v * _IMAGENET_PCA_EIGVAL).reshape((3, 1))
++        inc = np.dot(_IMAGENET_PCA_EIGVEC, v).reshape((3,))
++        old_dtype = np.asarray(img).dtype
++        img = np.add(img, inc)
++        if old_dtype == np.uint8:
++            img = np.clip(img, 0, 255)
++        return Image.fromarray(img.astype(old_dtype), 'RGB')
++
++
++def imagenet100_loaders(data_dir, batch_size, workers):
++    """train (the protocol's imagenet1k_basic augmentation, shuffled,
++    drop_last like timm's training loader), recalibration (same images and
++    transform, its own shuffle), test (the 5,000 val images)."""
++    import torchvision
++    import torchvision.transforms as transforms
++    train_tf = transforms.Compose([
++        transforms.RandomResizedCrop(224, scale=(0.08, 1.0)),
++        transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
++        _Lighting(0.1),
++        transforms.RandomHorizontalFlip(),
++        transforms.ToTensor(),
++        transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
++    ])
++    test_tf = transforms.Compose([
++        transforms.Resize(256),
++        transforms.CenterCrop(224),
++        transforms.ToTensor(),
++        transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
++    ])
++    trainset = torchvision.datasets.ImageFolder(
++        os.path.join(data_dir, 'train'), transform=train_tf)
++    testset = torchvision.datasets.ImageFolder(
++        os.path.join(data_dir, 'val'), transform=test_tf)
++    assert len(trainset.classes) == 100 and trainset.classes == testset.classes
++    common = dict(num_workers=workers, pin_memory=True,
++                  persistent_workers=workers > 0)
++    loader_train = torch.utils.data.DataLoader(
++        trainset, batch_size=batch_size, shuffle=True, drop_last=True, **common)
++    loader_recal = torch.utils.data.DataLoader(
++        trainset, batch_size=batch_size, shuffle=True, drop_last=True, **common)
++    loader_eval = torch.utils.data.DataLoader(
++        testset, batch_size=batch_size, shuffle=False, **common)
++    return loader_train, loader_recal, loader_eval
++
++
 +# --dataset choices of train.py beyond upstream's ImageNet path
 +DATASETS = {
 +    'cifar100': dict(loaders=cifar100_loaders, image_size=32, num_classes=100),
 +    'tinyimagenet': dict(loaders=tinyimagenet_loaders, image_size=64, num_classes=200),
++    'imagenet100': dict(loaders=imagenet100_loaders, image_size=224, num_classes=100),
 +}
 +
 +

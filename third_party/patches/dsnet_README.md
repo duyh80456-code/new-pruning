@@ -474,3 +474,37 @@ Recipe (ours vs paper / upstream):
 - ReLU vs ReLU6: the logit-equality check cannot tell them apart at initialisation (activations
   rarely exceed 6 there); the MobileNetV2's ReLU6 was checked by reading the code.
 - lr 0.2 on MobileNetV2 is our recipe, not DS-Net's (0.08 for DS-MBNet at batch 512).
+
+## ImageNet-100 (added 2026-11-02)
+
+`configs/in100_ds_resnet50_uniform.yml`, model `ds_resnet50_imagenet` and dataset
+`imagenet100` (in `protocol.py`) run the same Stage I on the seed-1993 ImageNet-100
+(an ImageFolder tree with `train/` and `val/`, 128,856 and 5,000 images) at 224x224:
+the torchvision stem (7x7 stride 2, 3x3 max pool; `imagenet_stem` in `DSResNet`, an
+`nn.Identity` pool otherwise, so the CIFAR and Tiny models and their state dicts are
+unchanged), the protocol's `imagenet1k_basic` augmentation (RandomResizedCrop 224 at
+scale 0.08-1, colour jitter 0.4, PCA lighting 0.1, HFlip; Resize 256 + CenterCrop 224
+at test), batch 128, lr 0.05, weight decay 1e-4, everything else as the CIFAR-100
+config. `scripts/run_in100_baselines.sh` clones, patches and runs it with
+`DSNET_WORKERS=16 --recal_batches 40` (5,120 images, as CIFAR's 20 x 256).
+Local smoke (fake 100-class tree, batch 32, 2 x 5 steps): model 23,712,932 parameters,
+both epochs trained and checkpointed, peak 5.10 GiB; the 16-width evaluation was cut
+off by the machine running out of RAM, so it is first exercised by the smoke in
+`run_in100_baselines.sh`.
+
+## ImageNet-100 (added 2026-11-02)
+
+`configs/in100_ds_resnet50_uniform.yml`, model `ds_resnet50_imagenet` and dataset
+`imagenet100` (in `protocol.py`) run the same Stage I on the seed-1993 ImageNet-100
+(an ImageFolder tree with `train/` and `val/`, 128,856 and 5,000 images) at 224x224:
+the torchvision stem (7x7 stride 2, 3x3 max pool; `imagenet_stem` in `DSResNet`, an
+`nn.Identity` pool otherwise, so the CIFAR and Tiny models and their state dicts are
+unchanged), the protocol's `imagenet1k_basic` augmentation (RandomResizedCrop 224 at
+scale 0.08-1, colour jitter 0.4, PCA lighting 0.1, HFlip; Resize 256 + CenterCrop 224
+at test), batch 128, lr 0.05, weight decay 1e-4, everything else as the CIFAR-100
+config. `scripts/run_in100_baselines.sh` clones, patches and runs it with
+`DSNET_WORKERS=16 --recal_batches 40` (5,120 images, as CIFAR's 20 x 256).
+Local smoke (fake 100-class tree, batch 32, 2 x 5 steps): model 23,712,932 parameters,
+both epochs trained and checkpointed, peak 5.10 GiB; the 16-width evaluation was cut
+off by the machine running out of RAM, so it is first exercised by the smoke in
+`run_in100_baselines.sh`.
