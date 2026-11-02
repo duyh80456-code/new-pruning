@@ -128,7 +128,9 @@ class Model(nn.Module):
         expansion = 4 if depth == 50 else 1
 
         width_mult = FLAGS.width_mult_range[-1]
-        assert input_size % (8 * getattr(FLAGS, 'stem_stride', 1)) == 0
+        imagenet_stem = getattr(FLAGS, 'stem', 'cifar') == 'imagenet'
+        stem_stride = getattr(FLAGS, 'stem_stride', 1)
+        assert input_size % (32 if imagenet_stem else 8 * stem_stride) == 0
         channels = make_divisible(64 * width_mult)
         self.outp = make_divisible(512 * expansion * width_mult)
 
@@ -136,13 +138,26 @@ class Model(nn.Module):
         # stem_stride 2 is for 64x64 inputs (Tiny ImageNet): the stages then
         # see the same 32, 16, 8 and 4 pixels as on CIFAR, at CIFAR's cost
         # per image, rather than 64 to 8 at four times it.
-        stem_stride = getattr(FLAGS, 'stem_stride', 1)
-        features = [nn.Sequential(
-            USConv2d(3, channels, 3, stem_stride, 1, bias=False,
-                     us=[False, True]),
-            USBatchNorm2d(channels),
-            nn.ReLU(inplace=True),
-        )]
+        # stem imagenet is the torchvision ResNet stem for 224x224 inputs:
+        # 7x7 stride 2 and a 3x3 max pool, so the stages see 56, 28, 14
+        # and 7. The pool sits inside the stem's Sequential and has no
+        # parameters, so features.0's keys and the stage indices are as
+        # with the CIFAR stem.
+        if imagenet_stem:
+            features = [nn.Sequential(
+                USConv2d(3, channels, 7, 2, 3, bias=False,
+                         us=[False, True]),
+                USBatchNorm2d(channels),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(3, 2, 1),
+            )]
+        else:
+            features = [nn.Sequential(
+                USConv2d(3, channels, 3, stem_stride, 1, bias=False,
+                         us=[False, True]),
+                USBatchNorm2d(channels),
+                nn.ReLU(inplace=True),
+            )]
 
         for c, n, s in self.block_setting:
             outp = make_divisible(c * expansion * width_mult)
