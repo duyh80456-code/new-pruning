@@ -945,6 +945,12 @@ def run_one_epoch(
                         # and a T4 has 15.
                         split = deferred and getattr(
                             FLAGS, 'split_pair_backward', False)
+                        one_way = getattr(FLAGS, 'peer_one_way', False)
+                        if one_way and not split:
+                            raise ValueError(
+                                'peer_one_way is written for '
+                                'split_pair_backward, where each side of a '
+                                'pair takes its own part of the term')
                         conflict = None
                         if getattr(FLAGS, 'conflict_from_epoch', None) is not None:
                             if deferred:
@@ -1077,6 +1083,16 @@ def run_one_epoch(
                                         and transport_on):
                                     share = 0.0
                                     for left, right in pairs_at[position]:
+                                        # peer_one_way stops the gradient
+                                        # through the wider width of the
+                                        # pair: it takes no part of the term,
+                                        # so only the narrower is pulled, as
+                                        # in inplace distillation
+                                        narrow = (left if widths_train[left]
+                                                  <= widths_train[right]
+                                                  else right)
+                                        if one_way and position != narrow:
+                                            continue
                                         one = ((output, feature)
                                                if left == position
                                                else known[left])
@@ -1091,8 +1107,10 @@ def run_one_epoch(
                                                 one[0], one[1], two[0], two[1])
                                         share = share + gated
                                         # logged once, by whichever side runs
-                                        # second
-                                        if position == max(left, right):
+                                        # second, or by the only side that
+                                        # takes it
+                                        if position == (narrow if one_way
+                                                        else max(left, right)):
                                             split_logged = (split_logged
                                                             + gated.detach())
                                     loss = loss + (
