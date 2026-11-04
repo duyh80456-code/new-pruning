@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# ImageNet-100, ResNet-50, every run in one queue, no smoke: SlimOT eps 0.2
-# (KH), US-Net (KI), SlimOT eps 0.1 (KM), AlphaNet (KJ), Scala (KL), then
-# DS-Net from the authors' code. Replaces run_in100_4090.sh followed by
-# run_in100_baselines.sh. Run from the repo root inside tmux. Each run resumes
-# from its last checkpoint, so after a crash run this again. A failed run is
-# reported and the queue moves on to the next one.
+# ImageNet-100, ResNet-50, every run in one queue, no smoke: SlimOT eps 0.1
+# (KM), SlimOT with Teacher weight 0.25 (KN), AlphaNet (KJ), Scala (KL), then
+# DS-Net from the authors' code. SlimOT eps 0.2 (KH) and US-Net (KI) are done
+# and left out: run again, they would only redo the final calibration and
+# append a second result block to their logs. KN goes before the baselines
+# because if both KM and KN lose to US-Net, ImageNet-100 may leave the paper.
+# Run from the repo root inside tmux. Each run resumes from its last
+# checkpoint, so after a crash run this again. A failed run is reported and
+# the queue moves on to the next one.
 set -o pipefail
 DATA=/home/s24gbn1/Documents/vinhpad/data/seed_1993_subset_100_imagenet/data
 ROOT=$(pwd)
 DSNET=$ROOT/../DS-Net
 FAILED=()
 
-for b in kh_k_heads4_r50_in100 ki_a_r50_in100 km_k_heads4_r50_in100_eps010 \
+for b in km_k_heads4_r50_in100_eps010 kn_k_heads4_r50_in100_tw025 \
          kj_alphanet_r50_in100 kl_scala_r50_in100; do
     echo "=== $b $(date)"
     python train.py app:apps/cifar100_$b.yml 2>&1 | tee -a run_$b.log \
