@@ -9,7 +9,8 @@ list on every batch with cross entropy only.
 
 The backbone is the one our US-Net rows use (models/us_resnet.py): the
 CIFAR stem, 3x3 with stride 1 and no max pool, or stride 2 for 64x64 Tiny
-ImageNet inputs (stem_stride), and depth 50 (bottlenecks, the block of
+ImageNet inputs (stem_stride), or with stem: imagenet the torchvision
+stem for 224x224 ImageNet-100 inputs, and depth 50 (bottlenecks, the block of
 models/s_resnet.py) or 18 (basic blocks, as in their resnet_slimmable.py).
 Channel counts are int(c * width), as in their code and in s_resnet, not
 us_resnet's make_divisible, so a few widths carry a handful of channels
@@ -63,12 +64,25 @@ class Model(nn.Module):
         widths = FLAGS.width_mult_list
         feats = [64, 128, 256, 512]
         channels = [int(64 * w) for w in widths]
-        features = [nn.Sequential(
-            SlimmableConv2d([3 for _ in widths], channels, 3, stem_stride, 1,
-                            bias=False),
-            SwitchableBatchNorm2d(channels),
-            nn.ReLU(inplace=True),
-        )]
+        # stem imagenet is the torchvision ResNet stem for 224x224 inputs,
+        # as in models/us_resnet.py: 7x7 stride 2 and a 3x3 max pool. The
+        # pool has no parameters, so the state-dict keys are as with the
+        # CIFAR stem.
+        if getattr(FLAGS, 'stem', 'cifar') == 'imagenet':
+            features = [nn.Sequential(
+                SlimmableConv2d([3 for _ in widths], channels, 7, 2, 3,
+                                bias=False),
+                SwitchableBatchNorm2d(channels),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(3, 2, 1),
+            )]
+        else:
+            features = [nn.Sequential(
+                SlimmableConv2d([3 for _ in widths], channels, 3,
+                                stem_stride, 1, bias=False),
+                SwitchableBatchNorm2d(channels),
+                nn.ReLU(inplace=True),
+            )]
         for stage, n in enumerate(counts[depth]):
             outp = [int(feats[stage] * w * expansion) for w in widths]
             for i in range(n):

@@ -1,0 +1,69 @@
+# =========================== Branch KR ===========================
+# SOLAR (WACV 2026) as its authors' code trains it (as HE: Slimmable
+# Networks base, a private BatchNorm and one head per width, all 16 widths
+# on every batch, cross entropy only, SGD lr 0.1 without nesterov, weight
+# decay 5e-4 on every parameter, no warm-up, no grad clip, batch 128) on
+# ImageNet-100 (the seed-1993 subset, full resolution) with ResNet-50 and
+# the torchvision stem, seed 1995. SOLAR publishes no ImageNet recipe, so
+# its CIFAR-100 recipe is kept unchanged; it is the one it uses on Tiny
+# ImageNet too, apart from the batch size. Only the data, the 224 inputs
+# and the stem change from HE.
+#
+# Sixteen widths a step: about four times KI (US-Net on ImageNet-100).
+# Read against KI (83.55) and KM (SlimOT, 83.91).
+
+num_gpus_per_job: 1
+num_cpus_per_job: 4
+memory_per_job: 30
+gpu_type: "nvidia-geforce-rtx-4090"
+
+# data
+dataset: imagenet1k
+data_transforms: imagenet1k_basic
+data_loader: imagenet1k_basic
+dataset_dir: /home/s24gbn1/Documents/vinhpad/data/seed_1993_subset_100_imagenet/data
+data_loader_workers: 16
+
+# info
+num_classes: 100
+image_size: 224
+stem: imagenet
+topk: [1, 5]
+
+# optimizer
+optimizer: sgd
+momentum: 0.9
+weight_decay: 0.0005
+weight_decay_all: True
+nesterov: False
+
+# lr
+lr: 0.1
+lr_scheduler: cosine_decaying
+lr_warmup: False
+lr_warmup_epochs: 0
+num_epochs: 100
+
+# model profiling
+profiling: [gpu]
+
+# pretrain, resume, test_only
+pretrained: ''
+resume: ''
+test_only: False
+
+random_seed: 1995
+batch_size: 128
+reset_parameters: False
+
+# =========================== Override Settings ===========================
+log_dir: logs/cifar100_kr_solar_native_r50_in100
+slimmable_training: True
+universally_slimmable_training: False
+calibrate_bn: False
+inplace_distill: False
+
+model: models.s_resnet_solar
+depth: 50
+width_mult: 1.0
+width_mult_list: [0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
