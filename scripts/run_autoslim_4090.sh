@@ -26,7 +26,7 @@ fi
 for b in ks_autoslim_r50_seed1995 kt_autoslim_r50_seed2026 \
          ku_autoslim_r50_seed2006; do
     echo "=== $b $(date)"
-    python train.py app:apps/cifar100_$b.yml 2>&1 | tee -a run_$b.log \
+    python train.py app:apps/cifar100_$b.yml 2>&1 | tee -a run_${b}_s025.log \
         || { echo "=== $b FAILED"; FAILED+=("$b"); }
 done
 

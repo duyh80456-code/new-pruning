@@ -66,6 +66,11 @@ slimmable_training: True
 universally_slimmable_training: False
 calibrate_bn: False
 inplace_distill: True
+# snet_loss_scale 0.25: sixteen configurations' gradients are summed into
+# one step, four times what US-Net's four widths give and what lr 0.2 and
+# clip 5 were set for; at 1.0 clip 5 cut every step and the first run
+# reached 21.5% top-1 at epoch 32. 0.25 brings the total back to four's.
+snet_loss_scale: 0.25
 kd_loss: soft_ce
 
 model: models.autoslim_resnet_cifar
