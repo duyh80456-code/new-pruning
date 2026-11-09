@@ -1,0 +1,75 @@
+# =========================== Branch KS ===========================
+# Smoke: two epochs of three steps, the real loop and the real configurations.
+# AutoSlim (Yu & Huang, arXiv 1903.11728) on ResNet-50, CIFAR-100, seed 1995.
+#   Steps 1-2, the layer-wise supernet and the greedy search, are
+#   scripts/autoslim_search.py (seed 1995, once for the three seeds, as a
+#   NAS search is run once and its result retrained); their output is
+#   results/autoslim_search_r50.json, one configuration per width of
+#   width_mult_list, each at the MACs of our uniform width.
+#   Step 3, this run, is the authors' slimmable training of the searched
+#   configurations (their apps/autoslim_resnet_train_val.yml): a private
+#   BatchNorm per configuration, one classifier sliced to each
+#   configuration's feature size, every configuration on every batch, the
+#   narrower ones distilled from the widest; no BN calibration.
+# Kept from our protocol: the recipe of every other row (SGD 0.2 nesterov,
+# weight decay 5e-4, 5 warm-up epochs, cosine, clip 5, batch 256, 100
+# epochs) and the backbone. Sixteen configurations a step: about 3.5 times
+# a US-Net run of this setting.
+
+num_gpus_per_job: 1
+num_cpus_per_job: 4
+memory_per_job: 30
+gpu_type: "nvidia-tesla-t4"
+
+# data
+dataset: data.cifar100
+data_transforms: data.cifar100
+data_loader: data.cifar100
+dataset_dir: data
+data_loader_workers: 2
+
+# info
+num_classes: 100
+image_size: 32
+topk: [1, 5]
+
+# optimizer
+optimizer: sgd
+momentum: 0.9
+weight_decay: 0.0005
+nesterov: True
+grad_clip: 5.0
+
+# lr
+lr: 0.2
+lr_scheduler: cosine_decaying
+lr_warmup: True
+lr_warmup_epochs: 1
+num_epochs: 2
+
+# model profiling
+profiling: [gpu]
+
+# pretrain, resume, test_only
+pretrained: ''
+resume: ''
+test_only: False
+
+random_seed: 1995
+batch_size: 256
+max_iters_per_epoch: 3
+reset_parameters: True
+
+# =========================== Override Settings ===========================
+log_dir: logs/smoke_ks_autoslim_r50_seed1995
+slimmable_training: True
+universally_slimmable_training: False
+calibrate_bn: False
+inplace_distill: True
+kd_loss: soft_ce
+
+model: models.autoslim_resnet_cifar
+autoslim_configs: results/autoslim_search_r50.json
+depth: 50
+width_mult: 1.0
+width_mult_list: [0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
