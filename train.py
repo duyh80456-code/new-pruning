@@ -1244,16 +1244,7 @@ def run_one_epoch(
                                 else:
                                     loss = forward_loss(
                                         model, criterion, input, target, meter)
-                            # Every width's gradient is summed into one
-                            # step. Four widths (US-Net's sandwich) is what
-                            # the recipe's lr and grad_clip were set for;
-                            # sixteen give four times the gradient, which
-                            # grad_clip then cuts, so the widest learns a
-                            # quarter as fast. snet_loss_scale 0.25 brings
-                            # sixteen back to four's total. The meters keep
-                            # the unscaled loss. 1.0, upstream, by default.
-                            backward(
-                                getattr(FLAGS, 'snet_loss_scale', 1.0) * loss)
+                            backward(loss)
                 else:
                     loss = forward_loss(
                         model, criterion, input, target, meters)

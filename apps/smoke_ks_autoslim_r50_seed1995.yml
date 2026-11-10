@@ -13,8 +13,8 @@
 #   narrower ones distilled from the widest; no BN calibration.
 # Kept from our protocol: the recipe of every other row (SGD 0.2 nesterov,
 # weight decay 5e-4, 5 warm-up epochs, cosine, clip 5, batch 256, 100
-# epochs) and the backbone. Sixteen configurations a step: about 3.5 times
-# a US-Net run of this setting.
+# epochs) and the backbone. Four configurations a step: about a US-Net run
+# of this setting.
 
 num_gpus_per_job: 1
 num_cpus_per_job: 4
@@ -66,15 +66,10 @@ slimmable_training: True
 universally_slimmable_training: False
 calibrate_bn: False
 inplace_distill: True
-# snet_loss_scale 0.25: sixteen configurations' gradients are summed into
-# one step, four times what US-Net's four widths give and what lr 0.2 and
-# clip 5 were set for; at 1.0 clip 5 cut every step and the first run
-# reached 21.5% top-1 at epoch 32. 0.25 brings the total back to four's.
-snet_loss_scale: 0.25
 kd_loss: soft_ce
 
 model: models.autoslim_resnet_cifar
 autoslim_configs: results/autoslim_search_r50.json
 depth: 50
 width_mult: 1.0
-width_mult_list: [0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
+width_mult_list: [0.25, 0.5, 0.75, 1.0]
